@@ -553,6 +553,28 @@ async function visibleToasts(): Promise<string> {
  *  was still in flight). `opts.tag` adds a post-submit probe + progress lines
  *  that distinguish the two disabled-submit causes: `submitForeignLocked`
  *  (title is set, RefundModal.tsx:1169) vs an in-flight `isSubmitting`. */
+/** REF-86/91: submit, tolerating the case where the refund LANDED while the
+ *  modal re-rendered (the offline-cash-cap switch briefly removes the button
+ *  and the committed refund then shows its success state). Without this the
+ *  spec threw "refund-submit not clickable" on a refund that had already
+ *  committed - the native traces proved total=700 wallet=700. */
+async function submitOrLanded(
+  ticketId: string,
+  want: number,
+): Promise<'clicked' | 'landed' | 'gone'> {
+  try {
+    await submitRefund();
+    return 'clicked';
+  } catch (e) {
+    if (!/refund-submit not clickable/.test(String((e as Error)?.message ?? e))) throw e;
+    for (let i = 0; i < 10; i += 1) {
+      await browser.pause(400);
+      if (refundsFor(ticketId).length >= want) return 'landed';
+    }
+    return 'gone';
+  }
+}
+
 async function submitAndSettle(
   ticketId: string,
   want: number,
@@ -562,7 +584,10 @@ async function submitAndSettle(
   const tag = opts.tag ?? '';
   const preToast = await visibleToasts();
   const prePage = await bodyTail();
-  await submitRefund();
+  const firstSubmit = await submitOrLanded(ticketId, want);
+  if (firstSubmit === 'landed') {
+    return { landed: true, surface: 'grace: refund landed before the button could be clicked' };
+  }
   if (tag) {
     await browser.pause(150);
     const probe = await browser.execute(() => {
@@ -621,7 +646,11 @@ async function submitAndSettle(
         lastRevalidateAt = Date.now();
         revalidations++;
         console.log(`[submitAndSettle] cash cap: switched to Avoir Client - revalidating #${revalidations}`);
-        await submitRefund();
+        const retry = await submitOrLanded(ticketId, want);
+        if (retry === 'landed') {
+          return { landed: true, surface: 'grace: refund landed during the Avoir revalidation' };
+        }
+        if (retry === 'gone') break;
       }
       await browser.pause(300);
       continue;
