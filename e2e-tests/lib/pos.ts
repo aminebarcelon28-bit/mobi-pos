@@ -1767,7 +1767,11 @@ export async function clickRefundSubmit(times = 1): Promise<boolean> {
     })) as 'ready' | 'disabled' | 'gone';
   };
 
-  const deadline = Date.now() + 20000;
+  // Extreme-value tickets (2e9 DA) recompute the whole preview after the
+  // offline-cash-cap switch; that legitimately takes tens of seconds, so the
+  // readiness window is generous. A frozen/closed dialog still returns false as
+  // soon as the state is 'gone'.
+  const deadline = Date.now() + 120000;
   let current = await state();
   while (current === 'disabled' && Date.now() < deadline) {
     await browser.pause(200);
