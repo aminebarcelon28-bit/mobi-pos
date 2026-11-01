@@ -1197,6 +1197,91 @@ export interface MilestoneEvaluation {
  * Legacy per-tranche rows ("…:tranche:N") stay readable: every parser below
  * treats a single tranche as a range of one.
  */
+/**
+ * G-07 / REF-15: the loyalty headline is the spendable balance, so every point
+ * must be BACKED by a bucket. Legacy rows (written before buckets existed, or a
+ * seeded fixture) can carry a headline with no bucket; the first touch mints
+ * ONE deterministic "legacy genesis" bucket for exactly the unbacked remainder.
+ * Idempotent: once backed, the remainder is 0 and nothing changes.
+ */
+export interface HeadlineHealResult {
+  buckets: LoyaltyPointBucket[];
+  healed: boolean;
+  unbacked: number;
+}
+
+export const healUnbackedHeadline = (
+  customerId: string,
+  headlinePoints: number,
+  buckets: LoyaltyPointBucket[] | undefined,
+  redemptionRate: number,
+  nowIso: string,
+): HeadlineHealResult => {
+  const list = Array.isArray(buckets) ? buckets : [];
+  const backed = list.reduce((sum, b) => sum + Math.max(0, Number(b?.remainingPoints) || 0), 0);
+  const headline = Math.max(0, Math.round(Number(headlinePoints) || 0));
+  const unbacked = headline - backed;
+  if (unbacked <= 0) return { buckets: list, healed: false, unbacked: 0 };
+  const rate = Math.max(1, Number(redemptionRate) || 10);
+  const legacyId = `BUCKET-LEGACY-${customerId}`;
+  const existing = list.find((b) => b && b.id === legacyId);
+  const next = existing
+    ? list.map((b) =>
+        b && b.id === legacyId
+          ? {
+              ...b,
+              initialPoints: Math.max(0, Number(b.initialPoints) || 0) + unbacked,
+              remainingPoints: Math.max(0, Number(b.remainingPoints) || 0) + unbacked,
+              isFullyConsumed: false,
+            }
+          : b,
+      )
+    : [
+        ...list,
+        {
+          id: legacyId,
+          customerId,
+          initialPoints: unbacked,
+          remainingPoints: unbacked,
+          isFullyConsumed: false,
+          creditValueDzd: unbacked * rate,
+          earnedOnNetSpendDzd: 0,
+          originTransactionId: 'LEGACY-GENESIS',
+          createdAt: nowIso,
+          expiresAt: null,
+        } as LoyaltyPointBucket,
+      ];
+  return { buckets: next, healed: true, unbacked };
+};
+
+/**
+ * REF-15: how many points a credit-paid sale may still redeem. Credit that was
+ * minted by converting points has ALREADY cost those points, so charging them
+ * again at checkout is a double burn (400 -> 372 observed). Only the remainder
+ * of the applied credit redeems points.
+ */
+export interface CreditRedemptionSplit {
+  pointsToRedeem: number;
+  pointsBackedUsed: number;
+  pointsBackedRemaining: number;
+}
+
+export const splitCreditRedemption = (
+  appliedCreditDzd: number,
+  pointsBackedCreditDzd: number,
+  redemptionRate: number,
+): CreditRedemptionSplit => {
+  const applied = Math.max(0, Math.round(Number(appliedCreditDzd) || 0));
+  const backed = Math.max(0, Math.round(Number(pointsBackedCreditDzd) || 0));
+  const rate = Math.max(1, Number(redemptionRate) || 10);
+  const pointsBackedUsed = Math.min(backed, applied);
+  return {
+    pointsToRedeem: Math.floor(Math.max(0, applied - pointsBackedUsed) / rate),
+    pointsBackedUsed,
+    pointsBackedRemaining: Math.max(0, backed - pointsBackedUsed),
+  };
+};
+
 export const milestoneRangeKey = (
   customerId: string,
   milestoneId: string,

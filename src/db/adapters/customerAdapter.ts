@@ -7,6 +7,7 @@ import {
   normalizeLoyaltyConfig,
   reconcileMilestoneTranches,
   ensureCreditGenesis,
+  healUnbackedHeadline,
 } from '../../utils/loyaltyEngine';
 
 /** Merchant loyalty config for hydration-time reconciliation (defaults when unreadable). */
@@ -43,52 +44,17 @@ async function reconcileLoyaltyState(list: Customer[]): Promise<Customer[]> {
     const genesis = ensureCreditGenesis({ ...c, ledger });
     const withGenesis = genesis ? [genesis, ...ledger] : ledger;
     const sweep = reconcileMilestoneTranches(c.id, c.totalSpent || 0, cfg, withGenesis, 0);
-    // G-07 heal: the headline is the spendable balance, so it must be BACKED by
-    // buckets. Legacy rows (and any row written before buckets existed) can
-    // carry points with no bucket; the first hydration mints one deterministic
-    // "legacy genesis" bucket for exactly the unbacked remainder, so the
-    // identity holds from then on. Idempotent: once backed, diff is 0.
-    const buckets = Array.isArray(c.pointBuckets) ? c.pointBuckets : [];
-    const backed = buckets.reduce(
-      (sum, b) => sum + Math.max(0, Number(b?.remainingPoints) || 0),
-      0,
+    // G-07 heal: a headline must be backed by buckets (legacy rows and seeded
+    // fixtures can carry points with no bucket). Pure + idempotent.
+    const heal = healUnbackedHeadline(
+      c.id,
+      c.loyaltyPoints || 0,
+      c.pointBuckets,
+      cfg.pointRedemptionRate,
+      new Date().toISOString(),
     );
-    const headline = Math.max(0, Math.round(Number(c.loyaltyPoints) || 0));
-    const unbacked = headline - backed;
-    let healedBuckets = buckets;
-    let healed = false;
-    if (unbacked > 0) {
-      const legacyId = `BUCKET-LEGACY-${c.id}`;
-      const rate = Math.max(1, Number(cfg.pointRedemptionRate) || 10);
-      const existing = buckets.find((b) => b && b.id === legacyId);
-      healedBuckets = existing
-        ? buckets.map((b) =>
-            b && b.id === legacyId
-              ? {
-                  ...b,
-                  initialPoints: Math.max(0, Number(b.initialPoints) || 0) + unbacked,
-                  remainingPoints: Math.max(0, Number(b.remainingPoints) || 0) + unbacked,
-                  isFullyConsumed: false,
-                }
-              : b,
-          )
-        : [
-            ...buckets,
-            {
-              id: legacyId,
-              customerId: c.id,
-              initialPoints: unbacked,
-              remainingPoints: unbacked,
-              isFullyConsumed: false,
-              creditValueDzd: unbacked * rate,
-              earnedOnNetSpendDzd: 0,
-              originTransactionId: 'LEGACY-GENESIS',
-              createdAt: new Date().toISOString(),
-              expiresAt: null,
-            } as (typeof buckets)[number],
-          ];
-      healed = true;
-    }
+    const healedBuckets = heal.buckets;
+    const healed = heal.healed;
     if (!genesis && sweep.entries.length === 0 && !healed) return c;
     changed = true;
     return {

@@ -53,6 +53,7 @@ import {
   ensureCreditGenesis,
   isEarnAllowed,
   getTxnStoreCreditApplied,
+  splitCreditRedemption,
 } from '../../utils/loyaltyEngine';
 import {
   getEffectiveCostPrice,
@@ -861,11 +862,13 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
             Number((loyaltyBase as { creditFromPointsDzd?: number }).creditFromPointsDzd ?? 0) || 0,
           ),
         );
-        const pointsBackedUsed = Math.min(pointsBackedCredit, actualStoreCreditApplied);
-        const pointsToRedeem = Math.floor(
-          Math.max(0, actualStoreCreditApplied - pointsBackedUsed) / redemptionRate,
+        const creditSplit = splitCreditRedemption(
+          actualStoreCreditApplied,
+          pointsBackedCredit,
+          redemptionRate,
         );
-        creditFromPointsRemaining = Math.max(0, pointsBackedCredit - pointsBackedUsed);
+        const pointsToRedeem = creditSplit.pointsToRedeem;
+        creditFromPointsRemaining = creditSplit.pointsBackedRemaining;
         const { updatedBuckets } = depleteFifoPointBuckets(existingBuckets, pointsToRedeem);
 
         const finalBuckets = [...updatedBuckets];
