@@ -1,6 +1,5 @@
 import type { StateCreator } from 'zustand';
 import type { PosState, OrderSlice } from '../types';
-import { refundDiag } from '../../utils/refundDiag';
 import type {
   CartItem,
   SaleTransaction,
@@ -2375,55 +2374,8 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         // Policy read unavailable — the native gate still enforces in-txn.
       }
     }
-    // REF-67: a card/cheque-funded ticket has NO cash to give back and the card
-    // rail has no destination of record. Read the ticket's OWN tenders (the
-    // funding split can be absent on cheque sales) and fail closed on a cash
-    // payout; an Avoir must then deliver the whole refund.
-    const ticketTenders = Array.isArray(originalTransaction.tenders) ? originalTransaction.tenders : [];
-    // Accent-insensitive: the method label can arrive as "Chèque", "ChÃ¨que"
-    // or a legacy export spelling; normalization makes the rail test reliable.
-    const railOf = (value: unknown): string =>
-      String(value ?? '')
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '')
-        .toLowerCase();
-    const isRail = (m: string): boolean =>
-      m.includes('cib') || m.includes('edahabia') || m.includes('baridimob') || m.includes('cheque');
-    const nonCashTender = ticketTenders
-      .filter((tt) => isRail(railOf(tt.method)))
-      .reduce((acc, tt) => acc + Number(tt.amount ?? 0), 0);
-    // The mapped transaction may carry no tenders array; the sale's method is
-    // then the only rail evidence, and it is sufficient to fail closed.
-    const nonCashMethod = isRail(railOf(originalTransaction.paymentMethod));
-    refundDiag('refund:precheck', {
-      method: effectiveRefundMethod,
-      nonCashTender,
-      nonCashMethod,
-      cashTendered: physicalCashTendered(originalTransaction),
-      tenders: ticketTenders.length,
-    });
-    if (
-      effectiveRefundMethod === 'Espèces' &&
-      (nonCashTender > 0 || nonCashMethod) &&
-      physicalCashTendered(originalTransaction) <= 0
-    ) {
-      return { success: false, reason: 'CARD_REFUND_LANE_UNAVAILABLE' };
-    }
-    const voucherLeg = Math.max(
-      0,
-      Math.round(Number(funding.voucherShare ?? 0) || 0),
-    );
-    const debtLeg = Math.max(0, Math.round(Number(funding.debtShare ?? 0) || 0));
-    const avoirCoverage =
-      effectiveRefundMethod === 'Avoir Client'
-        ? Math.max(0, Math.round(netRefund) - voucherLeg - debtLeg)
-        : 0;
-    const walletAddBase = Math.max(
-      funding.avoirShare +
-        walletFromCashOverflow +
-        (effectiveRefundMethod === 'Avoir Client' ? funding.cashShare + funding.digitalShare : 0),
-      avoirCoverage,
-    );
+    const walletAddBase =
+      funding.avoirShare + walletFromCashOverflow + (effectiveRefundMethod === 'Avoir Client' ? funding.cashShare : 0);
 
     // Chaos S5 — exchange reversal: the funding split caps cash at net paid,
     // so the trade-in value can never leak into cashOut — but without
@@ -2595,16 +2547,6 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         newPoints
       );
 
-      // REF-67 (fail closed): a ticket funded by card/cheque cannot be paid out
-      // in cash - there is no cash to give back and no acquirer lane to return
-      // it to. Refuse instead of committing a refund that delivers nothing.
-      if (
-        effectiveRefundMethod === 'Espèces' &&
-        funding.digitalShare > 0 &&
-        funding.cashShare <= 0
-      ) {
-        return { success: false, reason: 'CARD_REFUND_LANE_UNAVAILABLE' };
-      }
       const creditToAdd = walletAddBase + tradeRestoreNow;
       walletLegForNative = creditToAdd;
       // REF-40: an archived profile has no usable owner for a wallet credit.

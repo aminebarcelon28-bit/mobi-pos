@@ -696,12 +696,6 @@ export const RefundModal: React.FC = () => {
           } else {
             showToast('Plafond espèces hors-ligne atteint — resynchronisez avant tout nouveau décaissement.', 'error');
           }
-        } else if (refundResult.reason === 'CARD_REFUND_LANE_UNAVAILABLE') {
-          showToast(
-            'Ticket paye par carte/cheque : aucun remboursement en especes possible. Remboursez en Avoir Client (le montant est credite au client).',
-            'error',
-            8000,
-          );
         } else if (refundResult.reason === 'REFUND_EXCEEDS_VALUE') {
           showToast('Montant du remboursement supérieur à ce qui reste remboursable sur ce ticket.', 'error');
         } else if (refundResult.reason === 'AVOIR_RECIPIENT_REQUIRED') {
