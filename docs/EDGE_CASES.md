@@ -59,6 +59,9 @@ Status vocabulary: **OPEN** (no passing test / known defect), **COVERED** (test 
 
 | 50 | A shell button click intercepted by a toast/overlay aborted the scenario (REF-27/30/44/47) | **COVERED** | `selectCustomer` opens the clients dialog in page context (not hit-tested); all four cases green in batch (E-0130) |
 
+| 51 | A per-cycle settle target of N made the serial-returner cycle 2 wait for a second refund on one ticket | **COVERED** | `submitAndSettle(sale.id, 1)` + "exactly one refund" assertion; 4/4 cycles green, exact money (E-0131) |
+| 52 | A write-off note set by the test does not reach React state, so the REF-36 gate refuses a noted refund | **OPEN (testability)** | select+note hold "Autre" in the DOM yet the handler exits before `processRefund`; needs uncontrolled inputs or a stable test hook (E-0131) |
+
 ## Notes
 
 - Items 1–7 and 10–19 are covered by tests that run in CI-local (`cargo test` + the diag specs).
