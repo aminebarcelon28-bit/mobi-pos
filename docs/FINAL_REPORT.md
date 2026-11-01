@@ -24,7 +24,7 @@ with the commands in the last section.
 | Money conservation gate + 31→33 refund tests under the strict invariant | E-0090, E-0104 |
 | Library suite green | `cargo test --lib` **436/436** (E-0096 + later) |
 | E2E refund suite | **18/18**, 0 skipped, invariants clean (ref34f) |
-| Wider refund suites (30/31/32/34) | **51/59**, with REF-57 (9/9 search facets) and REF-86 now green. Remaining: REF-91 (cycle 2 refunds a STALE ticket - success toast, no row for the expected ticket), REF-19 (no-restock note flow), REF-27/30/44/47 (to read individually) (E-0128, E-0129) |
+| Wider refund suites (30/31/32/34) | **56/59**: REF-06/15/27/30/44/47/57/66/67/86 and G-07 pass. Remaining: REF-19 (write-off note input not rendered for the selected option - the REF-36 gate correctly refuses), REF-62 (intermittent audit count after a language reload), REF-91 (cycle 2 refunds a stale ticket) (E-0125, E-0127, E-0128, E-0129, E-0130) |
 | Booting gate tracks the migration list (a device at v128 would have refused to boot) | D8 / E-0096 |
 | Dependency audit clean (`npm audit --omit=dev` → **0**) | E-0120 |
 | Branch sweep: main fast-forwarded, 9 merged branches deleted, 4 unmerged kept and documented | E-0120 |

@@ -57,6 +57,8 @@ Status vocabulary: **OPEN** (no passing test / known defect), **COVERED** (test 
 | 48 | Refund search cannot resolve a receipt typed with separators, nor a serial/IMEI | **COVERED** | alphanumeric-skeleton receipt match + serial facet; REF-57 9/9 facets green (E-0129) |
 | 49 | A refund chunk that landed while the modal re-rendered was reported as a submit failure | **COVERED** | `submitOrLanded` treats a landed row as success; REF-86 green (E-0129) |
 
+| 50 | A shell button click intercepted by a toast/overlay aborted the scenario (REF-27/30/44/47) | **COVERED** | `selectCustomer` opens the clients dialog in page context (not hit-tested); all four cases green in batch (E-0130) |
+
 ## Notes
 
 - Items 1–7 and 10–19 are covered by tests that run in CI-local (`cargo test` + the diag specs).
