@@ -595,7 +595,7 @@ async function preflightTests() {
 function harnessTests() {
   const posPath = path.resolve(HERE, '..', '..', '..', '..', 'e2e-tests', 'lib', 'pos.ts');
   if (!check('harness: e2e-tests/lib/pos.ts is present', fs.existsSync(posPath), posPath)) return;
-  const src = fs.readFileSync(posPath, 'utf8');
+  const src = fs.readFileSync(posPath, 'utf8').replace(/\r\n/g, '\n'); // CRLF-tolerant: git may check the file out with CRLF
   const at = src.indexOf('export async function unlockIfNeeded');
   if (!check('harness: unlockIfNeeded exists', at >= 0, 'function not found')) return;
   const rest = src.slice(at);
