@@ -1,5 +1,6 @@
 import type { StateCreator } from 'zustand';
 import type { PosState, OrderSlice } from '../types';
+import { refundDiag } from '../../utils/refundDiag';
 import type {
   CartItem,
   SaleTransaction,
@@ -1571,6 +1572,7 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
       } catch {
         // Best-effort — the sale itself is durable.
       }
+      refundDiag('store:close', { site: 'src/store/slices/createOrderSlice.ts:1589' });
       set({
         products: updatedProducts,
         transactions: newTransactions,
@@ -3393,6 +3395,7 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         committedRefund,
         ...transactions.map((t) => (t.id === originalTransaction.id ? hydratedOriginal : t)),
       ]);
+      refundDiag('store:close', { site: 'src/store/slices/createOrderSlice.ts:3406' });
       set({
         products: updatedProducts,
         transactions: nativeUpdatedTransactions,
@@ -3710,6 +3713,7 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         : r
     );
 
+    refundDiag('store:close', { site: 'src/store/slices/createOrderSlice.ts:3721' });
     set({
       products: updatedProducts,
       transactions: updatedTransactions,

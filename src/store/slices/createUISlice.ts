@@ -1,5 +1,6 @@
 import type { StateCreator } from 'zustand';
 import type { PosState, UISlice } from '../types';
+import { refundDiag } from '../../utils/refundDiag';
 import type {
   Product,
   ProductBundle,
@@ -1097,6 +1098,7 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
           }).catch(() => {});
         } else {
           console.error('[processTradeIn] FIFO batch mint failed after trade-in save:', batchErr);
+          refundDiag('store:close', { site: 'createUISlice.ts:1105' });
           set({
             products: updatedProducts,
             tradeIns: updatedTradeIns,
@@ -1132,6 +1134,7 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
         // report pure success — the books are now short cash with no movement.
         if (drawerRes && typeof drawerRes === 'object' && 'success' in drawerRes && !drawerRes.success) {
           console.error('[processTradeIn] Drawer deposit failed after trade-in save:', drawerRes);
+          refundDiag('store:close', { site: 'createUISlice.ts:1140' });
           set({
             products: updatedProducts,
             tradeIns: updatedTradeIns,
@@ -1203,6 +1206,7 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
         );
       }
 
+      refundDiag('store:close', { site: 'createUISlice.ts:1213' });
       set({
         products: updatedProducts,
         tradeIns: updatedTradeIns,
