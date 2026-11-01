@@ -78,6 +78,11 @@ Status vocabulary: **OPEN** (no passing test / known defect), **COVERED** (test 
 | 63 | 24-syn: SYN-02 (duplicate receipt numbers), SYN-27 (wall-clock ordering), SYN-04 (LWW design), SYN-26 (at-rest exposure) + 17 BLOCKED | **ACCEPTED/BLOCKED** | SYN-02/SYN-27 product defects with named fixes (merchant-scoped sequence; order by version+HLC). SYN-04 accepted convergence model for non-money fields. SYN-26 accepted (OS disk encryption + PIN gate). BLOCKED: two-instance harness + merchant gateway (E-0144) |
 | 64 | 26-rcp: 16 FAIL + 4 BLOCKED | **BLOCKED (physical printer)** | the assertions need real ESC/POS firmware behaviour (codepage tables, raster fallback, 58/80 mm widths). Named dependency: physical printer or faithful emulator; manual byte-level procedure documented (E-0144) |
 
+| 65 | SEC-04 (cashier profile rendered the manager pad) | **COVERED** | the pad now resolves from the stored credential; 50-sec 9/10 with SEC-04 PASS (E-0149) |
+| 66 | SEC-09 (unbounded / negative quantity, forged shiftId at checkout) | **COVERED** | native `checkout_sale_atomic` refuses non-positive quantities, item/ledger delta mismatch, and a shift that is not OPEN or not this device; 10/10 checkout tests, SEC-09 PASS (E-0149) |
+| 67 | SHF-02/07/11/13 (expense attribution, boot resurrection, foreign drawer, opener stamping) | **COVERED** | acting user on the expense mirror, Dexie-OPEN demoted when SQLite says CLOSED, foreign session refused, per-user attribution; 40-shf 12/12 (E-0149) |
+| 68 | New FOREIGN_SHIFT gate would refuse every sale on a legacy (NULL device_id) open shift | **COVERED** | NULL/blank = legacy => adopted and stamped in the same transaction; real mismatch still refused; `legacy_null_device_shift_is_adopted_not_refused` + `foreign_shift_still_refused_after_adoption_rule` (E-0149) |
+
 ## Notes
 
 - Items 1–7 and 10–19 are covered by tests that run in CI-local (`cargo test` + the diag specs).

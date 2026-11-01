@@ -17,7 +17,6 @@ PAY-11,C04,STAGED-CREDIT-LEAK,app,SQLite,money movement,P0,NEW
 REF-15,C05,REF-RESTORE-VOLATILE,app,SQLite,money movement,P0,D (D2)
 REF-91,C05,REF-RESTORE-VOLATILE,app,SQLite,money movement,P0,D (D2)
 REF-78,C06,REF-NO-RECONCILE,app,SQLite,money movement,P0,G (G3)
-SHF-11,C06,REF-NO-RECONCILE,app,SQLite,money movement,P0,G (G3)
 REF-87,C08,REF-SELECTABILITY,app,SQLite,money movement,P0,E
 LOY-07,C14,LOY-BUCKET,app,SQLite,money movement,P1,NEW
 LOY-14,C15,LOY-ZERO-COVER,app,SQLite,money movement,P1,G
@@ -39,11 +38,8 @@ TIN-08,C11,TOTALS-IDENTITY,app,SQLite,money movement,P0,A
 DAT-20,C27,DB-DURABILITY,app,SQLite,money movement,P0,NEW
 SCL-48,C46,BURST-DROP,app,SQLite,money movement,P0,NEW
 SHF-10,C74,SHIFT-HANDOVER,app,SQLite,money movement,P0,NEW
-SHF-07,C75,SHIFT-RESURRECTION,app,SQLite,money movement,P0,D (D2)
 DRW-11,C77,SHIFT-EXPECTED-MATH,app,SQLite,money movement,P0,A
-SEC-09,C86,NEGATIVE-QTY,app,SQLite,money movement,P0,G (G1)
 SEC-01,C56,AUTHZ-UI-ONLY,app,SQLite,stored value,P0,G (G3)
-SEC-04,C56,AUTHZ-UI-ONLY,app,SQLite,stored value,P0,G (G3)
 IDN-11,C56,AUTHZ-UI-ONLY,app,SQLite,stored value,P0,G (G3)
 IDN-14,C56,AUTHZ-UI-ONLY,app,SQLite,stored value,P0,G (G3)
 DRW-14,C56,AUTHZ-UI-ONLY,app,SQLite,stored value,P0,G (G3)
@@ -81,7 +77,6 @@ DRW-16,C76,SHIFT-CLOSE-GUARD,app,SQLite,stored value,P0,G
 DRW-17,C76,SHIFT-CLOSE-GUARD,app,SQLite,stored value,P0,G
 DRW-22,C76,SHIFT-CLOSE-GUARD,app,SQLite,stored value,P0,G
 DRW-23,C76,SHIFT-CLOSE-GUARD,app,SQLite,stored value,P0,G
-SHF-02,C76,SHIFT-CLOSE-GUARD,app,SQLite,stored value,P0,G
 DAT-40,C32,NO-CAS-LWW,app,SQLite,stored value,P0,NEW
 DAT-48,C32,NO-CAS-LWW,app,SQLite,stored value,P0,NEW
 SCL-37,C32,NO-CAS-LWW,app,SQLite,stored value,P0,NEW
@@ -178,7 +173,6 @@ IDN-03,C54,IDN-NO-USER-ID,app,SQLite,none,P0,NEW
 IDN-06,C54,IDN-NO-USER-ID,app,SQLite,none,P0,NEW
 IDN-10,C54,IDN-NO-USER-ID,app,SQLite,none,P0,NEW
 IDN-20,C54,IDN-NO-USER-ID,app,SQLite,none,P0,NEW
-SHF-13,C54,IDN-NO-USER-ID,app,SQLite,none,P0,NEW
 DRW-12,C54,IDN-NO-USER-ID,app,SQLite,none,P0,NEW
 DAT-56,C36,AUDIT-GAPS,app,SQLite,none,P0,NEW
 DAT-58,C36,AUDIT-GAPS,app,SQLite,none,P0,NEW
