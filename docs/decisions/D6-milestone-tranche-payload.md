@@ -88,3 +88,20 @@ list), not the money layer, the payload size, or a stale method closure.
 Next step is evidence, not another blind patch: instrument the modal lifecycle (open / method switch / submit
 start / submit result / `setSelectedTxn(null)` reason) into a ring buffer the harness can read, reproduce the
 cap path once, and fix the exact teardown.
+
+## Update 2026-11-01 (trace) — the dialog is closed by a store write, 12 ms after the switch
+
+With the lifecycle ring buffer in place (E-0115) the sequence for the huge ticket is unambiguous:
+
+```
+submit:start Espèces           (t0)
+submit:result ok=false OFFLINE_CASH_CAP_EXCEEDED   (+29-33 s on a 4e9 ticket; +2.4 s on small ones)
+switch → Avoir Client                              (+0 ms)
+modal:closed activeModal=null                      (+12 ms)   <-- the refund never reaches the native
+```
+
+Small tickets hit the same switch and **do not** close, so the teardown is tied to the long-running refusal path
+(~30 s), i.e. something that reacts to the ticket's sync/version churn during that window and sets
+`activeModal: null`. The zustand notification stack does not name the caller. Next attempt must tag the
+`activeModal: null` **inside set() calls only** (the first brute-force tag broke an object literal and was
+reverted), run one batch, and read the site tag.
