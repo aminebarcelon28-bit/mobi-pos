@@ -23,8 +23,8 @@ with the commands in the last section.
 | A forged/legacy refund cannot leave spendable points behind | native derivation + test (E-0104) |
 | Money conservation gate + 31→33 refund tests under the strict invariant | E-0090, E-0104 |
 | Library suite green | `cargo test --lib` **436/436** (E-0096 + later) |
-| E2E refund suite | **16/18 at 0e2d5a9** (REF-51, REF-87 on the cash-cap switch path — under triage); 18/18 at 181e4bb (E-0135, E-0140) |
-| Wider refund suites (30/31/32/34) | **59/59 cases** (zero case failures): REF-19 closed via an explicit `defectNote` channel. The only red is the after-all invariant hook, which flags the parked G-21 warranty item (repair `deliveredAt` / claim expiry) (E-0140) |
+| E2E refund suite | **18/18**, 0 skipped, invariants clean (ref33r, HEAD 15a8a59) |
+| Wider refund suites (30/31/32/34) | **59/59 cases**; the only red is the pinned G-21 after-all signature (parked) (E-0142) |
 | Booting gate tracks the migration list (a device at v128 would have refused to boot) | D8 / E-0096 |
 | Dependency audit clean (`npm audit --omit=dev` → **0**) | E-0120 |
 | Branch sweep: main fast-forwarded, 9 merged branches deleted, 4 unmerged kept and documented | E-0120 |
@@ -120,3 +120,9 @@ hidden findings.
 Records are append-only and ids are unique (verified: no duplicate `id` across the log). `E-0136` was
 **never emitted** (the stop-point record went out as E-0137), so the sequence has a single gap — a gap, not a
 collision. `E-0139` documents this check.
+
+
+## Non-refund suites (first measurement, 15a8a59)
+
+24-syn + 40-shf + 50-sec + 26-rcp: **40/52 cases pass**; 15 fail (SEC-01/04/05/09, SHF-02/07/11/13, SYN-02/04/26/27);
+the remaining sync cases are BLOCKED (second terminal / merchant gateway) or N/A. Not claimed green (E-0143).
