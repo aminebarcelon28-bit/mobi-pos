@@ -1225,7 +1225,7 @@ describe('REF — refunds, returns & avoirs (batch 7 / part 4)', () => {
             return [];
           }
         });
-        console.log('[REF-87 diag]', JSON.stringify(diag).slice(0, 6000));
+        console.log('[REF-87 diag tail]', JSON.stringify((diag as unknown[]).slice(-40)).slice(0, 12000));
       }
     } catch (e) {
       console.log('[REF-87 diag] unavailable:', String((e as Error)?.message ?? e));
