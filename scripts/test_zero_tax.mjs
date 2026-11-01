@@ -219,7 +219,7 @@ const WHITELIST = new Set([
   'src/db/sqlPluginAdapter.ts:4013',
   'src/db/sqlPluginAdapter.ts:4014',
   // src/store/slices/createOrderSlice.ts
-  'src/store/slices/createOrderSlice.ts:542',
+  'src/store/slices/createOrderSlice.ts:543',
   // src/sync/genericApply.ts
   'src/sync/genericApply.ts:640',
   'src/sync/genericApply.ts:646',
