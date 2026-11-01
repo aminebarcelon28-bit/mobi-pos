@@ -1,6 +1,5 @@
 import type { StateCreator } from 'zustand';
 import type { PosState, ShiftSlice } from '../types';
-import { refundDiag } from '../../utils/refundDiag';
 import type { CashDropEntry, CashSession, DenominationCount } from '../../types/pos';
 import { audioBus } from '../../utils/audioEvents';
 import { newId } from '../../utils/ids';
@@ -89,7 +88,6 @@ export const createShiftSlice: StateCreator<PosState, [], [], ShiftSlice> = (set
         false
       );
       audioBus.emit('success');
-      refundDiag('store:close', { site: 'src/store/slices/createShiftSlice.ts:97' });
       set({
         activeShift: session,
         allShifts,

@@ -1,6 +1,5 @@
 import type { StateCreator } from 'zustand';
 import type { PosState, ProcurementSlice } from '../types';
-import { refundDiag } from '../../utils/refundDiag';
 import type { PurchaseOrder, POLineItem } from '../../types/pos';
 import { formatDZD } from '../../types/pos';
 // P11.3: sqliteAdapter is a barrel over six adapters that each statically pull
@@ -1210,8 +1209,6 @@ export const createProcurementSlice: StateCreator<PosState, [], [], ProcurementS
     } catch (err) {
       console.error(`Failed to approve purchase order [${poId}]:`, err);
     }
-
-    refundDiag('store:close', { site: 'src/store/slices/createProcurementSlice.ts:1218' });
     set({
       products: updatedProducts,
       purchaseOrders: updatedPOs,

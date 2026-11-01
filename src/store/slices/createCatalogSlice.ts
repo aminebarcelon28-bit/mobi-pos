@@ -1,6 +1,5 @@
 import type { StateCreator } from 'zustand';
 import type { PosState, CatalogSlice } from '../types';
-import { refundDiag } from '../../utils/refundDiag';
 import type { Product } from '../../types/pos';
 import { audioBus } from '../../utils/audioEvents';
 import { rebaseReconciledSales } from './rebaseReconciledSales';
@@ -176,7 +175,6 @@ export const createCatalogSlice: StateCreator<PosState, [], [], CatalogSlice> = 
         ? latest
         : [targetProduct, ...latest];
     }
-    refundDiag('store:close', { site: 'src/store/slices/createCatalogSlice.ts:182' });
     set({
       products: nextProducts,
       editingProduct: null,
