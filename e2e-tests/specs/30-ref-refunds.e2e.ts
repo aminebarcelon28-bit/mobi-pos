@@ -1001,24 +1001,34 @@ describe('REF — refunds, returns & avoirs (batch 3)', () => {
     await submitRefund(APP_PIN);
     await browser.pause(1200);
     expect(refundsFor(saleA.id).length).toBe(0);
-    // The controlled input is re-rendered after the refusal: REAL keystrokes
-    // (focus, select-all, backspace, type) fire React's onChange reliably -
-    // addValue/native-setter left the component state empty, so the REF-36
-    // note gate kept refusing a write-off that did carry a note.
-    {
-      const noteInput = await $(
-        '//div[@data-testid="refund-dialog"]//input[contains(@placeholder, "Précisez") or contains(@placeholder, "motif")]',
+    // Both controls are React-controlled and the refusal re-renders them:
+    // set the SELECT to the "Autre" category AND the free-text note through the
+    // native setters with input/change events, so component state really holds
+    // them (keystrokes/addValue alone left the state empty and the REF-36 note
+    // gate kept refusing a write-off that did carry a note).
+    const noted = (await browser.execute(() => {
+      const dlg = document.querySelector('[data-testid="refund-dialog"]') as HTMLElement | null;
+      if (!dlg) return { ok: false, why: 'no dialog' };
+      const select = dlg.querySelector('select') as HTMLSelectElement | null;
+      const input = ([...dlg.querySelectorAll('input')] as HTMLInputElement[]).find((i) =>
+        /motif/i.test(i.getAttribute('placeholder') || ''),
       );
-      await noteInput.waitForDisplayed({ timeout: 10000, timeoutMsg: 'write-off note input never appeared' });
-      await noteInput.click();
-      await browser.keys(['Control', 'a']);
-      await browser.keys(['Backspace']);
-      await browser.keys('Autre'.split(''));
-      await browser.pause(200);
-      const typed = (await noteInput.getValue()) as string;
-      console.log(`[REF-19] note input value=${JSON.stringify(typed)}`);
-      expect(typed).toBe('Autre');
-    }
+      if (!select || !input) return { ok: false, why: 'controls missing' };
+      const setValue = (el: HTMLInputElement | HTMLSelectElement, value: string) => {
+        const proto =
+          el instanceof HTMLSelectElement ? window.HTMLSelectElement.prototype : window.HTMLInputElement.prototype;
+        const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+        setter?.call(el, value);
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+      };
+      setValue(select, 'Autre');
+      setValue(input, 'Autre');
+      return { ok: true, select: select.value, note: input.value };
+    })) as { ok: boolean; select?: string; note?: string; why?: string };
+    console.log('[REF-19] controls set:', JSON.stringify(noted));
+    expect(noted.ok).toBe(true);
+    await browser.pause(250);
 
     await submitRefund(APP_PIN);
     {
