@@ -23,8 +23,8 @@ with the commands in the last section.
 | A forged/legacy refund cannot leave spendable points behind | native derivation + test (E-0104) |
 | Money conservation gate + 31→33 refund tests under the strict invariant | E-0090, E-0104 |
 | Library suite green | `cargo test --lib` **436/436** (E-0096 + later) |
-| E2E refund suite | **18/18**, 0 skipped, invariants clean (ref34f) |
-| Wider refund suites (30/31/32/34) | **58/59**: every case passes except REF-19 (accepted testability residual, D13). REF-62 closed by scoping the interrupted-refund audit assertion to refund rows (E-0133) |
+| E2E refund suite | **18/18**, 0 skipped, invariants clean (ref33final3, HEAD 181e4bb) |
+| Wider refund suites (30/31/32/34) | **58/59**: only REF-19 fails (accepted testability residual, D13). REF-62 closed by scoping the interrupted-refund audit assertion; REF-87 restored to green by matching the readiness window to the huge-ticket preview recompute (E-0133, E-0135) |
 | Booting gate tracks the migration list (a device at v128 would have refused to boot) | D8 / E-0096 |
 | Dependency audit clean (`npm audit --omit=dev` → **0**) | E-0120 |
 | Branch sweep: main fast-forwarded, 9 merged branches deleted, 4 unmerged kept and documented | E-0120 |
