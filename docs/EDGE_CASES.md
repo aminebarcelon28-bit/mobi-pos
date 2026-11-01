@@ -52,6 +52,8 @@ Status vocabulary: **OPEN** (no passing test / known defect), **COVERED** (test 
 | 45 | A loyalty headline that no bucket backs (legacy rows, seeded fixtures) | **COVERED** | hydration mints one deterministic legacy-genesis bucket for the unbacked remainder (idempotent); `scripts/test_loyalty_backing.mts` 11/11, REF-15 green (E-0127) |
 | 46 | Credit minted by a points→Avoir conversion redeemed its points again at checkout (400 → 372) | **COVERED** | `creditFromPointsDzd` marker + `splitCreditRedemption`; lpAfterSale 412, unit proofs 11/11 (E-0127) |
 
+| 47 | A refund of a credit sale whose receivable is already settled had no destination (total 500, every leg 0) | **COVERED** | the uncovered value rides the Avoir leg (native writes balance + ledger row in-transaction); REF-66 K2 lands, credit +500, valueBack 500 (E-0128) |
+
 ## Notes
 
 - Items 1–7 and 10–19 are covered by tests that run in CI-local (`cargo test` + the diag specs).

@@ -24,7 +24,7 @@ with the commands in the last section.
 | Money conservation gate + 31→33 refund tests under the strict invariant | E-0090, E-0104 |
 | Library suite green | `cargo test --lib` **436/436** (E-0096 + later) |
 | E2E refund suite | **18/18**, 0 skipped, invariants clean (ref34f) |
-| Wider refund suites (30/31/32/34) | **50/59**: REF-06/15/67/86 and G-07 now pass (REF-15 fixed via a legacy bucket heal + no double-burn on points-backed credit). 9 remain, triaged: REF-44/47 (`clearCart` leftovers), REF-86/91 in-batch (`refund-submit not clickable`), REF-19 (no-restock note flow), REF-57 (search facet: spaces/IMEI), REF-66 (a settled-debt credit sale refunds with every leg 0 — real money-lane gap) (E-0125, E-0127) |
+| Wider refund suites (30/31/32/34) | **51/59**: REF-06/15/66/67/86-isolated and G-07 pass. Remaining 8 diagnosed: REF-86/91 (the chunk LANDED - native trace - and the modal has left the submit state before the next chunk), REF-57 (search facets spaces/IMEI), REF-19 (no-restock note flow), REF-27/30/44/47 (to read individually) (E-0125, E-0127, E-0128) |
 | Booting gate tracks the migration list (a device at v128 would have refused to boot) | D8 / E-0096 |
 | Dependency audit clean (`npm audit --omit=dev` → **0**) | E-0120 |
 | Branch sweep: main fast-forwarded, 9 merged branches deleted, 4 unmerged kept and documented | E-0120 |
