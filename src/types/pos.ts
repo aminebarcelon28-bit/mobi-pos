@@ -237,7 +237,12 @@ export interface MilestoneAward {
   milestoneId: string;
   threshold: number;
   rewardAmount: number;
+  /** Legacy single-tranche form (also set when a range has exactly one). */
   tranche?: number;
+  /** D6: an award can cover a contiguous tranche range (one row, not 200k). */
+  trancheFrom?: number;
+  trancheTo?: number;
+  trancheCount?: number;
 }
 
 /** Master-switch behavior when the program is disabled. */

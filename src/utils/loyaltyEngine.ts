@@ -1139,6 +1139,10 @@ export const netMilestoneGrants = (
   tranche?: number
 ): number => {
   if (!Array.isArray(ledger) || ledger.length === 0) return 0;
+  // D6: a specific tranche is granted when it is inside the active range.
+  if (tranche !== undefined) {
+    return tranche <= activeTrancheCount(ledger, customerId, milestoneId) ? 1 : 0;
+  }
   const grantKey = milestoneGrantKey(customerId, milestoneId, tranche);
   let net = 0;
   for (const e of ledger) {
@@ -1183,6 +1187,120 @@ export interface MilestoneEvaluation {
   totalReward: number;
   entries: LoyaltyLedgerEntry[];
 }
+
+/**
+ * D6: one ledger row per contiguous tranche RANGE. A 4e9 DA sale crosses 200 000
+ * tranches of 20 000 DA; writing one row each made the customer payload ~80 MB
+ * and every refund rewrite it five times. The range row carries the same total
+ * credit and the same audit meaning.
+ *
+ * Legacy per-tranche rows ("…:tranche:N") stay readable: every parser below
+ * treats a single tranche as a range of one.
+ */
+export const milestoneRangeKey = (
+  customerId: string,
+  milestoneId: string,
+  from: number,
+  to: number,
+): string =>
+  from === to
+    ? milestoneGrantKey(customerId, milestoneId, from)
+    : `${customerId}:milestone:${milestoneId}:tranches:${from}-${to}`;
+
+/** Clawback key for a revoked tranche range (single form when from === to). */
+export const milestoneRangeClawbackKey = (
+  customerId: string,
+  milestoneId: string,
+  from: number,
+  to: number,
+  txnId: string,
+): string => `${milestoneRangeKey(customerId, milestoneId, from, to)}:clawback:${txnId}`;
+
+export interface MilestoneRef {
+  milestoneId: string;
+  from: number;
+  to: number;
+  count: number;
+  clawback: boolean;
+  oneTime: boolean;
+}
+
+/** Parses a grant/clawback reference id for one milestone (null if unrelated). */
+export function parseMilestoneRef(
+  referenceId: string | undefined | null,
+  customerId: string,
+  milestoneId: string,
+): MilestoneRef | null {
+  const ref = String(referenceId ?? '');
+  const prefix = `${customerId}:milestone:${milestoneId}`;
+  if (!ref.startsWith(prefix)) return null;
+  const clawIdx = ref.indexOf(':clawback:');
+  const clawback = clawIdx >= 0;
+  const head = clawback ? ref.slice(0, clawIdx) : ref;
+  const rest = head.slice(prefix.length);
+  if (rest === '') {
+    return { milestoneId, from: 0, to: 0, count: 0, clawback, oneTime: true };
+  }
+  const single = rest.match(/^:tranche:(\d+)$/);
+  if (single) {
+    const n = Number(single[1]);
+    return { milestoneId, from: n, to: n, count: 1, clawback, oneTime: false };
+  }
+  const range = rest.match(/^:tranches:(\d+)-(\d+)$/);
+  if (range) {
+    const from = Number(range[1]);
+    const to = Number(range[2]);
+    if (!Number.isFinite(from) || !Number.isFinite(to) || to < from) return null;
+    return { milestoneId, from, to, count: to - from + 1, clawback, oneTime: false };
+  }
+  return null;
+}
+
+/**
+ * Active (granted minus revoked) tranche count for a repeatable milestone.
+ * Ranges and legacy single rows are summed identically; spend is monotonic, so
+ * the active set is always [1..active].
+ */
+export function activeTrancheCount(
+  ledger: LoyaltyLedgerEntry[] | undefined,
+  customerId: string,
+  milestoneId: string,
+): number {
+  if (!Array.isArray(ledger) || ledger.length === 0) return 0;
+  let active = 0;
+  for (const e of ledger) {
+    const p = parseMilestoneRef(e?.referenceId, customerId, milestoneId);
+    if (!p || p.oneTime) continue;
+    active += p.clawback ? -p.count : p.count;
+  }
+  return Math.max(0, active);
+}
+
+/** Range award row: one entry for [from..to], legacy key when count === 1. */
+const milestoneRangeEntry = (
+  customerId: string,
+  milestoneId: string,
+  threshold: number,
+  reward: number,
+  from: number,
+  to: number,
+  pointsBalanceAfter: number,
+): LoyaltyLedgerEntry => {
+  const count = to - from + 1;
+  const entry = createLedgerEntry(
+    customerId,
+    'milestone',
+    0,
+    pointsBalanceAfter,
+    `Palier ${threshold.toLocaleString('fr-DZ')} DZD debloque (+${reward * count} DA d'Avoir)` +
+      (count === 1 ? ` - Tranche ${from}` : ` - Tranches ${from} a ${to}`),
+    milestoneRangeKey(customerId, milestoneId, from, to),
+    reward * count,
+  );
+  entry.milestoneThresholdDzd = threshold;
+  entry.milestoneRewardDzd = reward;
+  return entry;
+};
 
 const milestoneGrantEntry = (
   customerId: string,
@@ -1245,12 +1363,27 @@ export const evaluateSpendMilestones = (
       entries.push(milestoneGrantEntry(customerId, m.id, m.threshold, m.reward, undefined, pointsBalanceAfter));
       totalReward += m.reward;
     } else {
-      for (let n = fromT + 1; n <= toT; n++) {
-        if (n <= legacyK) continue;
-        if (netMilestoneGrants(ledger, customerId, m.id, n) > 0) continue;
-        awards.push({ milestoneId: m.id, threshold: m.threshold, rewardAmount: m.reward, tranche: n });
-        entries.push(milestoneGrantEntry(customerId, m.id, m.threshold, m.reward, n, pointsBalanceAfter));
-        totalReward += m.reward;
+      // D6: grant the whole new tranche RANGE in one row (200k rows at 4e9 DA
+      // made the customer payload ~80 MB and every refund rewrite it 5x).
+      const active = Math.max(activeTrancheCount(ledger, customerId, m.id), legacyK);
+      if (toT > active && toT > fromT) {
+        const from = Math.max(active + 1, fromT + 1, legacyK + 1);
+        if (from <= toT) {
+          const count = toT - from + 1;
+          awards.push({
+            milestoneId: m.id,
+            threshold: m.threshold,
+            rewardAmount: m.reward,
+            tranche: count === 1 ? from : undefined,
+            trancheFrom: from,
+            trancheTo: toT,
+            trancheCount: count,
+          });
+          entries.push(
+            milestoneRangeEntry(customerId, m.id, m.threshold, m.reward, from, toT, pointsBalanceAfter),
+          );
+          totalReward += m.reward * count;
+        }
       }
     }
   }
@@ -1260,6 +1393,10 @@ export const evaluateSpendMilestones = (
 export interface MilestoneRevocation {
   milestoneId: string;
   tranche?: number;
+  /** D6: a revocation can cover a range of tranches (one row, not 100k). */
+  trancheFrom?: number;
+  trancheTo?: number;
+  trancheCount?: number;
   threshold: number;
   reward: number;
 }
@@ -1304,11 +1441,24 @@ export const computeMilestoneClawback = (
     liveReward: number
   ): { threshold: number; reward: number } => {
     const a = (source.awards || []).find(
-      (x) => x && x.milestoneId === milestoneId && (x.tranche ?? undefined) === tranche
+      (x) =>
+        x &&
+        x.milestoneId === milestoneId &&
+        (tranche === undefined
+          ? (x.tranche ?? undefined) === undefined
+          : (x.tranche ?? undefined) === tranche ||
+            ((x.trancheFrom ?? 0) <= tranche && tranche <= (x.trancheTo ?? 0)))
     );
     if (a) return { threshold: a.threshold, reward: a.rewardAmount };
     const key = milestoneGrantKey(customerId, milestoneId, tranche);
-    const g = (source.ledger || []).find((e) => e && e.referenceId === key);
+    let g = (source.ledger || []).find((e) => e && e.referenceId === key);
+    if (!g && tranche !== undefined) {
+      // D6: the grant may be a range row that covers this tranche.
+      g = (source.ledger || []).find((e) => {
+        const p = parseMilestoneRef(e?.referenceId, customerId, milestoneId);
+        return !!p && !p.oneTime && p.from <= tranche && tranche <= p.to;
+      });
+    }
     if (g) {
       const snapReward = Number(g.milestoneRewardDzd);
       const snapThreshold = Number(g.milestoneThresholdDzd);
@@ -1353,24 +1503,36 @@ export const computeMilestoneClawback = (
       entries.push(entry);
       totalRevoked += reward;
     } else {
-      for (let n = fromT; n >= toT + 1; n--) {
-        const snap = snapshotOf(m.id, n, m.threshold, m.reward);
-        const threshold = snap.threshold;
-        const reward = snap.reward;
-        revoked.push({ milestoneId: m.id, tranche: n, threshold, reward });
+      // D6: revoke the un-crossed tranche RANGE in one row.
+      const active = activeTrancheCount(source.ledger || [], customerId, m.id);
+      const to = Math.min(active, fromT);
+      const from = toT + 1;
+      if (to >= from) {
+        const snap = snapshotOf(m.id, from, m.threshold, m.reward);
+        const count = to - from + 1;
+        revoked.push({
+          milestoneId: m.id,
+          tranche: count === 1 ? from : undefined,
+          trancheFrom: from,
+          trancheTo: to,
+          trancheCount: count,
+          threshold: snap.threshold,
+          reward: snap.reward,
+        });
         const entry = createLedgerEntry(
           customerId,
           'milestone',
           0,
           pointsBalanceAfter,
-          `Révocation palier ${threshold.toLocaleString('fr-DZ')} DZD (−${reward} DA d'Avoir) — Tranche ${n}`,
-          milestoneClawbackKey(customerId, m.id, n, source.txnId),
-          -reward
+          `Revocation palier ${snap.threshold.toLocaleString('fr-DZ')} DZD (-${snap.reward} DA d'Avoir)` +
+            (count === 1 ? ` - Tranche ${from}` : ` - Tranches ${from} a ${to}`),
+          milestoneRangeClawbackKey(customerId, m.id, from, to, source.txnId),
+          -(snap.reward * count)
         );
-        entry.milestoneThresholdDzd = threshold;
-        entry.milestoneRewardDzd = reward;
+        entry.milestoneThresholdDzd = snap.threshold;
+        entry.milestoneRewardDzd = snap.reward;
         entries.push(entry);
-        totalRevoked += reward;
+        totalRevoked += snap.reward * count;
       }
     }
   }
@@ -1409,12 +1571,26 @@ export const reconcileMilestoneTranches = (
       entries.push(milestoneGrantEntry(customerId, m.id, m.threshold, m.reward, undefined, pointsBalanceAfter));
       totalReward += m.reward;
     } else {
-      for (let n = 1; n <= expected; n++) {
-        if (n <= legacyK) continue;
-        if (netMilestoneGrants(ledger, customerId, m.id, n) > 0) continue;
-        awards.push({ milestoneId: m.id, threshold: m.threshold, rewardAmount: m.reward, tranche: n });
-        entries.push(milestoneGrantEntry(customerId, m.id, m.threshold, m.reward, n, pointsBalanceAfter));
-        totalReward += m.reward;
+      // D6: catch up as ONE range row.
+      const active = Math.max(activeTrancheCount(ledger, customerId, m.id), legacyK);
+      if (expected > active) {
+        const from = Math.max(active + 1, legacyK + 1);
+        if (from <= expected) {
+          const count = expected - from + 1;
+          awards.push({
+            milestoneId: m.id,
+            threshold: m.threshold,
+            rewardAmount: m.reward,
+            tranche: count === 1 ? from : undefined,
+            trancheFrom: from,
+            trancheTo: expected,
+            trancheCount: count,
+          });
+          entries.push(
+            milestoneRangeEntry(customerId, m.id, m.threshold, m.reward, from, expected, pointsBalanceAfter),
+          );
+          totalReward += m.reward * count;
+        }
       }
     }
   }
