@@ -533,6 +533,24 @@ async function startRefund(receipt: string, method: 'Espèces' | 'Avoir Client' 
 }
 
 /** Full submit cycle: PIN type + submit click (no wait — callers wait on DB). */
+/** A refund that LANDS while the modal re-renders closes the dialog, so the
+ *  helper can no longer click. The ROW is the authority: classify that as
+ *  submitted, never as a failure. Any other error still propagates. */
+async function submitRefundOrLanded(ticketId: string, want = 1): Promise<'clicked' | 'landed'> {
+  try {
+    await submitRefund();
+    return 'clicked';
+  } catch (e) {
+    const msg = String((e as Error)?.message ?? '');
+    if (!/refund-submit not clickable|refund-dialog-closed-before-submit/.test(msg)) throw e;
+    for (let i = 0; i < 10; i += 1) {
+      await browser.pause(400);
+      if (refundsFor(ticketId).length >= want) return 'landed';
+    }
+    throw e;
+  }
+}
+
 async function submitRefund(pin = APP_PIN, times = 1): Promise<void> {
   await typeRefundPin(pin);
   const ok = await clickRefundSubmit(times);
@@ -1030,7 +1048,7 @@ describe('REF — refunds, returns & avoirs (batch 3)', () => {
     expect(noted.ok).toBe(true);
     await browser.pause(250);
 
-    await submitRefund(APP_PIN);
+    await submitRefundOrLanded(saleA.id, 1);
     {
       // Evidence for the write-off path: what did the app say to THIS submit?
       const diag = await browser.execute(() => {
