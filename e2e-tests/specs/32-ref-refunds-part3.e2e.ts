@@ -2413,7 +2413,14 @@ describe('REF — refunds, returns & avoirs (batch 6 / part 3)', () => {
     const shown = await refundTotalMinor();
     console.log(`[REF-62] staged refund total before interrupt: ${shown}`);
     expect(shown).toBe(100000n);
+    const auditRowsBefore = all<Row>('SELECT id FROM security_audit_logs');
     await reloadWithQ('?lang=ar');
+    {
+      const rowsNow = all<Row>('SELECT id, action, details FROM security_audit_logs');
+      const beforeIds = new Set(auditRowsBefore.map((r) => String(r.id)));
+      const added = rowsNow.filter((r) => !beforeIds.has(String(r.id)));
+      console.log('[REF-62] audit delta rows:', JSON.stringify(added).slice(0, 800));
+    }
     console.log(
       `[REF-62] after ?lang=ar: refunds=${refundsFor(sale.id).length} dedup=${count('refund_dedup', 'ticket_id = ?', sale.id)} tx=${txCount()} moves=${count('cash_movements')} audits=${count('security_audit_logs')} stock=${stockOf(P1000)}`,
     );
