@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { createSubmitGuard, pinAuthorisesTicket } from '../../utils/refundGuards';
+import { beginRefundFlight, endRefundFlight } from '../../utils/refundFlight';
 import { refundDiag } from '../../utils/refundDiag';
 import { refundRefusalMessage } from '../../i18n/refundMessages';
 
@@ -541,6 +542,7 @@ export const RefundModal: React.FC = () => {
   const handleSubmitRefund = async (e: React.FormEvent) => {
     e.preventDefault();
     refundDiag('submit:start', { txn: selectedTxn?.id ?? null, method: refundMethod });
+    beginRefundFlight();
     if (!selectedTxn) {
       showToast('Veuillez d\'abord sélectionner un ticket de caisse.', 'warning');
       return;
@@ -722,6 +724,7 @@ export const RefundModal: React.FC = () => {
       console.error('Refund submission error:', err);
       showToast('Une erreur est survenue lors de l\'enregistrement du remboursement.', 'error');
     } finally {
+      endRefundFlight();
       submitGuardRef.current.leave();
       // PIN state is cleared ONLY on success (above). A failure keeps the gate
       // open so the operator can correct the request and resubmit - the PIN is

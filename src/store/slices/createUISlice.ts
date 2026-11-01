@@ -1,5 +1,6 @@
 import type { StateCreator } from 'zustand';
 import type { PosState, UISlice } from '../types';
+import { isRefundFlight } from '../../utils/refundFlight';
 import { refundDiag } from '../../utils/refundDiag';
 import type {
   Product,
@@ -325,6 +326,13 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
   },
 
   closeModal: () => {
+    // A refund that is committing must not be dismissed by a stray global
+    // close (late checkout effect / payment-modal timer): the operator would
+    // lose the refund (REF-87).
+    if (isRefundFlight() && get().activeModal === 'refund') {
+      refundDiag('store:close-blocked', { site: 'createUISlice.closeModal' });
+      return;
+    }
     refundDiag('store:close', {
       site: 'createUISlice.closeModal',
       stack: (new Error().stack ?? '').split('\n').slice(1, 5).join(' | '),
