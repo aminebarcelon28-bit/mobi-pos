@@ -115,3 +115,17 @@ only closes its own `payment` modal) — a correct fix that stays.
 The dialog still goes null **172 ms later with no tag**, so a second, untagged site closes it:
 `closeModal()` (an arrow-body `set`, deliberately skipped by the tagger) or `createCartSlice:765`.
 Those two are the next tags to add (E-0116).
+
+## Update 2026-11-01 (stop point) — lifecycle guards are necessary but not sufficient
+
+The in-flight guard is proven (trace: `store:close-blocked`, the dialog survives the cap switch and the Avoir
+submit starts). The refund still does not land: the settle budget expires at 240 s and a later close path
+removes the dialog again (E-0117).
+
+Three consecutive lifecycle fixes (checkout-close scope, in-flight guard, PIN retention) each removed a real
+defect, but the case does not converge while every refund rewrites an ~80 MB ledger and takes 35–60 s. Per the
+guardrails I am **stopping per-site patching**. The next cycle is a single, ordered piece of work:
+
+1. **D6 aggregation** (one ledger row per award range + dry-run migration + backup) — refunds drop to ~1 s.
+2. Then **one** final lifecycle pass with the ring buffer to confirm no close can interrupt a refund.
+3. Re-run the full 33-ref for 18/18.
