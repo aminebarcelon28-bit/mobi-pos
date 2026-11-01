@@ -236,9 +236,16 @@ export const RefundModal: React.FC = () => {
           compactForSearch(t.receiptNumber).includes(compactReceipt)) ||
         (t.customer?.name ? foldForSearch(t.customer.name).includes(q) : false) ||
         (t.customer?.phone ? (t.customer.phone.includes(debouncedSearch.trim()) || foldForSearch(t.customer.phone).includes(q)) : false) ||
-        (t.items || []).some(
-          (i) => foldForSearch(i.product?.title).includes(q) || foldForSearch(i.product?.sku).includes(q)
-        )
+        (t.items || []).some((i) => {
+          const serial = String((i as { imeiNumber?: string }).imeiNumber ?? '');
+          return (
+            foldForSearch(i.product?.title).includes(q) ||
+            foldForSearch(i.product?.sku).includes(q) ||
+            // REF-57: a serial/IMEI is a legitimate lookup facet.
+            (serial.length > 0 &&
+              (foldForSearch(serial).includes(q) || compactForSearch(serial).includes(compactReceipt)))
+          );
+        })
       );
     });
   }, [eligibleTransactionsMemo, debouncedSearch]);
