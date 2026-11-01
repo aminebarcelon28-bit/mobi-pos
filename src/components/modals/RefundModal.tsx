@@ -104,6 +104,10 @@ export const RefundModal: React.FC = () => {
   // before React commits the last keystroke, and a scripted change may not
   // reach state at all. The handler falls back to the DOM value.
   const customReasonRef = useRef<HTMLInputElement | null>(null);
+  // D13: the reason SELECT is uncontrolled (like the note) so the value the
+  // operator sees in the field is the value the refund uses, even when React
+  // state lags a render; the submit path reads the DOM value.
+  const reasonSelectRef = useRef<HTMLSelectElement | null>(null);
   const [managerPin, setManagerPin] = useState('');
   const [pinRequired, setPinRequired] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -483,6 +487,10 @@ export const RefundModal: React.FC = () => {
         })
     : [];
 
+  // A write-off ("rebut", no restock) always needs an operator note - the field
+  // is offered for that lane regardless of the preset reason category (D13).
+  const writeOffSelected = activeRefundItems.some((i) => !i.restock);
+
   const totalRefundAmount = activeRefundItems.reduce((acc, i) => acc + i.totalRefundAmount, 0);
 
   // Module A submit gate (defense in depth — the list already locks foreign
@@ -627,16 +635,17 @@ export const RefundModal: React.FC = () => {
       });
       // Note authority: component state, else what the field actually holds.
       const typedNote = customReason.trim() || (customReasonRef.current?.value ?? '').trim();
-      const finalReason = refundReason === 'Autre' && typedNote ? typedNote : refundReason;
+      const reasonNow = reasonSelectRef.current?.value ?? refundReason;
+      const finalReason = reasonNow === 'Autre' && typedNote ? typedNote : reasonNow;
       // Rebut sans restock: a reason note is mandatory (also enforced slice-side).
       const needsNote = activeRefundItems.some((i) => !i.restock);
       // REF-36: "Autre" is a CATEGORY, not a motive. With the category selected and
       // the free-text empty there is no operator-authored note; the bare
       // placeholder must not satisfy the mandatory-note gate (the modal itself
       // promises "Précisez le motif exact..." for Autre).
-      const authoredNote = refundReason === 'Autre' ? typedNote : finalReason.trim();
+      const authoredNote = reasonNow === 'Autre' ? typedNote : finalReason.trim();
       if (needsNote && !authoredNote) {
-        refundDiag('gate:note', { needsNote, authoredNote, refundReason, typedNote });
+        refundDiag('gate:note', { needsNote, authoredNote, reasonNow, typedNote });
         showToast('Article(s) sans remise en stock : précisez un motif (note obligatoire).', 'error');
         setIsSubmitting(false);
         return;
@@ -1228,7 +1237,8 @@ export const RefundModal: React.FC = () => {
                       <div>
                         <label className="text-[10px] text-pos-muted font-bold block mb-1">Motif du Retour :</label>
                         <select
-                          value={refundReason}
+                          ref={reasonSelectRef}
+                          defaultValue={refundReason}
                           onChange={(e) => setRefundReason(e.target.value)}
                           className="w-full bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-xs text-pos-text font-semibold focus:border-purple-400 focus:outline-none cursor-pointer"
                         >
@@ -1240,7 +1250,7 @@ export const RefundModal: React.FC = () => {
                         </select>
                       </div>
 
-                      {refundReason === 'Autre' && (
+                      {(writeOffSelected || refundReason === 'Autre') && (
                         <input
                           type="text"
                           ref={customReasonRef}
