@@ -593,11 +593,13 @@ export const RefundModal: React.FC = () => {
     }
 
     if (activeRefundItems.length === 0) {
+      refundDiag('gate:no-items', { selected: Object.values(selectedItemIds).filter(Boolean).length });
       showToast('Veuillez sélectionner au moins un article à rembourser.', 'warning');
       return;
     }
 
     if (totalRefundAmount <= 0) {
+      refundDiag('gate:zero-amount', { totalRefundAmount, items: activeRefundItems.length });
       showToast('Le montant total à rembourser doit être supérieur à 0 DA.', 'warning');
       return;
     }
