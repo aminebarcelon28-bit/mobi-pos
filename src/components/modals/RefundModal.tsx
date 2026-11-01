@@ -252,14 +252,20 @@ export const RefundModal: React.FC = () => {
     };
   }, [activeModal, debouncedSearch, filteredTransactionsMemo.length, transactions]);
 
+  // The ticket the modal last initialised. A sync-driven re-init of the SAME
+  // ticket must not wipe the PIN the operator is about to revalidate with.
+  const lastInitTxnRef = useRef<string | null>(null);
   const initializeRefundState = useCallback((txn: SaleTransaction) => {
     // REF-87: a manager PIN belongs to the ticket it was typed for. Selecting a
-    // ticket (or reopening the modal on one) must start with an empty PIN, or a
-    // PIN typed for an earlier refund silently authorises this one and the gate
-    // never re-appears.
-    setManagerPin('');
-    setManagerPinTicket(null);
-    setPinRequired(false);
+    // DIFFERENT ticket (or reopening the modal) starts with an empty PIN, or a
+    // PIN typed for an earlier refund silently authorises this one.
+    const sameTicket = lastInitTxnRef.current === txn.id;
+    lastInitTxnRef.current = txn.id;
+    if (!sameTicket) {
+      setManagerPin('');
+      setManagerPinTicket(null);
+      setPinRequired(false);
+    }
     const initialSelected: Record<string, boolean> = {};
     const initialQty: Record<string, number> = {};
     const initialRestock: Record<string, boolean> = {};
@@ -651,6 +657,7 @@ export const RefundModal: React.FC = () => {
             // offline returns as a store credit for the customer on the ticket.
             setRefundMethod('Avoir Client');
             showToast('Plafond espèces hors-ligne atteint — méthode basculée en Avoir Client : vérifiez puis validez à nouveau.', 'warning', 6000);
+          showToast(`[diag] refund method sent: ${effectiveRefundMethod}`, 'warning', 4000);
           } else if (refundMethod === 'Espèces') {
             // P0 (owner ruling): no customer -> an Avoir would credit nobody.
             // Terminal refusal, NOT a method switch (no switch loop).
