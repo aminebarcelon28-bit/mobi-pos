@@ -1210,6 +1210,26 @@ describe('REF — refunds, returns & avoirs (batch 7 / part 4)', () => {
   });
 
   afterEach(async function () {
+    // E-0114: dump the RefundModal lifecycle ring buffer for the huge-ticket
+    // case (it runs even when the test body throws), so the teardown that
+    // clears the dialog is traced instead of guessed.
+    try {
+      const diagTitle = String(
+        (this as unknown as { currentTest?: { title?: string } }).currentTest?.title ?? '',
+      );
+      if (diagTitle.includes('REF-87')) {
+        const diag = await browser.execute(() => {
+          try {
+            return JSON.parse(localStorage.getItem('refund_diag') ?? '[]');
+          } catch {
+            return [];
+          }
+        });
+        console.log('[REF-87 diag]', JSON.stringify(diag).slice(0, 6000));
+      }
+    } catch (e) {
+      console.log('[REF-87 diag] unavailable:', String((e as Error)?.message ?? e));
+    }
     if (await refundDialogVisible()) {
       console.log('[afterEach] refund dialog still open — closing');
       await closeRefund().catch(() => {});

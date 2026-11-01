@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { createSubmitGuard, pinAuthorisesTicket } from '../../utils/refundGuards';
+import { refundDiag } from '../../utils/refundDiag';
 import { refundRefusalMessage } from '../../i18n/refundMessages';
 
 import { foldForSearch } from '../../utils/catalogSearch';
@@ -105,6 +106,11 @@ export const RefundModal: React.FC = () => {
   // clickable long enough for a second click in the same tick; two processRefund
   // calls make the second one fail as ALREADY_REFUNDED (correctly deduped) but
   // leave a misleading refusal on screen and block the next legitimate chunk.
+  useEffect(() => {
+    refundDiag('mount');
+    return () => refundDiag('unmount');
+  }, []);
+
   const submitGuardRef = useRef(createSubmitGuard());
   // REF-87: the PIN is bound to the ticket it was typed for; a PIN typed for
   // another ticket (or for an earlier refund) never authorises this one.
@@ -261,6 +267,7 @@ export const RefundModal: React.FC = () => {
     // PIN typed for an earlier refund silently authorises this one.
     const sameTicket = lastInitTxnRef.current === txn.id;
     lastInitTxnRef.current = txn.id;
+    refundDiag('init', { txn: txn.id, sameTicket });
     if (!sameTicket) {
       setManagerPin('');
       setManagerPinTicket(null);
@@ -298,6 +305,7 @@ export const RefundModal: React.FC = () => {
         setSelectedTxn(selectedTransactionForRefund);
         initializeRefundState(selectedTransactionForRefund);
       } else {
+        refundDiag('close', { reason: 'sync-cleared', key: String(refundSyncKey) });
         setSelectedTxn(null);
         setSelectedItemIds({});
         setRefundQuantities({});
@@ -515,6 +523,7 @@ export const RefundModal: React.FC = () => {
 
   const handleSubmitRefund = async (e: React.FormEvent) => {
     e.preventDefault();
+    refundDiag('submit:start', { txn: selectedTxn?.id ?? null, method: refundMethod });
     if (!selectedTxn) {
       showToast('Veuillez d\'abord sélectionner un ticket de caisse.', 'warning');
       return;
@@ -606,6 +615,7 @@ export const RefundModal: React.FC = () => {
         supervisorPinVerifiedAt,
         supervisorUserId: activeCashier?.role === 'admin' ? activeCashier.id : 'manager',
       })) as unknown as { success: boolean; reason?: string; warnings?: string[]; refundTransaction?: { total?: number; cashDisbursed?: number } };
+      refundDiag('submit:result', { ok: refundResult.success, reason: refundResult.reason ?? null });
 
       if (refundResult.success) {
         for (const w of refundResult.warnings ?? []) {
@@ -619,6 +629,7 @@ export const RefundModal: React.FC = () => {
             : `Remboursement de ${formatDZD(netDone)} validé avec succès (${effectiveRefundMethod}).`,
           'success'
         );
+        refundDiag('close', { reason: 'success' });
         setSelectedTxn(null);
         setSelectedTransactionForRefund(null);
         // A committed refund consumes the supervisor authorisation: the next
@@ -655,7 +666,8 @@ export const RefundModal: React.FC = () => {
           if (refundMethod === 'Espèces' && selectedTxn?.customer?.id) {
             // Fallback path (Module B): value that cannot leave the drawer
             // offline returns as a store credit for the customer on the ticket.
-            setRefundMethod('Avoir Client');
+            refundDiag('switch', { to: 'Avoir Client' });
+        setRefundMethod('Avoir Client');
             showToast('Plafond espèces hors-ligne atteint — méthode basculée en Avoir Client : vérifiez puis validez à nouveau.', 'warning', 6000);
           showToast(`[diag] refund method sent: ${effectiveRefundMethod}`, 'warning', 4000);
           } else if (refundMethod === 'Espèces') {
