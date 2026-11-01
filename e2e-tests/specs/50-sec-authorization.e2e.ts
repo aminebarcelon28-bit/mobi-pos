@@ -3728,12 +3728,10 @@ describe('SEC - roles, authorization & native hardening (batch 10 / part 1)', ()
   // ===========================================================================
   it('[SEC-04] a role change lands only after a reload; a demoted user keeps their boot-time role until restart', async () => {
     await ensureCashierRow('usr-sec4', 'SEC D', 'cashier');
-    // SEC-04 fixture: this roster row renders the manager pad (>= 6 digits), so the
-  // credential is minted at 6 digits (valid for both pads; manager floor is 6).
-  // Original note: a roster row that resolves as a cashier takes the 4-digit format
+    // A roster row that resolves as a cashier takes the 4-digit format
     // (pin.rs:866-880: only the primary admin resolves as manager) and the
     // cashier pad auto-submits at exactly 4 digits.
-    const mint = await pinSetRaw('usr-sec4', '813500');
+    const mint = await pinSetRaw('usr-sec4', '8135');
     console.log(`[SEC-04] pin_set(usr-sec4, 4-digit, no supervisor): ok=${mint.ok} raw=${mint.raw.slice(0, 160)}`);
     expect(mint.ok).toBe(true);
 
@@ -3748,7 +3746,7 @@ describe('SEC - roles, authorization & native hardening (batch 10 / part 1)', ()
     console.log(`[SEC-04] boot roster: usr-sec4 card shows role='${preCard}' (expected 'cashier')`);
     expect(preCard.toLowerCase()).toBe('cashier');
 
-    await unlockViaProfile('usr-sec4', '813500');
+    await unlockViaProfile('usr-sec4', '8135');
     const asCashier = await journalLauncherVisible();
     console.log(`[SEC-04] SEC D as cashier: journal launcher visible=${asCashier} (canSeeJournalLauncher is admin-only, auditGate.ts:258-260)`);
     expect(asCashier).toBe(false);

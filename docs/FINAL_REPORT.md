@@ -122,7 +122,15 @@ Records are append-only and ids are unique (verified: no duplicate `id` across t
 collision. `E-0139` documents this check.
 
 
-## Non-refund suites (first measurement, 15a8a59)
+## Non-refund suites (reconciled)
 
-24-syn + 40-shf + 50-sec + 26-rcp: **40/52 cases pass**; 15 fail (SEC-01/04/05/09, SHF-02/07/11/13, SYN-02/04/26/27);
-the remaining sync cases are BLOCKED (second terminal / merchant gateway) or N/A. Not claimed green (E-0143).
+| Suite | Total | PASS | FAIL | BLOCKED | N/A | partial |
+|---|---|---|---|---|---|---|
+| 50-sec | 10 | 7 | 3 | 0 | 0 | 0 |
+| 24-syn | 30 | 5 | 4 | 17 | 4 | 0 |
+| 40-shf | 12 | 8 | 4 | 0 | 0 | 0 |
+| 26-rcp | 29 | 3 | 16 | 4 | 3 | 3 |
+
+Every non-PASS case is classified (product defect / harness gap / test-design / by-design /
+BLOCKED) with primary sources in `docs/non-refund-suite-register.md` (E-0144, E-0148).
+BLOCKED is counted as unverified, never as green.

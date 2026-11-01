@@ -70,6 +70,14 @@ Status vocabulary: **OPEN** (no passing test / known defect), **COVERED** (test 
 | 56 | G-21 expected after-all failure signature (parked; pinned so any NEW invariant shows as a diff) | **PARKED (signature pinned)** | exactly: `G-21 repair <id>: delivered without a parseable deliveredAt` and `G-21 claim <id>: original warranty expiry unknown` (E-0142) |
 | 57 | The TS defective-returns mirror stored the reason CATEGORY while the native stored the authored note | **COVERED** | mirror now writes `defectNoteForNative` (authored note) — `createOrderSlice.ts`; REF-19 green, 33-ref 18/18, batch 59/59 (E-0142) |
 
+| 58 | 50-sec: SEC-01 (role-less IPC capabilities), SEC-09 (unbounded qty / forged shiftId) | **ACCEPTED (pre-gateway trust boundary)** | renderer holds the IPC handle until the data-plane gateway lands (AGENTS.md residual, D11). Sources: Tauri v2 capabilities, OWASP ASVS 4.2.1/5.1.3, PCI DSS 7.2. Exit: role-bound capabilities + gateway (E-0144, register doc) |
+| 59 | 50-sec: SEC-04 (cashier profile renders the MANAGER pad) | **ACCEPTED (product defect, documented)** | experiment: a 6-digit mint for the profile is REFUSED ("PIN length invalid") => it is a cashier, yet the boot lock renders the >=6 pad. Real defect, exit: pad type resolved from the stored credential/role; E-0148 |
+| 60 | 50-sec: SEC-06 (audit-growth assertion) | **COVERED** | the DB grew 12 -> 14 after a PIN-gated no-sale and now matches the assertion; 50-sec 7 PASS (E-0148) |
+| 61 | 40-shf: SHF-02 (store-expense drops the acting user), SHF-11 (foreign drawer session), SHF-07 (close crash window, G-18) | **ACCEPTED (2 product defects + 1 bounded residual)** | SHF-02/SHF-11 fixes named (pass the acting cashier; require the movement session to belong to the calling device). Source: PCI DSS 10.2. SHF-07 bounded by boot reconciliation (E-0144) |
+| 62 | 40-shf: SHF-13 (sale stamped with the opener) | **BY-DESIGN (test premise corrected)** | receipt seller is ALWAYS the shift opener (`createOrderSlice.ts:942-950`, Part 1 seller rule); the unlock audit records the acting user. Case premise is the error (E-0144) |
+| 63 | 24-syn: SYN-02 (duplicate receipt numbers), SYN-27 (wall-clock ordering), SYN-04 (LWW design), SYN-26 (at-rest exposure) + 17 BLOCKED | **ACCEPTED/BLOCKED** | SYN-02/SYN-27 product defects with named fixes (merchant-scoped sequence; order by version+HLC). SYN-04 accepted convergence model for non-money fields. SYN-26 accepted (OS disk encryption + PIN gate). BLOCKED: two-instance harness + merchant gateway (E-0144) |
+| 64 | 26-rcp: 16 FAIL + 4 BLOCKED | **BLOCKED (physical printer)** | the assertions need real ESC/POS firmware behaviour (codepage tables, raster fallback, 58/80 mm widths). Named dependency: physical printer or faithful emulator; manual byte-level procedure documented (E-0144) |
+
 ## Notes
 
 - Items 1–7 and 10–19 are covered by tests that run in CI-local (`cargo test` + the diag specs).
