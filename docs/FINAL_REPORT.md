@@ -2,12 +2,14 @@
 
 ## Verdict in one paragraph
 
-The refund and void money paths are now settled **inside one SQLite write transaction** and proven at
-the 32-bit boundaries; the TypeScript side can no longer overwrite a wallet movement; the library suite is
-fully green; the E2E refund suite is **17/18 with zero skipped tests and a clean invariant oracle**, with the
-single red case accepted in writing because the fix requires a data migration that the guardrails forbid
-without a backup and a dry run. The edge-case register has **zero OPEN items**. Static, boundary and
-dependency audits are recorded. Everything below is reproducible with the commands in the last section.
+The refund and void money paths are settled **inside one SQLite write transaction** and proven at the
+32-bit boundaries; the TypeScript side can no longer overwrite a wallet movement; the library suite is
+fully green; and the E2E refund suite is **18/18 with zero skipped tests and a clean invariant oracle**.
+The last red case (REF-87, a 2·10⁹ DA refund) fell to **D6 option A**: the milestone ledger is now one row per
+contiguous tranche *range* instead of one row per 20 000 DA tranche — a 4e9 sale dropped from ~80 MB of
+customer payload to a few hundred bytes, refunds from ~55 s to seconds. The edge-case register has
+**zero OPEN items**. Static, boundary and dependency audits are recorded. Everything below is reproducible
+with the commands in the last section.
 
 ## What is proven
 
@@ -21,8 +23,10 @@ dependency audits are recorded. Everything below is reproducible with the comman
 | A forged/legacy refund cannot leave spendable points behind | native derivation + test (E-0104) |
 | Money conservation gate + 31→33 refund tests under the strict invariant | E-0090, E-0104 |
 | Library suite green | `cargo test --lib` **436/436** (E-0096 + later) |
-| E2E refund suite | **17/18**, 0 skipped, invariants clean (ref33final) |
+| E2E refund suite | **18/18**, 0 skipped, invariants clean (ref34f) |
 | Booting gate tracks the migration list (a device at v128 would have refused to boot) | D8 / E-0096 |
+| Milestone ledger aggregated to range rows; legacy rows still parsed | 7/7 parity (E-0118) |
+| Compaction migration on a real 4e9 DB copy: 200 002 rows / 76.1 MB → 3 rows / 1.6 KB, backup first | E-0119 |
 
 ## Decisions (all in `docs/decisions/`)
 
@@ -57,9 +61,9 @@ dependency audits are recorded. Everything below is reproducible with the comman
 
 ## Residual risks (honest list)
 
-1. **REF-87 / D6**: a 4e9 ticket carries ~96–139 MB because the milestone engine writes one ledger row per
-   20 000 DA tranche (200 000 rows). Refunds of such tickets are too slow for the harness (and for a
-   counter). Money path is proven separately; the fix is a data-model change + migration (D9).
+1. **Legacy databases still carry per-tranche rows** until the compaction migration runs on them
+   (`scripts/compact-milestone-ledger.mjs`, dry-run by default, backup before write). New writes are ranges;
+   the code reads both, so an uncompacted DB stays correct, only large.
 2. **Card refunds have no destination of record** (D12): the native scopes the card leg out with a warning
    and the money gate reports it. Card refunds are not offered in the UI; only a forged/IPC caller reaches it.
 3. **`cash_move.amount` ≠ payout amount** (D12): presence is enforced; amount equality needs a schema split.
@@ -91,7 +95,7 @@ node .opencode/skills/e2e-testing/scripts/reconcile.mjs
 npm run build:e2e
 node .opencode/skills/e2e-testing/scripts/run.mjs \
   --spec e2e-tests/specs/33-ref-refunds-part4.e2e.ts --wipe
-# expected: 17 passing, 1 failing (REF-87, accepted in D9), invariants clean
+# expected: 18 passing, 0 failing, invariants clean
 
 # 5. Boundary proofs at 32-bit limits (diagnostic specs)
 node .opencode/skills/e2e-testing/scripts/run.mjs --spec e2e-tests/diag/d4a-wallet-big.e2e.ts --wipe
