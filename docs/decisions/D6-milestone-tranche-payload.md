@@ -1,9 +1,11 @@
 # Decision D6 — the milestone tranche ledger is the payload ceiling (no fix in C01)
 
-- **Status:** the PAYLOAD half is fixed (the sale no longer embeds the loyalty book: 24.8MB → 241B for the
-  customer block, E-0108); the LATENCY half remains (an ~80MB customer ledger is still merged in Rust on a
-  wallet refund, ~55s). REF-87 passes in isolation; the full batch still hits the 120s supervisor window
-  (E-0109). Next: SQL-side `json_*` merge or tranche aggregation.
+- **Status: RESOLVED (2026-11-01).** Option A landed: the milestone ledger is written as one row per
+  contiguous tranche RANGE (legacy per-tranche rows are still parsed). A 4e9 sale is ONE row worth 200 000
+  tranches / 200 000 000 DA instead of 200 000 rows; a refund revokes the un-crossed range in one row. The
+  full 33-ref batch is **18/18 with a clean invariant oracle** (E-0118), and the dry-run compaction migration
+  shrinks an existing 4e9 customer from 76.1 MB to 1.6 KB with a backup first (E-0119). See the update log
+  below for the journey and the residual (the SQL-side JSON write is only needed for legacy rows now).
 - **Measured:** a 4e9 DA sale writes **200 000** ledger rows (`<cust>:milestone:ms-20k:tranche:N`, 1 000 DA
   each) into the customer payload → transaction payload **138 742 528 B**, customer outbox row **79 797 580 B**
   (E-0079). The refund's native merge parses and re-serialises that payload, so the refund of such a ticket

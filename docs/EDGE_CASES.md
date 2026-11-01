@@ -41,7 +41,7 @@ Status vocabulary: **OPEN** (no passing test / known defect), **COVERED** (test 
 | 30 | Payment rails CIB/Edahabia/BaridiMob timeouts & duplicate callbacks | **PARKED** | no acquirer credentials; contract-level only |
 
 | 39 | Reports modal read after a refund ran before the view rendered (REF-56 flake) | **COVERED** | harness waits for the reports body / PIN gate and retries once; REF-56 PASS (E-0100) |
-| 40 | REF-87: a 2e9/unit ticket could not be refunded within a reasonable window | **ACCEPTED (latency, D6/D9) — money path GREEN in isolation** | sale payload no longer embeds the loyalty book (24.8MB→241B) and the fully-refunded clamp holds (E-0108, REF-87 green isolated, invariants clean). In the full batch the ~55s refund still exceeds the 120s supervisor window by the second chunk (E-0109); exit = SQL-side merge or tranche aggregation |
+| 40 | REF-87: a 2e9/unit ticket could not be refunded within a reasonable window | **COVERED** | D6-A: the milestone ledger is one row per tranche RANGE; the full 33-ref batch is 18/18 with a clean oracle (E-0118); compaction migration proven on a DB copy, 76.1 MB → 1.6 KB with backup (E-0119) |
 | 41 | Void lane left its loyalty reversal unsaved (G-07) | **COVERED** | fixed: `voidTransactionAtomic` writes the loyalty patch + money deltas inside the status-flip transaction; REF-48 GREEN, G-07 gone (E-0104) |
 | 42 | A forged refund call from the renderer records an audit row for an unknown actor (G-15) | **ACCEPTED (documented pre-gateway residual)** | AGENTS.md "WebView SQL bypass (OPEN residual)"; REF-58 deliberately forges the call to prove dedupe (E-0100) |
 

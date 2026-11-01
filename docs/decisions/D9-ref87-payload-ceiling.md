@@ -1,6 +1,7 @@
 # Decision D9 — REF-87 (2 × 2e9 DA ticket) stays red until the D6 payload ceiling is fixed
 
-- **Status:** open, deliberately not worked around. The money path is proven; the *volume* is the blocker.
+- **Status: SUPERSEDED by D6 option A (2026-11-01).** The ceiling is gone: REF-87 passes unchanged in the
+  full batch (18/18). This record stays as the history of the decision to accept it until aggregation landed.
 - **Measured (E-0100):** the REF-87 sale row is **95 687 874 B** of `json_payload`; the customer outbox row is
   **79 797 580 B**. A refund of that ticket has not landed within the harness window (probe: `rows=0/1` at
   +16 s, and the DB copy taken after the run still had **no refund row**), so the test dies waiting for the
