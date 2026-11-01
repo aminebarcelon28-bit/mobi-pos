@@ -76,3 +76,15 @@ path) or is refused earlier.
 
 Remaining work is therefore precise: make the revalidated submit use the switched method (Avoir) — the request
 builder must read the CURRENT method, not the one captured at the first submit.
+
+## Update 2026-11-01 (batch ref33u) — the modal closes mid-flight, not the cap branch
+
+With the cap matcher fixed and the PIN retained across a same-ticket re-init, the run emits **no** cap
+diagnostic at all: the native cap branch never runs. The modal is torn down at ~+18 s while the refund is in
+flight and no row lands within the 180 s grace (E-0114). The remaining defect is the **RefundModal lifecycle**
+(a sync-driven store update clears `selectedTransactionForRefund`, and the modal falls back to the ticket
+list), not the money layer, the payload size, or a stale method closure.
+
+Next step is evidence, not another blind patch: instrument the modal lifecycle (open / method switch / submit
+start / submit result / `setSelectedTxn(null)` reason) into a ring buffer the harness can read, reproduce the
+cap path once, and fix the exact teardown.
