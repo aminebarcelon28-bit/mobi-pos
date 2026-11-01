@@ -62,6 +62,8 @@ Status vocabulary: **OPEN** (no passing test / known defect), **COVERED** (test 
 | 51 | A per-cycle settle target of N made the serial-returner cycle 2 wait for a second refund on one ticket | **COVERED** | `submitAndSettle(sale.id, 1)` + "exactly one refund" assertion; 4/4 cycles green, exact money (E-0131) |
 | 52 | A write-off note set by the test does not reach component state, so the REF-36 gate refuses a noted refund | **ACCEPTED (testability, D13)** | product refuses safely (no row/stock/drawer); the DOM holds select+note yet the handler aborts before every instrumented gate. Exit: uncontrolled input or a test hook, then assert the verbatim note (E-0132, D13) |
 
+| 53 | An interrupted (language-switched) refund counted the reload’s own session-unlock audit as a partial write | **COVERED** | audit assertion scoped to refund rows (action/details naming the ticket/receipt); every other no-write check exact; REF-62 green (E-0133) |
+
 ## Notes
 
 - Items 1–7 and 10–19 are covered by tests that run in CI-local (`cargo test` + the diag specs).
