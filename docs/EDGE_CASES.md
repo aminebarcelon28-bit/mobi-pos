@@ -64,6 +64,9 @@ Status vocabulary: **OPEN** (no passing test / known defect), **COVERED** (test 
 
 | 53 | An interrupted (language-switched) refund counted the reload’s own session-unlock audit as a partial write | **COVERED** | audit assertion scoped to refund rows (action/details naming the ticket/receipt); every other no-write check exact; REF-62 green (E-0133) |
 
+| 54 | REF-51 regressed: offline cash-cap refund never submits ("refund-submit not clickable") after the REF-19 changes | **OPEN (regression)** | baseline 181e4bb PASS -> current FAIL; bisecting product vs helper (E-0141) |
+| 55 | REF-87 regressed: 2e9 refund chunk never submits after the offline cash-cap switch | **OPEN (regression)** | baseline 181e4bb PASS -> current FAIL; bisecting product vs helper (E-0141) |
+
 ## Notes
 
 - Items 1–7 and 10–19 are covered by tests that run in CI-local (`cargo test` + the diag specs).
