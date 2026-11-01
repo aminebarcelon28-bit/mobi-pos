@@ -632,12 +632,14 @@ export const RefundModal: React.FC = () => {
 
     // Check Manager PIN — Phase 1: native gate (fail-closed).
     if (!managerPin || !pinAuthorisesTicket(managerPinTicket, selectedTxn?.id ?? null)) {
+      refundDiag('gate:pin-missing', { pinLen: managerPin.length, boundTo: managerPinTicket, txn: selectedTxn?.id ?? null });
       setPinRequired(true);
       showToast('Code PIN Manager requis. Autorisation requise pour émettre un remboursement.', 'error');
       return;
     }
     const gate = await verifyManagerGate(managerPin);
     if (!gate.ok) {
+      refundDiag('gate:pin-invalid', { pinLen: managerPin.length, locked: gate.locked });
       setPinRequired(true);
       showToast(
         gate.locked

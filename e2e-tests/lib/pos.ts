@@ -1731,8 +1731,28 @@ export async function selectRefundMethod(label: RefundMethod): Promise<void> {
 export async function typeRefundPin(pin: string): Promise<void> {
   const input = await $(tid('refund-pin'));
   await input.waitForDisplayed({ timeout: 10000 });
-  await typeReal(input, pin, false);
-  await browser.pause(200);
+  // A controlled PIN field can keep digits from a previous attempt (observed:
+  // pinLen 6 for a 4-digit PIN), which then fails the native gate. Clear with
+  // real keys and VERIFY the field exactly equals the PIN; retry if not.
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    await input.click();
+    await browser.keys(['Control', 'a']);
+    await browser.keys(['Backspace']);
+    const cleared = String(await input.getValue().catch(() => ''));
+    if (cleared !== '') {
+      await browser.pause(120);
+      continue;
+    }
+    await browser.keys(pin.split(''));
+    await browser.pause(120);
+    const value = String(await input.getValue().catch(() => ''));
+    if (value === pin) {
+      await browser.pause(120);
+      return;
+    }
+    console.warn(`[refund-pin] attempt ${attempt + 1}: field holds ${value.length} digit(s), expected ${pin.length}`);
+  }
+  throw new Error('refund-pin: could not enter the PIN cleanly (field would not clear)');
 }
 
 /** True when the visible refund-submit is disabled. */
