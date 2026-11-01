@@ -114,3 +114,9 @@ node .opencode/skills/e2e-testing/scripts/run.mjs --spec e2e-tests/diag/d4a-wall
 The invariant oracle intentionally prints `[INVARIANT RESIDUAL-ACCEPTED]` lines for the **deliberate
 forged-refund probes** (D11). They are visible in every run and are the documented pre-gateway residual, not
 hidden findings.
+
+## Evidence log integrity note
+
+Records are append-only and ids are unique (verified: no duplicate `id` across the log). `E-0136` was
+**never emitted** (the stop-point record went out as E-0137), so the sequence has a single gap — a gap, not a
+collision. `E-0139` documents this check.
