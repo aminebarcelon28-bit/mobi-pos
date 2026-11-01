@@ -994,6 +994,14 @@ describe('REF — refunds, returns & avoirs (batch 3)', () => {
     const labelA = await toggleRefundRestock(`${P500}_0`);
     expect(String(labelA)).toContain('Rebut');
     await setRefundReason('Autre motif personnalisé...');
+    // REF-36 owns this contract: a write-off ("rebut", no restock) requires an
+    // OPERATOR-AUTHORED note, so the bare category is refused fail-closed (the
+    // modal promises "Précisez le motif exact..."). Assert the refusal, then
+    // supply the note - the defect row must carry it verbatim.
+    await submitRefund(APP_PIN);
+    await browser.pause(1200);
+    expect(refundsFor(saleA.id).length).toBe(0);
+    await typeRefundCustomReason('Autre');
     await submitRefund(APP_PIN);
     const rowsA = await waitRefundRows(saleA.id, 1);
     const refA = rowsA[0];
