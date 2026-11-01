@@ -825,6 +825,8 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         }
       }
 
+      // REF-15: points-backed credit left after this sale (persisted below).
+      let creditFromPointsRemaining: number | null = null;
       if (loyaltyBase) {
         // Effective loyalty config: merchant settings merged over defaults.
         const loyaltyCfg = normalizeLoyaltyConfig(get().receiptSettings?.loyaltyConfig);
@@ -849,7 +851,21 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         // when merchant customized pointRedemptionRate. Normalized (never 0:
         // a raw zero would divide by zero into Infinity and drain all buckets).
         const redemptionRate = loyaltyCfg.pointRedemptionRate;
-        const pointsToRedeem = Math.floor(actualStoreCreditApplied / redemptionRate);
+        // REF-15: credit minted by a points->Avoir conversion has ALREADY cost
+        // its points. Deducting again here burned them twice (400 -> 372 on a
+        // credit-paid sale). Only the rest of the applied credit redeems
+        // points; the marker shrinks by what was actually spent.
+        const pointsBackedCredit = Math.max(
+          0,
+          Math.round(
+            Number((loyaltyBase as { creditFromPointsDzd?: number }).creditFromPointsDzd ?? 0) || 0,
+          ),
+        );
+        const pointsBackedUsed = Math.min(pointsBackedCredit, actualStoreCreditApplied);
+        const pointsToRedeem = Math.floor(
+          Math.max(0, actualStoreCreditApplied - pointsBackedUsed) / redemptionRate,
+        );
+        creditFromPointsRemaining = Math.max(0, pointsBackedCredit - pointsBackedUsed);
         const { updatedBuckets } = depleteFifoPointBuckets(existingBuckets, pointsToRedeem);
 
         const finalBuckets = [...updatedBuckets];
@@ -933,6 +949,11 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
           loyaltyPoints: newPoints,
           storeCredit: newCredit,
           currentDebt: newDebt,
+          // REF-15: whatever points-backed credit this sale consumed is gone;
+          // the rest stays marked so a later sale does not burn its points.
+          ...(creditFromPointsRemaining !== null
+            ? { creditFromPointsDzd: creditFromPointsRemaining }
+            : {}),
           pointBuckets: finalBuckets,
           ledger: genesisEntry ? [genesisEntry, ...newEntries, ...existingLedger] : [...newEntries, ...existingLedger],
         };

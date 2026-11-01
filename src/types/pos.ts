@@ -385,6 +385,13 @@ export interface Customer {
   id: string;
   name: string;
   phone: string;
+  /**
+   * REF-15: the slice of `storeCredit` minted by converting loyalty points.
+   * Those points were already deducted at conversion, so spending this credit
+   * must NOT deduct them again (the double-burn: 400 -> 372 on a credit sale).
+   * Decremented as the credit is spent.
+   */
+  creditFromPointsDzd?: number;
   secondaryPhone?: string;
   email: string;
   registeredDevice: string;

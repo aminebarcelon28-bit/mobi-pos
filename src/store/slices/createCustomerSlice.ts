@@ -335,6 +335,9 @@ export const createCustomerSlice: StateCreator<PosState, [], [], CustomerSlice> 
       ...customer,
       loyaltyPoints: newPoints,
       storeCredit: newCredit,
+      // REF-15: remember which slice of the wallet was already paid for in
+      // points, so checkout does not deduct those points a second time.
+      creditFromPointsDzd: (customer.creditFromPointsDzd || 0) + creditAmount,
       pointBuckets: updatedBuckets,
       ledger: [ledgerEntry, ...existingLedger],
     };
