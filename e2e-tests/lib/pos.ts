@@ -750,39 +750,41 @@ export async function drainCart(): Promise<void> {
 export async function clearCart(): Promise<void> {
   await browser.keys(['Escape']).catch(() => {});
   await closeDialogs(3);
-  for (let i = 0; i < 60; i++) {
-    const btns = await $$(tid('cart-line-remove'));
-    const visible: typeof btns = [];
-    for (const b of btns) if (await b.isDisplayed().catch(() => false)) visible.push(b);
-    if (visible.length === 0) break;
-    try {
-      await visible[visible.length - 1].click();
-    } catch {
-      break;
-    }
-    await browser.pause(80);
+  // Page-context click: immune to overlay interception (a toast sits over the
+  // line's remove button for ~3 s after an action). Up to 12 rounds; each round
+  // clicks EVERY visible remove button, then re-reads the line count.
+  for (let round = 0; round < 12; round += 1) {
+    const remaining = (await browser.execute(() => {
+      const vis = (d: HTMLElement) => {
+        try {
+          const cs = getComputedStyle(d);
+          if (!cs || cs.display === 'none' || cs.visibility === 'hidden') return false;
+          const r = d.getBoundingClientRect();
+          return r.width > 0 && r.height > 0;
+        } catch {
+          return false;
+        }
+      };
+      const btns = ([...document.querySelectorAll('[data-testid="cart-line-remove"]')] as HTMLElement[]).filter(vis);
+      for (const b of btns) b.click();
+      return btns.length;
+    })) as number;
+    if (remaining === 0) break;
+    await browser.pause(220);
   }
   if ((await cartLineCount()) > 0) {
-    // Second pass after a settle pause — animations can hold stale buttons.
-    await browser.pause(400);
-    for (let i = 0; i < 60; i++) {
-      const btns = await $$(tid('cart-line-remove'));
-      const visible: typeof btns = [];
-      for (const b of btns) if (await b.isDisplayed().catch(() => false)) visible.push(b);
-      if (visible.length === 0) break;
-      try {
-        await visible[visible.length - 1].click();
-      } catch {
-        break;
-      }
-      await browser.pause(80);
-    }
+    // One last settle + pass: the remove button is re-rendered per round.
+    await browser.pause(500);
+    await browser.execute(() => {
+      const btns = [...document.querySelectorAll('[data-testid="cart-line-remove"]')] as HTMLElement[];
+      for (const b of btns) b.click();
+    });
+    await browser.pause(300);
   }
   if ((await cartLineCount()) > 0) {
-    throw new Error('clearCart: cart lines remain after two removal passes');
+    throw new Error('clearCart: cart lines remain after page-context removal passes');
   }
 }
-
 /** Close any visible role=dialog overlays (Escape, bounded). */
 /** Close visible dialogs by pressing Escape, up to `maxRounds` times. NOTE:
  * the visibility check must NOT use offsetParent — it is ALWAYS null for
@@ -1732,11 +1734,48 @@ export async function refundSubmitDisabled(): Promise<boolean> {
 /** Click refund-submit (JS, visible). `times=2` issues two click() calls in
  *  the SAME task — the double-submit replay probe. */
 export async function clickRefundSubmit(times = 1): Promise<boolean> {
+  const state = async (): Promise<'ready' | 'disabled' | 'gone'> => {
+    return (await browser.execute(() => {
+      const vis = (d: HTMLElement) => {
+        try {
+          const cs = getComputedStyle(d);
+          if (!cs || cs.display === 'none' || cs.visibility === 'hidden') return false;
+          const r = d.getBoundingClientRect();
+          return r.width > 0 && r.height > 0;
+        } catch {
+          return false;
+        }
+      };
+      const dlg = ([...document.querySelectorAll('[data-testid="refund-dialog"]')] as HTMLElement[]).find(vis);
+      if (!dlg) return 'gone';
+      const btn = ([...document.querySelectorAll('[data-testid="refund-submit"]')] as HTMLButtonElement[]).find(vis);
+      if (!btn) return 'disabled';
+      return btn.disabled ? 'disabled' : 'ready';
+    })) as 'ready' | 'disabled' | 'gone';
+  };
+
+  const deadline = Date.now() + 20000;
+  let current = await state();
+  while (current === 'disabled' && Date.now() < deadline) {
+    await browser.pause(200);
+    current = await state();
+  }
+  if (current !== 'ready') return false;
+
   const ok = (await browser.execute(
     (n: number) => {
-      const vis = (d: HTMLElement) => { try { const cs = getComputedStyle(d); if (!cs || cs.display === 'none' || cs.visibility === 'hidden') return false; const r = d.getBoundingClientRect(); return r.width > 0 && r.height > 0; } catch { return false; } };
+      const vis = (d: HTMLElement) => {
+        try {
+          const cs = getComputedStyle(d);
+          if (!cs || cs.display === 'none' || cs.visibility === 'hidden') return false;
+          const r = d.getBoundingClientRect();
+          return r.width > 0 && r.height > 0;
+        } catch {
+          return false;
+        }
+      };
       const btn = ([...document.querySelectorAll('[data-testid="refund-submit"]')] as HTMLButtonElement[]).find(vis);
-      if (!btn) return false;
+      if (!btn || btn.disabled) return false;
       for (let i = 0; i < n; i++) btn.click();
       return true;
     },
@@ -1744,7 +1783,6 @@ export async function clickRefundSubmit(times = 1): Promise<boolean> {
   )) as boolean;
   return ok;
 }
-
 /** Visible refund reason <select> (the only select in the dialog). */
 async function refundReasonSelect() {
   return await $('//div[@data-testid="refund-dialog"]//select');
