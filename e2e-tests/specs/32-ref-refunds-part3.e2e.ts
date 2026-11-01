@@ -2658,9 +2658,14 @@ describe('REF — refunds, returns & avoirs (batch 6 / part 3)', () => {
       await refundOnly([{ pid: P500, qty: 1 }]);
       const creditBefore = effCredit(C91);
       const vouchersBefore = voucherTotal();
-      const settled = await submitAndSettle(sale.id, i);
+      // Each cycle refunds exactly ONE sale, so the settle target is 1 - the
+      // old `want: i` made cycle 2 wait for a SECOND refund on a single ticket
+      // and time out after the refund had already landed (success toast, one
+      // row). The exactness is asserted right below instead.
+      const settled = await submitAndSettle(sale.id, 1);
       if (!settled.landed) console.log(`[REF-91] cycle ${i} refusal: ${settled.surface}`);
       expect(settled.landed).toBe(true);
+      expect(refundsFor(sale.id).length).toBe(1);
       const ref = refundRowOf(sale.id);
       const cash = cashOf(ref);
       const creditDelta = effCredit(C91) - creditBefore;

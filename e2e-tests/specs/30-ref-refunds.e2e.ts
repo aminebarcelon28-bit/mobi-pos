@@ -1001,23 +1001,25 @@ describe('REF — refunds, returns & avoirs (batch 3)', () => {
     await submitRefund(APP_PIN);
     await browser.pause(1200);
     expect(refundsFor(saleA.id).length).toBe(0);
-    // The controlled input is re-rendered after the refusal; drive it through
-    // the native setter + input/change events so React state really carries the
-    // note (addValue on the replaced node landed nothing: the gate refused).
-    await browser.execute(() => {
-      const dlg = document.querySelector('[data-testid="refund-dialog"]') as HTMLElement | null;
-      const el = ([...(dlg?.querySelectorAll('input') ?? [])] as HTMLInputElement[]).find((i) =>
-        /Précisez/.test(i.getAttribute('placeholder') || ''),
+    // The controlled input is re-rendered after the refusal: REAL keystrokes
+    // (focus, select-all, backspace, type) fire React's onChange reliably -
+    // addValue/native-setter left the component state empty, so the REF-36
+    // note gate kept refusing a write-off that did carry a note.
+    {
+      const noteInput = await $(
+        '//div[@data-testid="refund-dialog"]//input[contains(@placeholder, "Précisez") or contains(@placeholder, "motif")]',
       );
-      if (!el) return;
-      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
-      setter?.call(el, 'Autre');
-      el.dispatchEvent(new Event('input', { bubbles: true }));
-      el.dispatchEvent(new Event('change', { bubbles: true }));
-      // prevent the linter from flagging the marker as dead code
-      (window as unknown as { __ref19Note?: string }).__ref19Note = el.value;
-    });
-    await browser.pause(200);
+      await noteInput.waitForDisplayed({ timeout: 10000, timeoutMsg: 'write-off note input never appeared' });
+      await noteInput.click();
+      await browser.keys(['Control', 'a']);
+      await browser.keys(['Backspace']);
+      await browser.keys('Autre'.split(''));
+      await browser.pause(200);
+      const typed = (await noteInput.getValue()) as string;
+      console.log(`[REF-19] note input value=${JSON.stringify(typed)}`);
+      expect(typed).toBe('Autre');
+    }
+
     await submitRefund(APP_PIN);
     {
       // Evidence for the write-off path: what did the app say to THIS submit?
