@@ -47,7 +47,7 @@ import fs from 'node:fs';
 import { browser, expect } from '@wdio/globals';
 import { DB_PATH } from '../lib/env';
 import { all, count, one, waitForSchemaSettled } from '../lib/db';
-import {
+import { clickUnobstructed,
   addSku,
   APP_PIN,
   applyCartDiscountPercent,
@@ -413,7 +413,7 @@ async function makeCardSale(title: string, qty = 1): Promise<SaleInfo> {
   await clearCart();
   for (let i = 0; i < qty; i++) await addSku(title);
   const before = txCount();
-  await (await $(tid('checkout-button'))).click();
+  await clickUnobstructed('checkout-button');
   await (await $(tid('pay-dialog'))).waitForDisplayed({ timeout: 20000 });
   const clicked = (await browser.execute(() => {
     const vis = (d: HTMLElement) => {
@@ -475,7 +475,7 @@ async function makeMixedSale(title: string, cashDa: number, qty = 1, customerNam
   await selectCustomer(customerName);
   for (let i = 0; i < qty; i++) await addSku(title);
   const before = txCount();
-  await (await $(tid('checkout-button'))).click();
+  await clickUnobstructed('checkout-button');
   await (await $(tid('pay-dialog'))).waitForDisplayed({ timeout: 20000 });
   await typeReal(await $(tid('tendered-input')), String(cashDa), false);
   await browser.pause(300);

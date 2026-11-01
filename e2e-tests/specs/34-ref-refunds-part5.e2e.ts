@@ -27,7 +27,7 @@ import fs from 'node:fs';
 import { browser, expect } from '@wdio/globals';
 import { DB_PATH } from '../lib/env';
 import { all, count, one, run, scalar, waitForSchemaSettled } from '../lib/db';
-import {
+import { clickUnobstructed,
   addSku,
   APP_PIN,
   applyCartDiscountPercent,
@@ -407,7 +407,7 @@ async function makeCreditSale(title: string, qty: number, customerName: string):
   await selectCustomer(customerName);
   for (let i = 0; i < qty; i++) await addSku(title);
   const before = txCount();
-  await (await $(tid('checkout-button'))).click();
+  await clickUnobstructed('checkout-button');
   await (await $(tid('pay-dialog'))).waitForDisplayed({ timeout: 20000 });
   const clicked = (await browser.execute(() => {
     const vis = (d: HTMLElement) => {
@@ -1356,7 +1356,7 @@ describe('REF — refunds, returns & avoirs (batch 8 / part 5)', () => {
   // ------------------------------ CRM (REF-15) ------------------------------
 
   async function openCustomersDialog(): Promise<boolean> {
-    await (await $(tid('clients-button'))).click();
+    await clickUnobstructed('clients-button');
     const ok = await pollUntil(async () => (await $(tid('customers-dialog')).isDisplayed().catch(() => false)) === true, 20000, 'customers dialog did not open');
     await browser.pause(500);
     return ok;
@@ -1680,7 +1680,7 @@ describe('REF — refunds, returns & avoirs (batch 8 / part 5)', () => {
   // --------------------------- Zero-total (REF-54) --------------------------
 
   async function commitZeroSale(): Promise<void> {
-    await (await $(tid('checkout-button'))).click();
+    await clickUnobstructed('checkout-button');
     await (await $(tid('pay-dialog'))).waitForDisplayed({ timeout: 20000 });
     const exact = await $(tid('pay-exact'));
     if ((await exact.isExisting().catch(() => false)) && (await exact.isDisplayed().catch(() => false))) {
@@ -2037,7 +2037,7 @@ describe('REF — refunds, returns & avoirs (batch 8 / part 5)', () => {
 
   /** Pay the open cart through the real CIB / Carte lane (card-funded sale). */
   async function payByCib(): Promise<void> {
-    await (await $(tid('checkout-button'))).click();
+    await clickUnobstructed('checkout-button');
     await (await $(tid('pay-dialog'))).waitForDisplayed({ timeout: 20000 });
     const picked = (await browser.execute(() => {
       const vis = (d: HTMLElement) => { try { const cs = getComputedStyle(d); if (!cs || cs.display === 'none' || cs.visibility === 'hidden') return false; const r = d.getBoundingClientRect(); return r.width > 0 && r.height > 0; } catch { return false; } };
@@ -2602,7 +2602,7 @@ describe('REF — refunds, returns & avoirs (batch 8 / part 5)', () => {
   // ---------------------------------------------------------------------------
 
   async function payByCheque(): Promise<void> {
-    await (await $(tid('checkout-button'))).click();
+    await clickUnobstructed('checkout-button');
     await (await $(tid('pay-dialog'))).waitForDisplayed({ timeout: 20000 });
     const picked = (await browser.execute(() => {
       const vis = (d: HTMLElement) => {

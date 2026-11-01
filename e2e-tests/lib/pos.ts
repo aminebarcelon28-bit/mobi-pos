@@ -829,6 +829,36 @@ export async function listDialogs(): Promise<string[]> {
 }
 
 /** Pay exact (cash) flow: checkout -> pay-exact -> confirm. */
+/**
+ * Click a shell button only when it is actually on top.
+ *
+ * Symptom this exists for (batch 1/2/3, REF-19/27/30/44/47/57/66/67/80/89/91):
+ * `element click intercepted` on `checkout-button` / `clients-button` - a toast,
+ * a lingering dialog or a receipt overlay sat over the click point. Polling
+ * `elementFromPoint` proves the button owns its centre; Escape dismisses a
+ * stray dialog (the app's global close). The click itself is unchanged, so no
+ * assertion is weakened.
+ */
+export async function clickUnobstructed(testid: string, timeout = 20000): Promise<void> {
+  const el = await $(tid(testid));
+  await el.waitForDisplayed({ timeout });
+  const started = Date.now();
+  while (Date.now() - started < timeout) {
+    const free = (await browser.execute((id: string) => {
+      const b = document.querySelector(`[data-testid="${id}"]`) as HTMLElement | null;
+      if (!b) return false;
+      const r = b.getBoundingClientRect();
+      if (r.width === 0 || r.height === 0) return false;
+      const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2) as HTMLElement | null;
+      return !!top && (top === b || b.contains(top));
+    }, testid)) as boolean;
+    if (free) break;
+    await browser.keys(['Escape']).catch(() => undefined);
+    await browser.pause(250);
+  }
+  await el.click();
+}
+
 export async function payExactFlow(): Promise<void> {
   await (await $(tid('checkout-button'))).click();
   await (await $(tid('pay-dialog'))).waitForDisplayed({ timeout: 20000 });

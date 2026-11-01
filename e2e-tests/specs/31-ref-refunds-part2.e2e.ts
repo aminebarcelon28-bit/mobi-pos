@@ -41,7 +41,7 @@ import fs from 'node:fs';
 import { browser, expect } from '@wdio/globals';
 import { DB_PATH } from '../lib/env';
 import { all, count, one, run, scalar, waitForSchemaSettled } from '../lib/db';
-import {
+import { clickUnobstructed,
   addSku,
   APP_PIN,
   applyCartDiscountPercent,
@@ -387,7 +387,7 @@ async function makeCreditSale(title: string, qty: number, customerName: string):
   await selectCustomer(customerName);
   for (let i = 0; i < qty; i++) await addSku(title);
   const before = txCount();
-  await (await $(tid('checkout-button'))).click();
+  await clickUnobstructed('checkout-button');
   await (await $(tid('pay-dialog'))).waitForDisplayed({ timeout: 20000 });
   const clicked = (await browser.execute(() => {
     const vis = (d: HTMLElement) => {
@@ -1502,7 +1502,7 @@ describe('REF — refunds, returns & avoirs (batch 4 / part 2)', () => {
     console.log(`[REF-28] cart total after override+coupon: ${cartTotal}`);
     // Attach loyalty customer (400 DA store credit) and redeem all of it.
     await selectCustomer(CUST_NAME);
-    await (await $(tid('checkout-button'))).click();
+    await clickUnobstructed('checkout-button');
     await (await $(tid('pay-dialog'))).waitForDisplayed({ timeout: 20000 });
     const applied = (await browser.execute(() => {
       const vis = (d: HTMLElement) => {

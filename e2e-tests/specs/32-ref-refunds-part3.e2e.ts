@@ -42,7 +42,7 @@ import fs from 'node:fs';
 import { browser, expect } from '@wdio/globals';
 import { DB_PATH } from '../lib/env';
 import { all, count, one, run, scalar, waitForSchemaSettled } from '../lib/db';
-import {
+import { clickUnobstructed,
   addSku,
   APP_PIN,
   applyCartDiscountPercent,
@@ -421,7 +421,7 @@ async function makeCreditSale(title: string, qty: number, customerName: string):
   await selectCustomer(customerName);
   for (let i = 0; i < qty; i++) await addSku(title);
   const before = txCount();
-  await (await $(tid('checkout-button'))).click();
+  await clickUnobstructed('checkout-button');
   await (await $(tid('pay-dialog'))).waitForDisplayed({ timeout: 20000 });
   const clicked = (await browser.execute(() => {
     const vis = (d: HTMLElement) => {
@@ -1354,7 +1354,7 @@ describe('REF — refunds, returns & avoirs (batch 6 / part 3)', () => {
   // ------------------------------ CRM (REF-15) ------------------------------
 
   async function openCustomersDialog(): Promise<boolean> {
-    await (await $(tid('clients-button'))).click();
+    await clickUnobstructed('clients-button');
     const ok = await pollUntil(async () => (await $(tid('customers-dialog')).isDisplayed().catch(() => false)) === true, 20000, 'customers dialog did not open');
     await browser.pause(500);
     return ok;
@@ -1683,7 +1683,7 @@ describe('REF — refunds, returns & avoirs (batch 6 / part 3)', () => {
   // --------------------------- Zero-total (REF-54) --------------------------
 
   async function commitZeroSale(): Promise<void> {
-    await (await $(tid('checkout-button'))).click();
+    await clickUnobstructed('checkout-button');
     await (await $(tid('pay-dialog'))).waitForDisplayed({ timeout: 20000 });
     const exact = await $(tid('pay-exact'));
     if ((await exact.isExisting().catch(() => false)) && (await exact.isDisplayed().catch(() => false))) {
@@ -2772,7 +2772,7 @@ describe('REF — refunds, returns & avoirs (batch 6 / part 3)', () => {
     // :200-208) — the cap is disclosed on the button itself
     // («Appliquer Tout (400 DA)»), so the oracle pins it instead of a full
     // 1000 DA credit tender.
-    await (await $(tid('checkout-button'))).click();
+    await clickUnobstructed('checkout-button');
     const pay = await payWithStoreCreditAll();
     console.log(`[REF-15] pay: applied=${pay.applied} confirm="${pay.confirmLabel}"`);
     expect(pay.applied).toBe(true);
