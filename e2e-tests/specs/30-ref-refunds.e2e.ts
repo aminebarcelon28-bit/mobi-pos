@@ -780,6 +780,12 @@ describe('REF — refunds, returns & avoirs (batch 3)', () => {
   });
 
   it('[REF-06] card-funded sale refunds never disburse cash (anti-arbitrage C1/C3): cashDisbursed 0, drawer untouched', async () => {
+    // The card rail has no destination of record, so the ONLY lane that can
+    // deliver the value is the Avoir - and an Avoir needs an owner (owner rule
+    // P0: a refund that credits nobody must be refused, not invented). The
+    // scenario therefore carries a customer; every assertion below is unchanged.
+    await clearCart();
+    await selectCustomer(CUST_NAME);
     const sale = await makeCardSale('REF P500', 1);
     const tenders = jsonOf(txRow(sale.id)).tenders as Array<{ method?: string; amount?: number }> | undefined;
     // The stored tender method is the canonical type id; the tab's visible
