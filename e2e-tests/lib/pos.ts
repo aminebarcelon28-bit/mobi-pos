@@ -929,7 +929,20 @@ export async function ensureShiftOpen(openingDa = 10000): Promise<DexieShift> {
  * (`Actif — Désélectionner <name>`), the dialog is closed WITHOUT clicking —
  * clicking would detach the sale's customer. */
 export async function selectCustomer(name: string): Promise<void> {
-  await (await $(tid('clients-button'))).click();
+  // REF-27/30/44/47 (batch): a toast / lingering overlay intercepts the shell
+  // button's WebDriver click. Click in PAGE context first (not hit-tested) and
+  // fall back to the normal click only if that did not open the dialog.
+  const opened = (await browser.execute(() => {
+    const btn = ([...document.querySelectorAll('[data-testid="clients-button"]')] as HTMLButtonElement[]).find(
+      (b) => !b.disabled,
+    );
+    if (!btn) return false;
+    btn.click();
+    return true;
+  })) as boolean;
+  if (!opened) {
+    await (await $(tid('clients-button'))).click();
+  }
   await (await $(tid('customers-dialog'))).waitForDisplayed({ timeout: 20000 });
   const tryTarget = async (): Promise<'clicked' | 'already' | null> => {
     const btns = await $$(
