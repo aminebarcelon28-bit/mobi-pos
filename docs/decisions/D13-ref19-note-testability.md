@@ -1,6 +1,6 @@
 # Decision D13 — REF-19's write-off note is not scriptable (accepted testability residual)
 
-- **Status:** accepted 2026-11-01. Not a money defect; the money path refuses unknown states, which is correct.
+- **Status: RESOLVED 2026-11-01.** The exit criterion landed: an explicit `defectNote` channel separates the authored note from the reason category, and the select/note are now scriptable (uncontrolled select, field-value fallback). REF-19 is green and the wider refund batch is 59/59 cases (E-0140).
 - **Case:** `docs/EDGE_CASES.md` #52.
 
 ## The finding
