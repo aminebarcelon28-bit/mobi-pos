@@ -1,23 +1,9 @@
 case_id,cluster_id,cluster_key,class,evidence,money,priority,catalog
 CRT-05,C01,REF-ALLOCATION,app,SQLite,money movement,P0,A (A1)
-REF-40,C02,REF-DELIVERY,app,SQLite,money movement,P0,NEW
-REF-42,C02,REF-DELIVERY,app,SQLite,money movement,P0,NEW
-REF-65,C02,REF-DELIVERY,app,SQLite,money movement,P0,NEW
-REF-66,C02,REF-DELIVERY,app,SQLite,money movement,P0,NEW
 LOY-04,C12,LOY-CLAWBACK,app,SQLite,money movement,P0,A
 LOY-05,C12,LOY-CLAWBACK,app,SQLite,money movement,P0,A
 LOY-08,C12,LOY-CLAWBACK,app,SQLite,money movement,P0,A
-REF-83,C12,LOY-CLAWBACK,app,SQLite,money movement,P0,A
-REF-36,C07,REF-WORKFLOW,app,SQLite,money movement,P0,G (G1/G2)
-REF-57,C07,REF-WORKFLOW,app,SQLite,money movement,P0,G (G1/G2)
-REF-67,C07,REF-WORKFLOW,app,SQLite,money movement,P0,G (G1/G2)
-REF-13,C03,VOID-INCOMPLETE,app,SQLite,money movement,P0,NEW
-REF-48,C03,VOID-INCOMPLETE,app,SQLite,money movement,P0,NEW
 PAY-11,C04,STAGED-CREDIT-LEAK,app,SQLite,money movement,P0,NEW
-REF-15,C05,REF-RESTORE-VOLATILE,app,SQLite,money movement,P0,D (D2)
-REF-91,C05,REF-RESTORE-VOLATILE,app,SQLite,money movement,P0,D (D2)
-REF-78,C06,REF-NO-RECONCILE,app,SQLite,money movement,P0,G (G3)
-REF-87,C08,REF-SELECTABILITY,app,SQLite,money movement,P0,E
 LOY-07,C14,LOY-BUCKET,app,SQLite,money movement,P1,NEW
 LOY-14,C15,LOY-ZERO-COVER,app,SQLite,money movement,P1,G
 REP-01,C64,REP-WORKFLOW-GAPS,app,SQLite,money movement,P0,NEW
@@ -39,7 +25,6 @@ DAT-20,C27,DB-DURABILITY,app,SQLite,money movement,P0,NEW
 SCL-48,C46,BURST-DROP,app,SQLite,money movement,P0,NEW
 SHF-10,C74,SHIFT-HANDOVER,app,SQLite,money movement,P0,NEW
 DRW-11,C77,SHIFT-EXPECTED-MATH,app,SQLite,money movement,P0,A
-SEC-01,C56,AUTHZ-UI-ONLY,app,SQLite,stored value,P0,G (G3)
 IDN-11,C56,AUTHZ-UI-ONLY,app,SQLite,stored value,P0,G (G3)
 IDN-14,C56,AUTHZ-UI-ONLY,app,SQLite,stored value,P0,G (G3)
 DRW-14,C56,AUTHZ-UI-ONLY,app,SQLite,stored value,P0,G (G3)
@@ -226,5 +211,4 @@ I18-01,C59,I18-UI-HITTEST,app,DOM,none,P1,F
 MOB-11,C69,MOB-LAYOUT,app,DOM,none,P1,F
 SCL-76,C87,TRANSIENT-RETENTION,app,SQLite,none,P1,NEW
 DAT-34,C88,SEALED-KEY-COVERAGE,app,RUNTIME,none,P0,NEW
-REF-28,C90,TENDER-CREDIT-OVERSTAMP,app,RUNTIME,money movement,P0,blocked-by C01: refund math unproven until the tender is fixed; see docs/c01-tender-rfc.md
 REF-86,C89,OFFLINE-CASH-CAP,env,RUNTIME,none,P1,order-dependent offline cash-refund ceiling; own batch

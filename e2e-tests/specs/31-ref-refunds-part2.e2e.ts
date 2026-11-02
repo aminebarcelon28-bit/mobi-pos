@@ -790,6 +790,33 @@ async function openReports(): Promise<void> {
 /** Reports view is behind a manager-PIN gate (ReportsModal.tsx:793-827):
  * fill the "Code PIN Administrateur" field and submit "Déverrouiller". */
 async function unlockReportsGate(): Promise<void> {
+  // The gate mounts asynchronously after the Reports modal opens. Probing
+  // before it exists used to read as "already unlocked" and silently skip the
+  // PIN, leaving the view gated (REF-13, 2026-11-02). Wait for a state: either
+  // the gate input or the reports surface (search box) must exist.
+  await browser.waitUntil(
+    async () =>
+      (await browser.execute(() => {
+        const vis = (d: HTMLElement) => {
+          try {
+            const cs = getComputedStyle(d);
+            if (!cs || cs.display === 'none' || cs.visibility === 'hidden') return false;
+            const r = d.getBoundingClientRect();
+            return r.width > 0 && r.height > 0;
+          } catch {
+            return false;
+          }
+        };
+        const gate = [...document.querySelectorAll('input[type="password"]')].some(
+          (i) => vis(i) && /Administrateur|Manager/i.test((i as HTMLInputElement).placeholder || ''),
+        );
+        const surface = [...document.querySelectorAll('input')].some(
+          (i) => vis(i) && /recherch/i.test((i as HTMLInputElement).placeholder || ''),
+        );
+        return gate || surface;
+      })) as boolean,
+    { timeout: 15000, interval: 250, timeoutMsg: 'reports view never mounted (gate or surface)' },
+  );
   const state = (await browser.execute((pin: string) => {
     const vis = (d: HTMLElement) => {
       try {
@@ -815,6 +842,7 @@ async function unlockReportsGate(): Promise<void> {
     btn.click();
     return 'submitted';
   }, APP_PIN)) as string;
+  console.log(`[void] gate probe state=${state}`);
   if (state !== 'submitted') return; // view was already unlocked (or gate absent)
   await browser.waitUntil(
     async () =>

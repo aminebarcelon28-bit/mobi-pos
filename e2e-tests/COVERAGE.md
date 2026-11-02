@@ -10,11 +10,11 @@ Source cases: `POS_EDGE_CASE_ENCYCLOPEDIA_and_LONG_SESSION.md` (local, not in re
 | Metric | Count |
 |---|---|
 | Catalog cases (table rows) | 687 |
-| Passed (full) | 206 |
+| Passed (full) | 222 |
 | Passed (partial — unasserted facets listed) | 20 |
-| Passed (full, excluding flaky rows) | 205 |
+| Passed (full, excluding flaky rows) | 221 |
 | FLAKY (pass, order-dependent - excluded from the headline) | 1 |
-| **FAILED** | 228 |
+| **FAILED** | 212 |
 | N/A (absent or unobservable in harness) | 116 |
 | Remaining (doable today, not yet executed) | 0 |
 | BLOCKED (missing dependency — see Evidence) | 117 |
