@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "map": {
+    "src-tauri/src/trust_core/**": ["all"],
+    "src-tauri/src/**": ["all"],
+    "src/db/**": ["all"],
+    "src/store/**": ["30", "31", "32", "33", "34", "40"],
+    "src/components/modals/RefundModal.tsx": ["30", "31", "32", "33", "34"],
+    "e2e-tests/lib/**": ["all"],
+    "e2e-tests/specs/24-syn*": ["24"],
+    "e2e-tests/specs/26-rcp*": ["26"],
+    "e2e-tests/specs/40-shf*": ["40"],
+    "e2e-tests/specs/50-sec*": ["50"],
+    "scripts/**": ["gates"],
+    "docs/**": []
+  }
+}
