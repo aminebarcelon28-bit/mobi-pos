@@ -391,6 +391,9 @@ fn create_database_backup(
         "create_database_backup",
         Capability::ReadOperationalData,
         |_| {
+            // R1/SEC-01: a full database backup is a manager action. Session
+            // principal is native state, never an argument.
+            crate::trust_core::session_principal::authorize("create_database_backup", "")?;
             let app_dir = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
             let db_path = crate::e2e::live_db_path(&app_dir);
             if !db_path.exists() {
@@ -828,6 +831,12 @@ fn decrypt_snapshot_for_recovery(
         "decrypt_snapshot_for_recovery",
         Capability::EmergencyExport,
         |_| {
+            // R1/SEC-01: the fresh manager PIN above created the principal;
+            // require it explicitly so the coupling is enforced, not implied.
+            crate::trust_core::session_principal::authorize(
+                "decrypt_snapshot_for_recovery",
+                "",
+            )?;
             let backups = backups_dir(&app_handle)?;
             let src = backups.join(&id);
             // Canonical containment: the join must resolve inside backups.
@@ -2433,6 +2442,7 @@ pub fn run() {
             trust_core::pin::pin_verify,
             trust_core::pin::pin_lockout_remaining,
             trust_core::pin::pin_set,
+    trust_core::session_principal::session_lock,
             snapshot_prune::prune_snapshots,
             intents::launch_dialer,
             intents::launch_call,
@@ -2512,6 +2522,7 @@ pub fn run() {
             trust_core::pin::pin_verify,
             trust_core::pin::pin_lockout_remaining,
             trust_core::pin::pin_set,
+    trust_core::session_principal::session_lock,
             snapshot_prune::prune_snapshots,
             intents::launch_dialer,
             intents::launch_call,

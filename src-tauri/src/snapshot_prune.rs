@@ -408,6 +408,9 @@ pub fn prune_snapshots(
         });
     }
     authorize_and_execute("prune_snapshots", Capability::OperationalWrites, |_| {
+        // R1/SEC-01: the fresh manager PIN above created the principal;
+        // require it explicitly so the coupling is enforced, not implied.
+        crate::trust_core::session_principal::authorize("prune_snapshots", "")?;
         let backups_dir = crate::backups_dir(&app)?;
         let live_db = {
             use tauri::Manager;

@@ -599,6 +599,16 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
 
   lockScreen: () => {
     set({ isScreenLocked: true, sessionLockRequested: true });
+    // R1/SEC-01: drop the native session principal the moment the UI locks, so
+    // privileges never outlive the visible session. The native 10-minute TTL is
+    // only a backstop; this is the primary path. Fire-and-forget: a failed drop
+    // must not block the lock (the principal still ages out), and a renderer
+    // can never raise privileges this way — the command only clears.
+    if (isTauriEnv()) {
+      void import('../../platform/invoke')
+        .then(({ invokeCommand }) => invokeCommand('session_lock'))
+        .catch((err) => console.warn('[session] native principal lock failed', err));
+    }
   },
 
   unlockScreen: (enteredPin: string) => {

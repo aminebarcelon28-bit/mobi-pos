@@ -1171,6 +1171,19 @@ pub fn pin_set(
             // installs) so the SET path and the UI's own-row assumption agree.
             let effective_uid = normalize_set_uid(&probe, &request.user_id);
             let is_manager = resolve_is_manager(&probe, &effective_uid);
+            // R1/SEC-01: a peer credential is a manager action; your own PIN is
+            // self-service. The principal is native state, never an argument.
+            // First-run setup (no manager credential yet) is the documented
+            // bootstrap: credential tables are native-write-only, and re-keying
+            // an existing manager still needs the supervisor PIN below.
+            let no_manager_credential_yet = read_manager_credential(&probe)
+                .map(|(stored, _)| stored.trim().is_empty())
+                .unwrap_or(true);
+            super::session_principal::authorize_pin_set(
+                "pin_set",
+                &effective_uid,
+                no_manager_credential_yet,
+            )?;
             let clean = validate_pin(&request.new_pin, is_manager)?;
             let secret = SecretPin::new(clean);
             // Device pepper: provisioned on first use ONLY when no v2 exists
@@ -1322,6 +1335,17 @@ pub fn pin_verify(
                 PinFormat::LegacyV1 => {
                     if verify_legacy_sha256(clean, &stored) {
                         record_success_for(&*store, &request.user_id)?;
+                        // R1/SEC-01: native login is the ONLY creator of the
+                        // session principal. The role comes from the roster row
+                        // just read, never from an argument.
+                        super::session_principal::set(
+                            &request.user_id,
+                            if is_manager {
+                                super::session_principal::Role::Manager
+                            } else {
+                                super::session_principal::Role::Cashier
+                            },
+                        );
                         let is_device_local = stored
                             .split('$')
                             .nth(1)
@@ -1379,6 +1403,18 @@ pub fn pin_verify(
                     };
                     if verify_argon2id(&secret, &stored, &pepper) {
                         record_success_for(&*store, &request.user_id)?;
+
+                        // R1/SEC-01: native login is the ONLY creator of the
+                        // session principal. The role comes from the roster row
+                        // just read, never from an argument.
+                        super::session_principal::set(
+                            &request.user_id,
+                            if is_manager {
+                                super::session_principal::Role::Manager
+                            } else {
+                                super::session_principal::Role::Cashier
+                            },
+                        );
                         Ok(PinVerifyResult {
                             ok: true,
                             locked: false,

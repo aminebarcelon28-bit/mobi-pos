@@ -464,6 +464,7 @@ static COMMAND_REGISTRY: &[(&str, Capability)] = &[
 /// plus two read-only boot probes that expose no business data.
 static PUBLIC_COMMANDS: &[&str] = &[
     "get_gate_state",
+    "session_lock",
     "sqlite_check_db_version",
     "sqlite_db_maintenance",
 ];
@@ -1165,6 +1166,7 @@ pub static ALL_COMMAND_FNS_IN_TESTS: &[&str] = &[
     "prune_snapshots",
     "decrypt_snapshot_for_recovery",
     "pin_set",
+    "session_lock",
     "import_inspect_file",
     "import_stage_file",
     "import_commit_batch",

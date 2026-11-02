@@ -249,15 +249,25 @@ export const LockScreenOverlay: React.FC = () => {
     let mustRotate = false;
     let nativeLockedRemainingMs = 0;
 
-    if (isTauri && selectedUser) {
+    if (isTauri) {
       // Native-first: the hash never enters JS for the verdict.
       const { pinVerify } = await import('../api/pin');
       const st = usePosStore.getState();
       const adminUser =
         st.cashierUsers.find((u) => u.role === 'admin') || st.cashierUsers[0] || selectedUser;
+      if (!adminUser) {
+        soundEngine.playError();
+        setErrorMsg('Aucun profil disponible');
+        setPinInput('');
+        return;
+      }
       // Selected profile first, manager override second (see ordering note).
+      // No profile selected (the bare PIN pad, the common boot path) is the
+      // manager credential's lane: same rule as the local branch below.
       const attempts: Array<{ userId: string; user: CashierUser }> = [];
-      if (isManagerCredentialProfile(selectedUser, st.cashierUsers)) {
+      if (!selectedUser) {
+        attempts.push({ userId: 'manager', user: adminUser });
+      } else if (isManagerCredentialProfile(selectedUser, st.cashierUsers)) {
         // Admin profile: try manager credential (where manager PIN lives), then profile ID if distinct
         attempts.push({ userId: 'manager', user: adminUser });
         if (selectedUser.id !== 'manager') {

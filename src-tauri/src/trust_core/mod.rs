@@ -56,6 +56,7 @@ pub mod ipc_authorizer;
 pub mod license_state;
 pub mod license_token;
 pub mod pin;
+pub mod session_principal;
 pub mod reanchor;
 pub mod secure_storage;
 pub mod session;
