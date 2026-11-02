@@ -14,9 +14,14 @@
   an ancestor of `c01-rc-5`, not with `8c1fcf4`; the money gate is red at the existing candidate
   too. Design-token debt is identical at rc-5 and HEAD (39 inherited violations) and the gate is
   not wired into CI or `npm test`.
-- **Next action:** owner decision HAR-001 (recommended: reconcile the registry 54 → 58 with the
-  `177e6b1` justification, then a separate Stage E money-unit task) and HAR-005 (design-token
-  criterion). On approval: re-run the gate, then tag `c01-rc-6`.
+- **Reproducibility (E-0154):** 50-sec is **FLAKY**, not green: 4/10 twice and 0/1 alone, while
+  `repeat-run` says PASS→FAIL→FAIL for SEC-01/02/03/04/06/09. Measured cause: native `pin_verify`
+  takes 3.09–3.21 s here vs a 2.5 s overlay budget in `unlockViaProfile`; the unlock itself
+  succeeds (audit row). 40-shf 11/12 (SHF-13, reconciliation step). Product source is identical
+  to the green runs; the refund specs do not use that helper.
+- **Next action:** owner decisions HAR-001 (money registry), HAR-006 (authorize the unlock-wait
+  harness fix + 3× re-run), HAR-005 (design-token criterion). Only after both HAR-001 and the
+  re-runs can the candidate be assessed for a tag.
 - **Then:** R2 (SYN-02/04/26/27), R3 (6 PASS-SIM cases against the loopback gateway, 10 blocked
   on HAR-003), R4 (10 SW cases via a byte-capture sink; HW kit per `agent/triage/26-rcp.md`),
   R5 (G-21/REF-86).

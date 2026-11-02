@@ -29,7 +29,8 @@
   - **(C) waive the gate** for `c01-rc-6` (and state the disposition of `c01-rc-5`, which shares
     the same failure).
 - **Time:** B ≈ 1 min + CI run; A ≈ 1–2 days with tests; C = decision only.
-- **Unblocks on approval:** tag `c01-rc-6` (B) or a scoped money refactor (A).
+- **Unblocks on approval:** the money gate and its CI jobs. It does **not** by itself make
+  `c01-rc-6` ready — the 50-sec reproducibility blocker (HAR-006) must also be cleared.
 
 ## HAR-005 — is the design-token ratchet a release criterion? (owner decision)
 
@@ -48,6 +49,32 @@
 - **If remediation is later authorized:** per-file mapping only, reviewed against the semantic
   token families (`surface-*`, `line-*`, `fg`, `muted`, `status-ok/warn/danger`) and re-run
   `check-contrast`; no blind substitutions.
+
+## HAR-006 — authorize the E2E unlock-wait fix and a 3× re-run (verification blocker)
+
+- **What:** `50-sec` is not reproducible: 4/10 twice and 0/1 when SEC-01 runs alone, on product
+  code identical to the reported 10/10 run. `repeat-run.mjs --from-sidecars` classifies it
+  **FLAKY** (SEC-01/02/03/04/06/09: PASS → FAIL → FAIL). `40-shf` is 11/12 (SHF-13 fails at
+  `resetDrawerForTest` → "RECONCILIATION step never appeared").
+- **Measured root cause:** native `pin_verify` on this host takes **3089–3210 ms** (5 samples;
+  OS keyring + Argon2id). `unlockViaProfile` gives the overlay only **2500 ms**
+  (`50-sec-authorization.e2e.ts:3191`), then looks for `login-submit` — which a cashier pad never
+  renders — and throws. The unlock itself succeeds: audit row
+  `AUD-1793635115685-611ff7a4` ("Session ouverte par SEC A (cashier)") and
+  `cashier_users` shows `usr-sec1 role=cashier` with a v2 PIN.
+- **Prepared change (not applied — needs authorization):** in the `unlockViaProfile` twin helpers
+  (50-sec, 40-shf, 51-sec):
+  1. when `login-submit` is absent, do **not** throw — the pad auto-submitted; fall through to the
+     existing 20 s overlay wait;
+  2. widen the first `cleared()` probe from 2500 ms to 15000 ms.
+  No assertion, seed, or product code changes; no retries added (the repo's own rule: wait on
+  state, not time).
+- **Then:** 3 consecutive clean runs of 50-sec + 40-shf (repeat-run must say STABLE), and only
+  then can the security/shift suites be counted for disposition.
+- **Decision needed:** authorize this test-harness change and the re-runs (yes/no). It is outside
+  the two static-gate blockers this directive scopes, which is why it is not applied.
+- **Note:** the 3.1 s unlock latency is also a product-performance observation for low-end
+  hardware; it does not weaken any security guarantee (the verdict and principal are correct).
 
 ## HAR-002 — physical ESC/POS printer session (R4)
 
