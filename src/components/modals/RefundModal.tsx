@@ -431,8 +431,6 @@ export const RefundModal: React.FC = () => {
     [selectedTxn, transactions]
   );
 
-  if (activeModal !== 'refund') return null;
-
   // Eligible transactions (exclude already voided or fully refunded)
 
   const filteredTransactions =
@@ -572,6 +570,9 @@ export const RefundModal: React.FC = () => {
     window.addEventListener('error', onError);
     return () => window.removeEventListener('error', onError);
   }, []);
+
+  // All hooks have run: a closed modal can now render nothing.
+  if (activeModal !== 'refund') return null;
 
   const handleSubmitRefund = async (e: React.FormEvent) => {
     e.preventDefault();
