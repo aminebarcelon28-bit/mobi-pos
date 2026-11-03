@@ -1,5 +1,22 @@
 # Human actions — c01-rc6 work
 
+## STATUS 2026-11-03 — HAR-001/007/008/009 closed in-tree
+
+- **HAR-001 → CLOSED:** D1 = B′ applied (unwrap 2996/2998, cap 54→56, clamp matrix). Money gate
+  **65/65**, cash terms **32/32**.
+- **HAR-007 → CLOSED:** zero-tax re-pinned and converted to content anchors (full `src-tauri/src`
+  scope). **23/23**; new-line-fails / moved-line-passes / edited-line-fails controls proven.
+- **HAR-008 → CLOSED:** SHF-05 backdated two days; 48-slot sweep proves clock independence;
+  `40-shf` **12/12**.
+- **HAR-009 → CLOSED:** REF-19 (native-setter PIN entry), REF-17 (OS-keyring lockout blob cap →
+  prune+bound; failing-then-passing Rust test), refund-value checker (debt-relief lane; negative
+  control proven), 60–75 boot-marker wait (DRW-24 interceptor named), CRM-02 unique-per-run
+  fixtures. Spec 30 **12/12 with 0 money violations**.
+- **OD-001 → CLOSED by owner:** `c01-rc-5` is superseded by `c01-rc-6`; no waiver, tag untouched.
+- **D2/D3:** closed as decided (state-based wait; design tokens not a criterion).
+- Remaining owner-only items: HAR-002 (printer), HAR-003 (merchant gateway), HAR-004 (SYN-02
+  numbering rule).
+
 ## HAR-001 — money-boundary gate: 58 vs 54 (owner decision) — corrected 2026-11-02
 
 - **What:** `node scripts/check-money-boundary.mjs` is **64/65**, failing on

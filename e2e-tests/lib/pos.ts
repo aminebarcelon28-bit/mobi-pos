@@ -1771,6 +1771,13 @@ export async function typeRefundPin(pin: string): Promise<void> {
   // the write-off toggle, a sync-driven reset). A cached element handle then
   // throws "stale element reference" - the batch failure mode. Re-acquire the
   // field on EVERY attempt and treat a stale handle as retryable.
+  //
+  // REF-19 (2026-11-03): click + Ctrl+A + Backspace is unsafe here. When the
+  // click does not land on the input (a re-render or overlay), Ctrl+A selects
+  // the DOCUMENT and Backspace becomes browser history-back, which tears the
+  // modal down - the field then "holds 0 digits" and never comes back. Set the
+  // value with the native setter + input event (the React-controlled pattern
+  // used by the other helpers) and verify it; no page-level key chords.
   for (let attempt = 0; attempt < 5; attempt += 1) {
     let input: Awaited<ReturnType<typeof $>> | null = null;
     try {
@@ -1782,16 +1789,20 @@ export async function typeRefundPin(pin: string): Promise<void> {
       continue;
     }
     try {
-      await input.click();
-      await browser.keys(['Control', 'a']);
-      await browser.keys(['Backspace']);
-      const cleared = String(await input.getValue().catch(() => ''));
-      if (cleared !== '') {
+      const set = (await browser.execute((value: string) => {
+        const el = document.querySelector('[data-testid="refund-pin"]') as HTMLInputElement | null;
+        if (!el || el.offsetWidth === 0) return false;
+        el.focus();
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+        setter?.call(el, value);
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        return true;
+      }, pin)) as boolean;
+      if (!set) {
         await browser.pause(150);
         continue;
       }
-      await browser.keys(pin.split(''));
-      await browser.pause(150);
+      await browser.pause(200);
       const value = String(await input.getValue().catch(() => ''));
       if (value === pin) return;
       console.warn(

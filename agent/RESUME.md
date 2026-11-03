@@ -1,25 +1,22 @@
 # RESUME — c01-rc6 work
 
-- **Phase:** release disposition + owner-requested verification (2026-11-03).
-- **Baseline:** `c01-rc-5` = `51c9c70`; branch `c01-rc6-work`; last commit `7ac204d` (+ uncommitted
-  harness edits to specs 50/51, and the evidence/doc updates being written now).
-- **Disposition:** **BLOCKED — OWNER DECISION** (HAR-001 money registry; HAR-007 zero-tax re-pin;
-  HAR-008 SHF-05 premise). Tag `c01-rc-6` not created.
-- **R1/SEC-01:** PASS; **50-sec now STABLE 10/10 ×3** after the state-based unlock wait (E-0155).
-  `cargo 452/452`, tsc clean, selftest 137/137, register 68/0 OPEN, reconcile 687.
-- **D1 (money wrappers):** 2996/2998 redundant (12/12 identical across fractional-cent, negative,
-  repeated-qty, line-to-total; model run in `e2e-tests/results/d1_wrapper_equivalence.mts`); 2997
-  and 3001 are not (250.55 → 251 vs 250.55). B (cap 58) vs B′ (remove 2, cap 56) awaiting the owner;
-  analysis in `agent/D1-money-wrapper-analysis.md`.
-- **D2:** all conditions met (E-0155) — (a) state wait in 50/51; (b) negative control passes;
-  (c) SHF-13 green 3/3; (d) rc-5 2.36–2.45 s vs HEAD 2.46–2.50 s ≈ +29 ms (noise). 50-sec is
-  **STABLE 10/10 ×3**.
-- **D3:** design tokens **not** a release criterion; inherited debt, no baseline refresh.
-- **Requested runs (E-0156):** 31/32/33/34/71 clean; 75 two improvements; the only PASS→FAIL deltas
-  are test-side (REF-19/IDN-12/DRW-08 order-dependent, DRW-24 actionability, CRM-02 test-authoring).
-  No R1 product regression.
-- **40-shf:** 11/12 ×3 — SHF-05 wall-clock premise (HAR-008).
-- **New red gate:** `test_zero_tax` 21/23 — 6 sqlPluginAdapter entries stale since rc-5 + 5 lib.rs
-  entries shifted +9 by R1 (HAR-007; exact re-pin prepared, not applied).
-- **"guards 24/24":** only `node scripts/check-contrast.mjs` reports exactly 24/24.
-- **Next:** commit the harness fix + evidence, then owner decisions (D1 B/B′, HAR-001/007/008/009).
+- **Phase:** rc-6 close-out (2026-11-03). Branch `c01-rc6-work`.
+- **Disposition:** all software-fixable blockers are being closed; tag `c01-rc-6` will be cut on a
+  clean worktree after the final verification pass.
+- **Closed this session:**
+  - **D1 = B′:** unwrap 2996/2998, cap 54→56, clamp matrix; money **65/65**, cash-terms **32/32**.
+  - **HAR-007:** zero-tax **23/23**, content anchors over all of `src-tauri/src`, controls proven.
+  - **HAR-008:** SHF-05 clock-independent (48-slot sweep), **40-shf 12/12**.
+  - **HAR-009:** REF-19 (native-setter PIN entry); REF-17 (OS-keyring lockout blob cap → prune +
+    bound, failing-then-passing Rust test); refund-value checker debt-relief lane (negative
+    control proven); 60–75 boot-marker wait (DRW-24 interceptor named); CRM-02 unique-per-run
+    fixtures.
+  - **OD-001:** `c01-rc-5` superseded by `c01-rc-6`, no waiver, tag untouched.
+- **Verified this session:** 30 **12/12 + 0 money violations**; 31 **15/15**; 33 **18/18**;
+  34 **17/17 cases** (after-all G-21 parked, queue 2); cargo **453/453**; tsc 0; selftest
+  **137/137**; reconcile **687**; register 68/0 OPEN; seven guard scripts green.
+- **Next:** confirm 32 after the REF-91 dialog-wait fix; commit the batch with E-0158; final
+  clean-worktree run (50-sec ×3, 40-shf, 30–34); tag `c01-rc-6`.
+- **Queue 2 (after the tag, never moving rc-6):** SYN-02/27 + SYN-04/26 ADRs → G-21/G-05 →
+  REF-86 → SEC-18/19/20 → 60/65/66/70/75 harness re-runs → harness-BLOCKED 24-syn (two-instance +
+  gateway) → SEC-01 enterprise role-bound IPC design.

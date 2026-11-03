@@ -74,6 +74,11 @@ for (const file of files) {
   const cashRows = has('cash_movements') ? db.prepare('SELECT * FROM cash_movements').all() : [];
   const voucherRows = has('credit_vouchers') ? db.prepare('SELECT * FROM credit_vouchers').all() : [];
   const parkedRows = has('sync_parked_movements') ? db.prepare('SELECT * FROM sync_parked_movements').all() : [];
+  // Debt relief is a destination of record: the native refund writes a
+  // PAYMENT_SETTLED row keyed VERS-<refund suffix> inside the same transaction
+  // (createOrderSlice.ts:2975). Without this lane a cash+credit refund looks
+  // under-delivered (REF-27: total 500 = cash 200 + debt relief 300).
+  const debtRows = has('customer_debts') ? db.prepare('SELECT * FROM customer_debts').all() : [];
 
   // wallet destinations of record: creditDeltaDzd ledger entries, by sale id
   const walletBySale = new Map();
@@ -110,6 +115,20 @@ for (const file of files) {
     const receipt = String(r.receipt_number ?? '');
     const saleId = String(r.original_transaction_id ?? p.originalTransactionId ?? '');
 
+    // Debt relief lane (see debtRows above): keyed by the deterministic
+    // VERS-<refund suffix> receipt the native write stamps.
+    const refundSuffix = String(r.id ?? '').replace(/^REF-/, '');
+    const debtC = cents(
+      debtRows
+        .filter((d) => {
+          const rec = String(d.receipt_number ?? '');
+          const notes = String(d.notes ?? '');
+          const isRelief = /PAYMENT_SETTLED|RELIEF/i.test(String(d.type ?? ''));
+          return isRelief && (rec === `VERS-${refundSuffix}` || notes.includes(String(r.id)));
+        })
+        .reduce((a, d) => a + Math.abs(major(d.amount)), 0),
+    );
+
     const cashC = cents(
       cashRows
         .filter((m) => receipt && (String(m.reason ?? '') + String(m.json_payload ?? '')).includes(receipt))
@@ -126,7 +145,7 @@ for (const file of files) {
     // wallet: the residual after the other destinations, matched against an
     // unconsumed ledger emission for this sale (the app keys the emission to the
     // SALE, not the refund). A split refund (cash + wallet) resolves correctly.
-    const residualC = totalC - cashC - voucherC - parkedC;
+    const residualC = totalC - cashC - voucherC - parkedC - debtC;
     let walletC = 0;
     const pool = walletBySale.get(saleId) ?? [];
     const used = walletUsed.get(saleId) ?? new Set();
@@ -146,7 +165,7 @@ for (const file of files) {
     const cardLeg = funding ? fromMinor(funding.digital) : 0;
     if (cardLeg > 0 && cashC + voucherC + parkedC + walletC === 0) cardGap++;
 
-    const deliveredC = cashC + voucherC + parkedC + walletC;
+    const deliveredC = cashC + voucherC + parkedC + walletC + debtC;
     if (deliveredC !== totalC) {
       const parts = [
         `cash ${cashC / 100}`,

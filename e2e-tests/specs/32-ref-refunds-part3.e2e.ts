@@ -513,6 +513,14 @@ async function stageRefund(
   if (opts.method) await selectRefundMethod(opts.method);
 }
 async function submitRefund(pin = APP_PIN, times = 1): Promise<void> {
+  // HAR-009/REF-91 (2026-11-03): a dialog that a just-committed refund closed
+  // can be gone by the time this runs. Wait briefly for it to (re)appear;
+  // submitOrLanded treats a still-missing dialog as a possibly-landed refund.
+  if (!(await refundDialogVisible())) {
+    await browser
+      .waitUntil(() => refundDialogVisible(), { timeout: 5000, interval: 150 })
+      .catch(() => undefined);
+  }
   await typeRefundPin(pin);
   const ok = await clickRefundSubmit(times);
   if (!ok) throw new Error(`refund-submit not clickable :: ${await dumpRefundState('submit')}`);
@@ -566,7 +574,7 @@ async function submitOrLanded(
     await submitRefund();
     return 'clicked';
   } catch (e) {
-    if (!/refund-submit not clickable/.test(String((e as Error)?.message ?? e))) throw e;
+    if (!/refund-submit not clickable|refund-pin.*not displayed/.test(String((e as Error)?.message ?? e))) throw e;
     for (let i = 0; i < 10; i += 1) {
       await browser.pause(400);
       if (refundsFor(ticketId).length >= want) return 'landed';

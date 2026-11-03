@@ -1521,14 +1521,59 @@ fn load_lockouts(store: &dyn super::secure_storage::KeyStore) -> LockoutMap {
         .unwrap_or_default()
 }
 
+/// Hard ceiling for the lockout blob. Windows Credential Manager rejects
+/// generic credentials over ~2.5 KB; keep a margin. The manager entry and any
+/// live lock always survive; under extreme cardinality the lowest-ranked
+/// pending entries are dropped - the alternative is that EVERY save fails and
+/// no ladder arms for anyone (REF-17, 2026-11-03: five wrong PINs left the
+/// counter at four because the 5th write was rejected).
+const MAX_LOCKOUT_BLOB_BYTES: usize = 2000;
+const MAX_LOCKOUT_ENTRIES: usize = 32;
+
 fn save_lockouts(
     store: &dyn super::secure_storage::KeyStore,
     map: &LockoutMap,
 ) -> Result<(), TrustError> {
-    let s = serde_json::to_string(map)
-        .map_err(|e| TrustError::op_failed(format!("lockout encode: {e}")))?;
+    let now = system_now_ms();
+    // Idle history is not state: drop it before it becomes permanent debt.
+    let mut kept: LockoutMap = map
+        .iter()
+        .filter(|(_, l)| l.locked_until_ms > now || l.attempts > 0)
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    let encode = |m: &LockoutMap| {
+        serde_json::to_string(m)
+            .map_err(|e| TrustError::op_failed(format!("lockout encode: {e}")))
+    };
+    let mut json = encode(&kept)?;
+    if json.len() > MAX_LOCKOUT_BLOB_BYTES || kept.len() > MAX_LOCKOUT_ENTRIES {
+        let ranked = {
+            let mut v: Vec<(String, UserLockout)> = kept.into_iter().collect();
+            v.sort_by(|a, b| {
+                let rank = |l: &UserLockout| {
+                    (u8::from(l.locked_until_ms > now), l.attempts)
+                };
+                rank(&b.1).cmp(&rank(&a.1)).then_with(|| a.0.cmp(&b.0))
+            });
+            v
+        };
+        let mut bounded = LockoutMap::new();
+        if let Some((id, lock)) = ranked.iter().find(|(id, _)| id == "manager") {
+            bounded.insert(id.clone(), lock.clone());
+        }
+        for (id, lock) in ranked {
+            if bounded.len() >= MAX_LOCKOUT_ENTRIES {
+                break;
+            }
+            if id != "manager" {
+                bounded.insert(id, lock);
+            }
+        }
+        kept = bounded;
+        json = encode(&kept)?;
+    }
     store
-        .store_pin_lockouts(&s)
+        .store_pin_lockouts(&json)
         .map_err(|e| TrustError::op_failed(format!("lockout store: {e:?}")))
 }
 
@@ -1616,6 +1661,42 @@ fn record_success_for(
 mod tests {
     use super::*;
     use crate::trust_core::ipc_authorizer::serial_test_lock;
+
+    /// REF-17 (2026-11-03): the lockout map lives in the OS keyring, whose blob
+    /// has a hard ceiling (Windows ~2.5 KB). One entry per user ever tested made
+    /// every save fail past the ceiling, so `pin_verify` returned an error and
+    /// no ladder armed. The store must prune idle entries and stay bounded
+    /// while always retaining the manager and any live lock.
+    #[test]
+    fn lockout_store_prunes_idle_entries_and_stays_under_the_keyring_cap() {
+        use crate::trust_core::secure_storage::test_support::MemKeyStore;
+        use crate::trust_core::secure_storage::KeyStore;
+        let store = MemKeyStore::new();
+        let now = system_now_ms();
+        let mut map = LockoutMap::new();
+        map.insert("idle".into(), UserLockout::default());
+        map.insert(
+            "manager".into(),
+            UserLockout {
+                attempts: 5,
+                locked_until_ms: now + 60_000,
+            },
+        );
+        for i in 0..200 {
+            map.insert(
+                format!("user-{i}"),
+                UserLockout {
+                    attempts: 1,
+                    locked_until_ms: 0,
+                },
+            );
+        }
+        save_lockouts(&store, &map).expect("save");
+        let raw = store.load_pin_lockouts().unwrap().unwrap();
+        assert!(!raw.contains("\"idle\""), "zero-attempt entries must be pruned");
+        assert!(raw.contains("\"manager\""), "the manager entry must always survive");
+        assert!(raw.len() <= 2000, "lockout blob must stay bounded, got {} bytes", raw.len());
+    }
 
     #[test]
     fn policy_lengths_and_charset() {

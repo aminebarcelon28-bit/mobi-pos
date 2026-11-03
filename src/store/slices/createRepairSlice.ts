@@ -469,6 +469,20 @@ export const createRepairSlice: StateCreator<PosState, [], [], RepairSlice> = (s
         },
       ],
     };
+    // G-21 (queue 2): a ticket CREATED directly in Livré still needs its
+    // restitution anchor - the warranty expiry is locked to the delivery
+    // instant. The status-change path already stamps it; creation must too,
+    // otherwise a delivered-on-intake ticket has no warranty base and its
+    // redo claim cannot compute an expiry.
+    if (newOrder.status === 'Livré') {
+      newOrder.deliveredAt = newOrder.deliveredAt || createdAt;
+      if (newOrder.warrantyTier) {
+        newOrder.warrantyExpiresAt = computeWarrantyExpiryISO(
+          newOrder.deliveredAt,
+          newOrder.warrantyTier,
+        );
+      }
+    }
     const updated = [newOrder, ...repairOrders];
     // I4 (UPGRADE-11): logCashMovement no longer resets activeModal (it only
     // refreshes the shift) — the capture below stays as belt-and-braces so an
