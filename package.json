@@ -134,7 +134,9 @@
     "test:contrast": "node scripts/check-contrast.mjs",
     "test:pending-requeue": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_pending_customer_requeue.mts",
     "test:milestone-ranges": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_milestone_ranges.mts",
-    "test:loyalty-backing": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_loyalty_backing.mts"
+    "test:loyalty-backing": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_loyalty_backing.mts",
+    "test:syn-faults": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_syn_faults.mjs",
+    "test:acquirer": "node scripts/test_acquirer_contract.mjs"
   },
   "dependencies": {
     "@libsql/client": "^0.18.0",
