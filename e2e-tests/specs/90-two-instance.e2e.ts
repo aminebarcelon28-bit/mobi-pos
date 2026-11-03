@@ -50,18 +50,21 @@ describe(`two-instance terminal ${INSTANCE}`, () => {
     const skewMs = Number(process.env.POS_FAKE_CLOCK_SKEW_MS ?? 0);
     if (skewMs !== 0) {
       await browser.execute((skew: number) => {
+        // Forward ALL constructor forms: the previous subclass-only patch broke
+        // WebView internals that call new Date(y, m, d) (session died with
+        // ECONNREFUSED after the patch). Returning a real Date instance keeps
+        // every overload intact.
         const RealDate = Date;
         const shifted = () => RealDate.now() + skew;
-        class FakeDate extends RealDate {
-          constructor(...args: unknown[]) {
-            if (args.length === 0) super(shifted());
-            else super(...(args as [number]));
-          }
-          static now(): number {
-            return shifted();
-          }
+        function FakeDate(this: unknown, ...args: unknown[]) {
+          if (args.length === 0) return new RealDate(shifted());
+          return new (RealDate as unknown as new (...a: unknown[]) => Date)(...args);
         }
-        (window as unknown as { Date: typeof Date }).Date = FakeDate as unknown as typeof Date;
+        FakeDate.now = shifted;
+        FakeDate.parse = RealDate.parse;
+        FakeDate.UTC = RealDate.UTC;
+        FakeDate.prototype = RealDate.prototype;
+        (window as unknown as { Date: unknown }).Date = FakeDate;
       }, skewMs);
       console.log(`[two-instance] ${INSTANCE}: fake clock skew ${skewMs} ms`);
     }
