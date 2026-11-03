@@ -1,0 +1,23 @@
+MobiPOS — proprietary software. All rights reserved.
+
+Copyright (c) 2026 the MobiPOS owner. No permission is granted to use, copy,
+modify, distribute, sublicense or sell this software or its source, in whole or
+in part, without a written agreement with the copyright holder.
+
+Third-party components
+----------------------
+The application ships only permissively licensed dependencies (MIT, Apache-2.0,
+BSD-family). The exact inventory, versions and licence texts are recorded in:
+
+  - licenses_ledger.json   (per-package ledger produced by the licence tooling)
+  - licenses_audit.json    (audit output; a non-permissive shipped dependency
+                            fails the release check)
+
+Development-only tooling (test runners, linters, harnesses) is not part of the
+release bundle and may carry other licences; it is never redistributed with the
+product.
+
+Vendored/patched crates under `patches/` retain their upstream licence headers.
+
+Owner action: replace this notice with the executed licence text (EULA or
+commercial terms) before any distribution outside the owner's organisation.

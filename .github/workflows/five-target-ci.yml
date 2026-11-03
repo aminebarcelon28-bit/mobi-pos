@@ -96,6 +96,47 @@ jobs:
         continue-on-error: true
         run: cargo test -p mobi-pos --lib money::
 
+  # Dev-only harness gates (no hardware, no credentials): the printers, sync
+  # convergence and acquirer simulators must stay green. These are the suites
+  # that replaced "we could not test it": if one breaks, the bytes or the
+  # protocol changed without evidence.
+  harness-gates:
+    name: Harness Gates (ESC/POS, sync faults, acquirer)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Cash-terms predicate matrix
+        run: node scripts/test_cash_terms.mjs
+
+      - name: ESC/POS capture sink + byte goldens
+        run: npm run test:escpos
+
+      - name: Two-client sync convergence (PASS-SIM)
+        run: npm run test:syn-faults
+
+      - name: Two-device + gateway faults (PASS-SIM)
+        run: npm run test:sync-two-device
+
+      - name: Mock acquirer contract
+        run: npm run test:acquirer
+
+      - name: Harness selftest
+        run: node .opencode/skills/e2e-testing/scripts/selftest.mjs
+
+      - name: Case ledger reconcile
+        run: node .opencode/skills/e2e-testing/scripts/reconcile.mjs
+
   build-desktop:
     name: Desktop Build (${{ matrix.platform }})
     needs: quality-gates

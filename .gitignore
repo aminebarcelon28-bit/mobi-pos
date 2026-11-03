@@ -140,3 +140,6 @@ agent/cache/
 # ESC/POS dev tooling output: captured jobs, hardware-kit artifacts, probe runs.
 # The byte-exact GOLDENS are source (tests/fixtures/escpos) and stay tracked.
 tests/results/
+
+# Archived scratch (one-off probes, screenshots). Never deleted, never shipped.
+archive/

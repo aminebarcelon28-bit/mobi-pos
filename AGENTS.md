@@ -140,3 +140,48 @@ TypeScript outbox sync).
   data-plane gateway lands. Exact paths + Tier A/B holdings:
   `docs/webview-sql-residual.md`. Inherent to pre-gateway; the native
   kernel logic itself is unaffected.
+
+## Rules added on top of the decisions above (2026-11-03)
+
+These extend, never relax, the sections above.
+
+1. **Evidence or it did not happen.** Every non-trivial change appends an
+   `E-####` entry to `docs/c01-evidence.ndjson` with the command, the verbatim
+   summary line and the artifact path, and cites that id in the commit subject.
+   A verdict is only ever written by `verdicts.mjs --run <sidecar>
+   --write-index`; there is no other writer.
+2. **Gates are floors.** Before a release tag the following must hold on a clean
+   worktree of the tagged commit: money boundary, zero-tax, cash terms, `tsc
+   --noEmit`, `cargo test --lib`, harness selftest, case reconcile, the guard
+   scripts, and the suites the change touched. A red floor is a stop, not a note.
+3. **Loosening needs proof.** Changing a cap, allowlist, baseline or case
+   classification requires the commit to state why the old limit no longer fits
+   and that the change is behaviour-neutral or intended, plus the evidence id.
+4. **Harnesses are hermetic and honest.** Own ports and directories, seeded
+   state, state-based waits (never fixed sleeps for verdicts), one headless
+   command, failure artifacts, and a dossier in `agent/dossiers/`. A result
+   produced without the real hardware or the real remote service is
+   `PASS-SIM` and must say which half is missing — never a hardware PASS.
+5. **Printing.** Non-Latin text (Arabic) is rendered by the platform and sent as
+   a `GS v 0` bit image (ADR-004). Never map non-Latin text into a single-byte
+   code page: CP864 carries only 65 of the 117 Arabic contextual forms, so the
+   result is a broken word, not Arabic. Money must print with a plain-space
+   thousands separator (U+202F/U+00A0 have no Latin-1 byte).
+6. **IPC direction (SEC-01, ADR-005).** Privileged operations are authorised in
+   native code against the *session principal's role*, not against a string the
+   renderer supplies; the WebView may ask, never assert. New commands must
+   register a capability and a role requirement and fail closed when either is
+   unknown.
+7. **Dependencies.** Shipped runtime deps are MIT/Apache-2.0/BSD-family only,
+   pinned, licence-recorded and never dev tooling. Dev-only harnesses, mocks and
+   scripts stay out of the release bundle and carry their licence note in the
+   file header.
+8. **Decisions are recorded as ADRs** (`docs/adr/`, index in
+   `docs/adr/README.md`) with primary-source citations. Code that contradicts an
+   ADR is a bug until the ADR is superseded.
+9. **Money and fiscal changes** need a failing-then-passing test (or a
+   before/after equivalence) plus re-runs of the refund suites, in the same
+   change — no exceptions for "small" edits.
+10. **Never** push, force-push, rewrite history, move or delete the release tags
+    (`c01-rc-1` … `c01-rc-6`), or delete untracked scratch (archive it to an
+    ignored directory instead).
