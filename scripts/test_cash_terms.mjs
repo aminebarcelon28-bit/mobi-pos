@@ -27,6 +27,7 @@ const {
   standaloneExpensesFromMovements,
   MANUAL_MOVEMENT_TAG,
   DRAWER_REASON_PREFIXES,
+  clampCashRefund,
 } = await loadCashTerms();
 
 let pass = 0;
@@ -68,7 +69,7 @@ console.log('\n--- computeRefundFundingSplit (anti-arbitrage C1/C2/C3) ---');
 // Voucher sale: 10000 gross, 2000 voucher, 8000 cash.
 {
   const s = computeRefundFundingSplit(
-    { total: 8000, subtotal: 10000, voucherCreditApplied: 2000, tenders: [{ method: 'Espèces', amount: 8000 }] }, 10000);
+    { total: 8000, subtotal: 10000, voucherCreditApplied: 2000, voucherCode: 'V-E2E-1', tenders: [{ method: 'Espèces', amount: 8000 }] }, 10000);
   check('voucher sale: full value restored (8000 cash + 2000 voucher), never gross cash',
     s.netRefund === 10000 && s.cashShare === 8000 && s.voucherShare === 2000, JSON.stringify(s));
 }
@@ -88,13 +89,13 @@ console.log('\n--- computeRefundFundingSplit (anti-arbitrage C1/C2/C3) ---');
 // Partial refund: half the lines back on a voucher sale.
 {
   const s = computeRefundFundingSplit(
-    { total: 8000, subtotal: 10000, voucherCreditApplied: 2000, tenders: [{ method: 'Espèces', amount: 8000 }] }, 5000);
+    { total: 8000, subtotal: 10000, voucherCreditApplied: 2000, voucherCode: 'V-E2E-1', tenders: [{ method: 'Espèces', amount: 8000 }] }, 5000);
   check('partial refund splits pro-rata (5000 value: 4000 cash + 1000 voucher)',
     s.netRefund === 5000 && s.cashShare === 4000 && s.voucherShare === 1000, JSON.stringify(s));
 }
 // Cumulative cap: prior gross-format recovery bounds the second refund.
 {
-  const orig = { total: 8000, subtotal: 10000, voucherCreditApplied: 2000, tenders: [{ method: 'Espèces', amount: 8000 }] };
+  const orig = { total: 8000, subtotal: 10000, voucherCreditApplied: 2000, voucherCode: 'V-E2E-1', tenders: [{ method: 'Espèces', amount: 8000 }] };
   const s = computeRefundFundingSplit(orig, 10000, 8000);
   check('cumulative cap trims to remaining recoverable (2000)',
     s.netRefund === 2000 && s.capped === true, JSON.stringify(s));
@@ -181,6 +182,28 @@ check(
   standaloneExpensesFromMovements([exch]) === 0 && standaloneDepositsFromMovements([exch]) === 0
 );
 check('empty/null inputs read as 0', cashSalesFromTxns(null) === 0 && cashRefundsFromTxns(undefined) === 0 && exchangeCashOutFromMovements([]) === 0);
+
+// ── clampCashRefund: the integer-DA boundary that D1=B' relies on ──
+console.log('\n--- clampCashRefund (integer DA at the boundary) ---');
+{
+  const cases = [
+    ['fractional cash share rounds to integer DA', { cashShare: 150.55, cashTenderedNet: 500, priorCashOut: 0 }, 151],
+    ['fractional tender cap still yields integer DA', { cashShare: 99.99, cashTenderedNet: 99.99, priorCashOut: 0 }, 100],
+    ['negative share clamps to zero', { cashShare: -5, cashTenderedNet: 100, priorCashOut: 0 }, 0],
+    ['negative tender clamps to zero', { cashShare: 100, cashTenderedNet: -100, priorCashOut: 0 }, 0],
+    ['repeated quantity: cumulative prior payout caps the leg', { cashShare: 300, cashTenderedNet: 500, priorCashOut: 400 }, 100],
+    ['line-to-total: prior payout equals tender -> no cash', { cashShare: 200, cashTenderedNet: 200, priorCashOut: 200 }, 0],
+    ['undefined fields read as zero', { cashShare: undefined, cashTenderedNet: undefined, priorCashOut: undefined }, 0],
+  ];
+  for (const [name, input, expected] of cases) {
+    const r = clampCashRefund(input);
+    check(
+      `${name} (cashOut=${r.cashOut})`,
+      r.cashOut === expected && Number.isInteger(r.cashOut) && Number.isInteger(r.avoirOverflow),
+      JSON.stringify(r),
+    );
+  }
+}
 
 console.log('\n========================================================================');
 console.log(`CASH TERMS SUMMARY: ${pass} Passed, ${fail} Failed`);

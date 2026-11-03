@@ -2993,9 +2993,15 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
       // needs no drawer movement), and the native writes the balance + its
       // creditDeltaDzd row inside the same transaction.
       if (funding.debtShare > 0 && origCustLive && origCust) {
-        const reliefPlanned = Math.max(0, Math.round(Number(debtReliefForNative?.relief ?? 0) || 0));
+        // B′ (D1, 2026-11-03): these two operands are already integer DA by
+        // construction - reliefAmt (2967) is rounded/clamped, and cashOut (2400)
+        // comes from clampCashRefund's integer-only clamp. The redundant rounds
+        // are dropped; the `?? 0`/`|| 0` normalisation and the non-negative
+        // clamp stay. The other two legs below are DA floats and MUST keep their
+        // round. Equivalence: agent/D1-money-wrapper-analysis.md (12/12).
+        const reliefPlanned = Math.max(0, Number(debtReliefForNative?.relief ?? 0) || 0);
         const voucherPlanned = Math.max(0, Math.round(Number(funding.voucherShare ?? 0) || 0));
-        const cashPlanned = Math.max(0, Math.round(Number(cashOut) || 0));
+        const cashPlanned = Math.max(0, Number(cashOut) || 0);
         const uncoveredCredit = Math.max(
           0,
           Math.round(netRefund) - reliefPlanned - voucherPlanned - cashPlanned - walletLegForNative,

@@ -3169,12 +3169,22 @@ describe('CRT - cart, scan, serial and discount edges (batch 14)', () => {
   async function unlockViaProfile(profileId: string, pin: string): Promise<void> {
     // Right after a refresh the WebView is still booting: give the lock screen
     // a grace window before deciding that the session is already open.
-    const locked = await $(tid('lock-screen'))
-      .waitForDisplayed({ timeout: 8000 })
-      .then(() => true)
-      .catch(() => false);
+    // HAR-009/DRW-24 (2026-11-03): wait on the app's boot marker, not an 8 s
+    // window. The shell renders behind the lock screen, and a slow boot can
+    // mount the lock screen AFTER the old window - the helper then returned
+    // "already open" and every later click was intercepted by the overlay.
+    // When the marker exists, the lock decision is final.
+    await browser.waitUntil(
+      async () =>
+        (await $(tid('lock-screen')).isDisplayed().catch(() => false)) ||
+        (await browser.execute(
+          () => Boolean((window as unknown as { __mobipos_bootTimings?: unknown }).__mobipos_bootTimings),
+        )),
+      { timeout: 60000, interval: 150, timeoutMsg: 'app never booted (no lock screen and no boot marker)' },
+    );
+    const locked = await $(tid('lock-screen')).isDisplayed().catch(() => false);
     if (!locked) {
-      console.log(`[unlock] no lock screen within 8s - session already open, nothing to unlock for ${profileId}`);
+      console.log(`[unlock] boot complete, no lock screen - session already open, nothing to unlock for ${profileId}`);
       return;
     }
     const isManager = profileId === 'usr-admin' || profileId === 'manager';

@@ -3499,7 +3499,12 @@ describe('SHF — shifts, drawers & cash control (batch 9)', () => {
   // ===========================================================================
   it('[SHF-05] shift spanning midnight: backdated open survives reboot, sales close into the same window; no business-day key exists', async () => {
     await resetDrawerForTest();
-    const yday = new Date(Date.now() - 24 * 3600 * 1000);
+    // HAR-008 (2026-11-03): backdate by TWO days, not one. The case asserts a
+    // >8 h span below; with a one-day backdate to 23:50 the span is only
+    // (now - 23:50 yesterday), which is < 8 h whenever the suite runs between
+    // 00:00 and ~07:50 local (measured: 1.43 h at 01:15). Two days keeps the
+    // span ~25 h at every clock time and still crosses a midnight.
+    const yday = new Date(Date.now() - 2 * 24 * 3600 * 1000);
     yday.setHours(23, 50, 0, 0);
     const openedIso = yday.toISOString();
     const sid = await backdateOpenShift(openedIso);

@@ -3160,12 +3160,22 @@ describe('CRM - customer directory, phone identity & deletion (batch 13)', () =>
   async function unlockViaProfile(profileId: string, pin: string): Promise<void> {
     // Right after a refresh the WebView is still booting: give the lock screen
     // a grace window before deciding that the session is already open.
-    const locked = await $(tid('lock-screen'))
-      .waitForDisplayed({ timeout: 8000 })
-      .then(() => true)
-      .catch(() => false);
+    // HAR-009/DRW-24 (2026-11-03): wait on the app's boot marker, not an 8 s
+    // window. The shell renders behind the lock screen, and a slow boot can
+    // mount the lock screen AFTER the old window - the helper then returned
+    // "already open" and every later click was intercepted by the overlay.
+    // When the marker exists, the lock decision is final.
+    await browser.waitUntil(
+      async () =>
+        (await $(tid('lock-screen')).isDisplayed().catch(() => false)) ||
+        (await browser.execute(
+          () => Boolean((window as unknown as { __mobipos_bootTimings?: unknown }).__mobipos_bootTimings),
+        )),
+      { timeout: 60000, interval: 150, timeoutMsg: 'app never booted (no lock screen and no boot marker)' },
+    );
+    const locked = await $(tid('lock-screen')).isDisplayed().catch(() => false);
     if (!locked) {
-      console.log(`[unlock] no lock screen within 8s - session already open, nothing to unlock for ${profileId}`);
+      console.log(`[unlock] boot complete, no lock screen - session already open, nothing to unlock for ${profileId}`);
       return;
     }
     const isManager = profileId === 'usr-admin' || profileId === 'manager';
@@ -3738,15 +3748,32 @@ async function crmStubDialogs(): Promise<void> {
 
 it('[CRM-02] phone variants (+213 / 00213 / 0xx / spaces) normalize to one canonical local number', async () => {
   await crmOpenCustomers();
-  await crmAddCustomer('CRM02-Plus', '+213 550 12 34 56');
-  await crmAddCustomer('CRM02-Zero', '00213 550 12 34 56');
-  await crmAddCustomer('CRM02-Local', '0555000000');
+  // HAR-009 (2026-11-03): the old fixture typed "0550 12 34 56" in two formats
+  // but asserted 0555000000 - a different number - so the case could never
+  // pass, and three rows on one number would also trip G-23 (duplicate active
+  // phone). Each customer now exercises one variant of its OWN unique-per-run
+  // number; the assertion compares the canonical form of the value typed.
+  const seed = String(Date.now()).slice(-6);
+  const nPlus = `0555${seed}`;
+  const nZero = `0666${seed}`;
+  const nLocal = `0777${seed}`;
+  const plusTyped = `+213 ${nPlus.slice(1, 4)} ${nPlus.slice(4, 7)} ${nPlus.slice(7)}`;
+  const zeroTyped = `00213 ${nZero.slice(1, 4)} ${nZero.slice(4, 7)} ${nZero.slice(7)}`;
+  const localTyped = `${nLocal.slice(0, 4)} ${nLocal.slice(4, 7)} ${nLocal.slice(7)}`;
+  await crmAddCustomer('CRM02-Plus', plusTyped);
+  await crmAddCustomer('CRM02-Zero', zeroTyped);
+  await crmAddCustomer('CRM02-Local', localTyped);
   const rows = all<{ name: string; phone: string }>(
     "SELECT name, phone FROM customers WHERE name LIKE 'CRM02-%' AND deleted = 0 ORDER BY name",
   );
-  console.log('[CRM-02] stored rows=' + JSON.stringify(rows));
+  console.log(
+    '[CRM-02] typed=' + JSON.stringify({ plusTyped, zeroTyped, localTyped }) + ' stored=' + JSON.stringify(rows),
+  );
   expect(rows.length).toBe(3);
-  for (const r of rows) expect(r.phone).toBe('0555000000');
+  const byName = new Map(rows.map((r) => [r.name, r.phone]));
+  expect(byName.get('CRM02-Plus')).toBe(nPlus);
+  expect(byName.get('CRM02-Zero')).toBe(nZero);
+  expect(byName.get('CRM02-Local')).toBe(nLocal);
 });
 
 it('[CRM-06] one phone shared by family: two distinct customers survive, selection never mixes them, and a duplicate-phone warning is a prompt (not a block)', async () => {

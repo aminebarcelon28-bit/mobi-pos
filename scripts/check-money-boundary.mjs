@@ -98,10 +98,15 @@ console.log('\n--- Rule 3: money-path float registry (Stage E expiry) ---');
     'src/utils/inventoryValuation.ts': 2,
     'src/utils/zReportSnapshot.ts': 0,
     'src/db/sqlPluginAdapter.ts': 50,
-    // +12: refund root rebuild — frozen-cost recovery, native read-back
+    // +12: refund root rebuild - frozen-cost recovery, native read-back
     // hydration (recovered COGS / applied relief / live debt / points) and
     // refund-line identity are all clamped to integer DA at the boundary.
-    'src/store/slices/createOrderSlice.ts': 54,
+    // +2 (2026-11-03, D1=B'): REF-66's uncovered-credit block added four rounds
+    // (177e6b1). Two of them sat on operands that reliefAmt / clampCashRefund
+    // had already rounded, so they were removed (54 -> 56); the two DA-float
+    // legs (voucherShare, netRefund) keep their rounds. Behaviour-neutral:
+    // agent/D1-money-wrapper-analysis.md, test_cash_terms clamp matrix.
+    'src/store/slices/createOrderSlice.ts': 56,
     'src/store/slices/createCartSlice.ts': 8,
     'src/components/PoReviewScreen.tsx': 55,
     'src/utils/savQuoteBuilder.ts': 1,

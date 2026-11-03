@@ -35,6 +35,7 @@ function check(name, cond, detail) {
 const fs = await import('node:fs');
 const path = await import('node:path');
 const ts = await import('typescript');
+const { createHash } = await import('node:crypto');
 
 console.log('========================================================================');
 console.log('ZERO-TAX GATE (post-drop, Phase 1b-i)');
@@ -196,109 +197,109 @@ console.log('\n--- E4: blocking static grep (src/ + src-tauri/src/) ---');
 const TAX_RE = /\btax(es)?\b|\bvatRate\b|\btva\b/i;
 
 /**
- * Every entry must be a comment, a migration record, or the §10-B2 supplier-OCR
- * noise-skip. Format: 'file:line'. Keep it line-pinned so a moved line fails.
+ * Content-anchored allowlist (HAR-007, 2026-11-03). Each entry is
+ * [file, sha1(trimmed line).slice(0,12), count]. A line may MOVE without
+ * failing (line numbers are not part of the key); any NEW tax-bearing line,
+ * or any content edit to an allowed line, fails; leftover allowances fail as
+ * stale. Same 72 hits as the previous line-pinned list, verified 1:1.
+ *   (a) a comment documenting the removed column/feature,
+ *   (b) a migration that DROPS tax (v108 local / v13 remote),
+ *   (c) a guard/fixture that REJECTS a tax column or key, or
+ *   (d) the supplier-invoice OCR fixture text.
  */
-const WHITELIST = new Set([
-  // Re-pinned on C01 (2026-10-31): 72 live hits, each one of
-  //   (a) a comment documenting the removed column/feature,
-  //   (b) a migration that DROPS tax (v108 local / v13 remote),
-  //   (c) a guard/fixture that REJECTS a tax column or key (import lane,
-  //       zero-tax invariant simulator, OCR noise-skip), or
-  //   (d) the supplier-invoice OCR fixture text.
-  // No line here reads, writes or prints a tax amount for a sale. Stale
-  // entries are removed (the hygiene check below still fails on drift).
+const WHITELIST = [
   // src/components/modals/PurchaseOrderA4Document.tsx
-  'src/components/modals/PurchaseOrderA4Document.tsx:243',
+  ['src/components/modals/PurchaseOrderA4Document.tsx', '5159d79bbbd4', 1], // "{/* Single Bold Grand Total (Strictly NO tax breakdown) */}"
   // src/db/sqlPluginAdapter.ts
-  'src/db/sqlPluginAdapter.ts:1596',
-  'src/db/sqlPluginAdapter.ts:2417',
-  'src/db/sqlPluginAdapter.ts:2419',
-  'src/db/sqlPluginAdapter.ts:4000',
-  'src/db/sqlPluginAdapter.ts:4001',
-  'src/db/sqlPluginAdapter.ts:4013',
-  'src/db/sqlPluginAdapter.ts:4014',
+  ['src/db/sqlPluginAdapter.ts', '4fb1a387c5bd', 1], // "// Phase 1b-i: `tax` removed — the column is gone and no sale may carr"
+  ['src/db/sqlPluginAdapter.ts', 'a4aa47f40a76', 1], // "// Phase 1b-i: the `tax` column is gone (no-TVA product). The paramete"
+  ['src/db/sqlPluginAdapter.ts', '3e52103f10cc', 1], // "// `tax` was its 5th entry, so every placeholder after it shifted down"
+  ['src/db/sqlPluginAdapter.ts', '9b9651a21994', 1], // "* Phase 1b-i: the legacy `vatRate` key is dropped here too. The field "
+  ['src/db/sqlPluginAdapter.ts', '1acb861d0eb5', 1], // "* ReceiptSettings type (no-TVA product), so a pre-drop row can still c"
+  ['src/db/sqlPluginAdapter.ts', 'cf82b2031c5e', 1], // "// Phase 1b-i: dead legacy key from the deleted tax-rate field."
+  ['src/db/sqlPluginAdapter.ts', '0e39bd295cfc', 1], // "vatRate: _droppedVatRate,"
   // src/store/slices/createOrderSlice.ts
-  'src/store/slices/createOrderSlice.ts:544',
+  ['src/store/slices/createOrderSlice.ts', 'c05c5273a09a', 1], // "// no VAT term and no `tax` field (Phase 1b-i)."
   // src/sync/genericApply.ts
-  'src/sync/genericApply.ts:640',
-  'src/sync/genericApply.ts:646',
-  'src/sync/genericApply.ts:647',
+  ['src/sync/genericApply.ts', '1a7548c786f7', 1], // "// Phase 1b-i: a pre-drop peer row can still carry the deleted tax-rat"
+  ['src/sync/genericApply.ts', '0f5f2014ec3c', 1], // "if ('vatRate' in (value as Record<string, unknown>)) {"
+  ['src/sync/genericApply.ts', '61c063c7667d', 1], // "const { vatRate: _droppedVatRate, ...rest } = value as Record<string, "
   // src/sync/payloadHygiene.ts
-  'src/sync/payloadHygiene.ts:37',
+  ['src/sync/payloadHygiene.ts', 'd6258863fa2a', 1], // "// Phase 1b-i: `tax` removed — it is no longer part of any contract, s"
   // src/sync/remoteSchema.ts
-  'src/sync/remoteSchema.ts:374',
-  'src/sync/remoteSchema.ts:376',
-  'src/sync/remoteSchema.ts:377',
-  'src/sync/remoteSchema.ts:380',
-  'src/sync/remoteSchema.ts:381',
-  'src/sync/remoteSchema.ts:385',
+  ['src/sync/remoteSchema.ts', 'de52688ebb1b', 1], // "// Phase 1b-i: the POS `transactions.tax` column is dropped. Gate Adde"
+  ['src/sync/remoteSchema.ts', '9b5fe0be3023', 1], // "// but zeros (live + remote `tax != 0` count = 0), so this loses no da"
+  ['src/sync/remoteSchema.ts', 'bcd941101534', 1], // "// Old builds asking for `tax` get a per-table pull stall / push quara"
+  ['src/sync/remoteSchema.ts', '5b1ae27b6ae6', 1], // "description: 'Drop transactions.tax (no-TVA product; every dropped val"
+  ['src/sync/remoteSchema.ts', 'df4233f4526c', 1], // "// A remote created from the post-drop base DDL never had `tax`, so th"
+  ['src/sync/remoteSchema.ts', '35fb13d31102', 1], // "'ALTER TABLE transactions DROP COLUMN tax;',"
   // src/sync/SyncManager.ts
-  'src/sync/SyncManager.ts:134',
-  'src/sync/SyncManager.ts:1235',
+  ['src/sync/SyncManager.ts', '4168e490db7d', 1], // "// Phase 1b-i: `tax` dropped from PULL_COLUMNS with the remote v13 dro"
+  ['src/sync/SyncManager.ts', '856f11bdf2f8', 1], // "// F6: a forced probe right after a recent verification is pure tax on"
   // src/types/po.ts
-  'src/types/po.ts:68',
+  ['src/types/po.ts', '9f4b241172c8', 1], // "// Phase 1b-i (Addendum B): no reported-tax field — the software model"
   // src/utils/documentScanner.ts
-  'src/utils/documentScanner.ts:165',
+  ['src/utils/documentScanner.ts', '9181bea41283', 1], // "* Tax = 0.00"
   // src/utils/escpos.ts
-  'src/utils/escpos.ts:297',
-  'src/utils/escpos.ts:314',
+  ['src/utils/escpos.ts', 'da163e2daf20', 1], // "// B-028: print gross REMISE/credit/TVA lines BEFORE TOTAL so the hard"
+  ['src/utils/escpos.ts', 'd8ccdd901a75', 1], // "// Phase 1b-i: no TVA/HT/TTC block. There is no rate to print, no `tax"
   // src/utils/mobileDocPrint.ts
-  'src/utils/mobileDocPrint.ts:162',
+  ['src/utils/mobileDocPrint.ts', '7790c0d89921', 1], // "// Phase 1b-i: no TVA/HT/TTC block on the mobile twin either — the rec"
   // src/utils/receiptMath.ts
-  'src/utils/receiptMath.ts:257',
-  'src/utils/receiptMath.ts:259',
-  'src/utils/receiptMath.ts:439',
+  ['src/utils/receiptMath.ts', 'e48d3852273c', 1], // "* - NO TAX (no-TVA product, Gate Addendum A + Phase 1b-i): there is no"
+  ['src/utils/receiptMath.ts', '07d81c37d97e', 1], // "* result carries no `tax`/`tva` field (they were deleted, not zeroed)."
+  ['src/utils/receiptMath.ts', '6aa8f0e952d1', 1], // "// is HT-only by product decision (Gate Addendum A), and the `tax` col"
   // src-tauri/src/geometry.rs
-  'src-tauri/src/geometry.rs:61',
-  'src-tauri/src/geometry.rs:62',
-  'src-tauri/src/geometry.rs:243',
-  'src-tauri/src/geometry.rs:245',
-  'src-tauri/src/geometry.rs:250',
-  'src-tauri/src/geometry.rs:264',
-  'src-tauri/src/geometry.rs:265',
-  'src-tauri/src/geometry.rs:295',
-  'src-tauri/src/geometry.rs:296',
-  'src-tauri/src/geometry.rs:745',
-  'src-tauri/src/geometry.rs:746',
-  'src-tauri/src/geometry.rs:747',
-  'src-tauri/src/geometry.rs:1030',
+  ['src-tauri/src/geometry.rs', 'f41ef7568b19', 1], // "/// (noise-skip, not a tax feature). Nothing consumes the value: total"
+  ['src-tauri/src/geometry.rs', 'e3ab89d8d7e3', 1], // "/// read from the labelled rows below, and the field exists so a \"TVA\""
+  ['src-tauri/src/geometry.rs', '82e85b4ae230', 1], // "// noise-skip, not a tax feature: keeps a \"TVA\" row from being treated"
+  ['src-tauri/src/geometry.rs', '6b235745ccd2', 1], // "|| lower.contains(\"tva\");"
+  ['src-tauri/src/geometry.rs', 'a7ad5b057558', 1], // "/// such as a \"TVA\" line — noise-skip, not a tax feature)."
+  ['src-tauri/src/geometry.rs', '1815b163151b', 1], // "// product rows (noise-skip, not a tax feature). No value is surfaced."
+  ['src-tauri/src/geometry.rs', '86469038c08f', 1], // "|| lower.starts_with(\"tva \")"
+  ['src-tauri/src/geometry.rs', 'd2335a34742a', 1], // "} else if lower.contains(\"tva\") || lower.contains(\"t.v.a\") {"
+  ['src-tauri/src/geometry.rs', '1243b03dee3e', 1], // "// noise-skip, not a tax feature: bin the line so it cannot become a"
+  ['src-tauri/src/geometry.rs', '4f63fd3e8ebd', 1], // "// 3. Document Summary & Footers (e.g. \"TOTAL HT\", \"TOTAL TTC\", \"NET A"
+  ['src-tauri/src/geometry.rs', '566ea49bb68f', 1], // "// noise-skip, not a tax feature: the branch excludes summary rows fro"
+  ['src-tauri/src/geometry.rs', 'd4f63c1c451d', 1], // "// product rows and bins their amounts; it models no tax."
+  ['src-tauri/src/geometry.rs', '7e27877bbb7b', 1], // "\"TVA 0% : 0,00 DA\","
   // src-tauri/src/lib.rs
-  'src-tauri/src/lib.rs:1048',
-  'src-tauri/src/lib.rs:1622',
-  'src-tauri/src/lib.rs:1626',
-  'src-tauri/src/lib.rs:1636',
-  'src-tauri/src/lib.rs:1640',
+  ['src-tauri/src/lib.rs', '57d492f53c2f', 1], // "subtotal REAL NOT NULL, tax REAL DEFAULT 0, discount_total REAL DEFAUL"
+  ['src-tauri/src/lib.rs', '2e831b29ec31', 1], // "// v108 — Phase 1b-i: drop the POS `transactions.tax` column."
+  ['src-tauri/src/lib.rs', 'f251918120b9', 1], // "// measured `tax != 0` = 0 on the live DB and the merchant remote"
+  ['src-tauri/src/lib.rs', '1c01617b4e1a', 1], // "description: \"Phase 1b-i: drop transactions.tax (no-TVA product)\","
+  ['src-tauri/src/lib.rs', '82a49c6c7148', 1], // "ALTER TABLE transactions DROP COLUMN tax;"
   // src-tauri/src/commands.rs
-  'src-tauri/src/commands.rs:199',
-  'src-tauri/src/commands.rs:441',
+  ['src-tauri/src/commands.rs', '0ca9522465ad', 1], // "/// only, never a tax). Optional for backward compatibility."
+  ['src-tauri/src/commands.rs', '09f07c23b833', 1], // "// physical shipping/handling fee — never a tax."
   // src-tauri/src/emergency_export.rs
-  'src-tauri/src/emergency_export.rs:87',
-  'src-tauri/src/emergency_export.rs:983',
+  ['src-tauri/src/emergency_export.rs', '19586c1e3697', 1], // "/// natural person. Retention duties are satisfied by amount, date, ta"
+  ['src-tauri/src/emergency_export.rs', '73cf1bf84c96', 1], // "// No `tax` value: the column is dropped (migration 108). The fixture'"
   // src-tauri/src/gate.rs
-  'src-tauri/src/gate.rs:6',
-  'src-tauri/src/gate.rs:68',
-  'src-tauri/src/gate.rs:69',
-  'src-tauri/src/gate.rs:186',
-  'src-tauri/src/gate.rs:187',
-  'src-tauri/src/gate.rs:269',
-  'src-tauri/src/gate.rs:270',
+  ['src-tauri/src/gate.rs', 'e31d161922fc', 1], // "//! (no tax term: Phase 1b-i / Addendum B removed the reported-tax pas"
+  ['src-tauri/src/gate.rs', 'dc47b28bfe1e', 1], // "// Phase 1b-i (Addendum B): the reported-tax passthrough is DELETED. F"
+  ['src-tauri/src/gate.rs', 'c37489abf5ca', 1], // "// stays — freight is a real fee, not a tax."
+  ['src-tauri/src/gate.rs', '4e851d37b8db', 1], // "// NO-TVA PRODUCT (Gate Addendum A + Phase 1b-i / Addendum B): there i"
+  ['src-tauri/src/gate.rs', 'd540d9479aaa', 1], // "// reported-tax term at all — the declared grand total is reconciled a"
+  ['src-tauri/src/gate.rs', 'cc6413ea9a38', 1], // "// freight ONLY — there is no tax passthrough to feed. A reported tota"
+  ['src-tauri/src/gate.rs', 'ed3128c9dfef', 1], // "// that still carries a tax-sized gap must surface as a delta, not be"
   // src-tauri/src/import/dst_simulator.rs
-  'src-tauri/src/import/dst_simulator.rs:15',
-  'src-tauri/src/import/dst_simulator.rs:403',
-  'src-tauri/src/import/dst_simulator.rs:404',
-  'src-tauri/src/import/dst_simulator.rs:405',
-  'src-tauri/src/import/dst_simulator.rs:417',
-  'src-tauri/src/import/dst_simulator.rs:424',
-  'src-tauri/src/import/dst_simulator.rs:443',
-  'src-tauri/src/import/dst_simulator.rs:445',
-  'src-tauri/src/import/dst_simulator.rs:450',
-  'src-tauri/src/import/dst_simulator.rs:779',
-  'src-tauri/src/import/dst_simulator.rs:857',
-  'src-tauri/src/import/dst_simulator.rs:889',
-  'src-tauri/src/import/dst_simulator.rs:890',
-  'src-tauri/src/import/dst_simulator.rs:917',
-]);
+  ['src-tauri/src/import/dst_simulator.rs', '685ff947bbc6', 1], // "//! - Zero-Tax Compliance: strictly Hors-Taxe (HT), zero VAT/TVA schem"
+  ['src-tauri/src/import/dst_simulator.rs', 'e74d23623707', 1], // "/// Oracle 4: Zero-Tax Compliance Oracle"
+  ['src-tauri/src/import/dst_simulator.rs', '1d64c0d641b4', 1], // "/// Invariant: Strictly Hors-Taxe (HT), zero VAT/TVA columns in databa"
+  ['src-tauri/src/import/dst_simulator.rs', '5e0c83aaabb3', 1], // "/// and zero tax keys in sync_outbox payloads."
+  ['src-tauri/src/import/dst_simulator.rs', 'd12830549c39', 1], // "if lower_sql.contains(\" tva \")"
+  ['src-tauri/src/import/dst_simulator.rs', '7e603ca89ecc', 1], // "\"Table '{}' contains forbidden VAT/tax column in schema: {}\","
+  ['src-tauri/src/import/dst_simulator.rs', 'bd660594951f', 1], // "if lower_k == \"tva\""
+  ['src-tauri/src/import/dst_simulator.rs', 'dd7a871abbe6', 1], // "|| lower_k == \"tax\""
+  ['src-tauri/src/import/dst_simulator.rs', '599f9f6501b7', 1], // "\"Forbidden tax key '{}' found in outbox payload: {}\","
+  ['src-tauri/src/import/dst_simulator.rs', '03e707acf129', 1], // ".unwrap_or_else(|e| panic!(\"Iter {}: Zero-Tax Invariant violated: {}\","
+  ['src-tauri/src/import/dst_simulator.rs', '48d282e3bdad', 1], // "// Verify Zero-Tax Compliance Oracle"
+  ['src-tauri/src/import/dst_simulator.rs', 'f43411fe9a6e', 1], // "// Adversarial input with \"TVA\" / \"Tax\" mentioned in raw text"
+  ['src-tauri/src/import/dst_simulator.rs', '9996a5003a7c', 1], // "let csv = \"Désignation;Prix Vente HT;TVA 19%;Prix TTC;Quantité\\nCharge"
+  ['src-tauri/src/import/dst_simulator.rs', 'c881d8df3dfd', 1], // "// Verify that price saved is strictly Hors-Taxe (1800 or parsed HT) a"
+];
+
 
 function walk(dir, out = []) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -309,33 +310,51 @@ function walk(dir, out = []) {
   return out;
 }
 
-const files = [...walk(path.join(ROOT, 'src')), path.join(ROOT, 'src-tauri/src/geometry.rs'), path.join(ROOT, 'src-tauri/src/lib.rs'), path.join(ROOT, 'src-tauri/src/gate.rs'), path.join(ROOT, 'src-tauri/src/emergency_export.rs')];
+function walkRust(dir, out = []) {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name === 'target' || entry.name === 'target-test') continue;
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) walkRust(full, out);
+    else if (/\.rs$/.test(entry.name)) out.push(full);
+  }
+  return out;
+}
+
+const files = [...walk(path.join(ROOT, 'src')), ...walkRust(path.join(ROOT, 'src-tauri/src'))];
+const anchorKey = (file, text) =>
+  file + '\u0000' + createHash('sha1').update(text.trim()).digest('hex').slice(0, 12);
+const allowance = new Map();
+for (const [file, hash, count] of WHITELIST) {
+  const k = file + '\u0000' + hash;
+  allowance.set(k, (allowance.get(k) ?? 0) + count);
+}
 const stray = [];
 for (const abs of files) {
   const rel = path.relative(ROOT, abs).split(path.sep).join('/');
   const lines = fs.readFileSync(abs, 'utf8').split('\n');
   lines.forEach((text, i) => {
     if (!TAX_RE.test(text)) return;
-    const key = `${rel}:${i + 1}`;
-    if (WHITELIST.has(key)) return;
-    stray.push(`${key} :: ${text.trim().slice(0, 90)}`);
+    const k = anchorKey(rel, text);
+    const left = allowance.get(k) ?? 0;
+    if (left > 0) {
+      allowance.set(k, left - 1);
+      return;
+    }
+    stray.push(`${rel}:${i + 1} :: ${text.trim().slice(0, 90)}`);
   });
 }
-check(`static grep: zero tax identifiers outside the whitelist (${WHITELIST.size} pinned lines)`, stray.length === 0, `\n      ${stray.join('\n      ')}`);
+check(`static grep: zero tax identifiers outside the ${WHITELIST.length}-anchor allowlist`, stray.length === 0, `\n      ${stray.join('\n      ')}`);
 
-// Whitelist hygiene: a stale entry (line moved or deleted) must fail too,
-// otherwise the gate silently loosens over time.
+// Anchor hygiene: an allowance that no live line consumed means the content
+// was edited or deleted - the gate must fail rather than silently loosen.
 const stale = [];
-for (const key of WHITELIST) {
-  const at = key.lastIndexOf(':');
-  const file = key.slice(0, at);
-  const lineNo = Number(key.slice(at + 1));
-  const abs = path.join(ROOT, file);
-  if (!fs.existsSync(abs)) { stale.push(`${key} :: file missing`); continue; }
-  const lineText = fs.readFileSync(abs, 'utf8').split('\n')[lineNo - 1] ?? '';
-  if (!TAX_RE.test(lineText)) stale.push(`${key} :: no tax token there any more`);
+for (const [k, left] of allowance) {
+  if (left > 0) {
+    const [file, hash] = k.split('\u0000');
+    stale.push(`${file} anchor ${hash} unused x${left}`);
+  }
 }
-check(`whitelist entries are all still live (${WHITELIST.size})`, stale.length === 0, `\n      ${stale.join('\n      ')}`);
+check(`allowlist anchors are all still live (${WHITELIST.length})`, stale.length === 0, `\n      ${stale.join('\n      ')}`);
 
 console.log('\n========================================================================');
 console.log(`SUMMARY: ${pass} PASSED, ${fail} FAILED`);
