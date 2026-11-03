@@ -31,6 +31,10 @@ npm run tauri dev      # desktop app with the native core
 | Harness selftest | `node .opencode/skills/e2e-testing/scripts/selftest.mjs` | `137/137 checks passed` |
 | Case ledger | `node .opencode/skills/e2e-testing/scripts/reconcile.mjs` | `RECONCILED 687 active cases` |
 | Boundaries | `npm run test:boundaries` | exit 0 |
+| SQL boundary (renderer writes) | `npm run gate:sql-boundary` | count ≤ baseline (ratchet) |
+| Secrets | `npm run gate:secrets` | `no secret material found` |
+| Licences (shipped) | `npm run gate:licences` | `runtime outside allowlist: 0` |
+| Technician recovery | `npm run test:technician-recovery` | 9/9 |
 
 Hardware- and protocol-level harnesses (dev-only, hermetic, no credentials):
 
@@ -52,6 +56,12 @@ node .opencode/skills/e2e-testing/scripts/run.mjs --spec e2e-tests/specs/50-sec-
 
 `e2e-tests/CASE_INDEX.csv` is the case ledger; verdicts are written only by
 `verdicts.mjs --run <sidecar> --write-index`.
+
+## Dependency inventory
+
+`npm run sbom` writes `docs/sbom.json` (827 packages: runtime + dev) and
+`docs/THIRD_PARTY.md` (shipped only). `npm run gate:licences` fails if a shipped
+package is outside MIT/Apache-2.0/BSD-family or has an unknown licence.
 
 ## Layout
 

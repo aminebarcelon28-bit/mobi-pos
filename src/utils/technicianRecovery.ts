@@ -19,7 +19,50 @@
 
 import { resetPinLockout, recordPinFailure } from './security';
 
-const TECHNICIAN_MASTER_SECRET = 'MOBI-TECH-RESCUE-SECRET-v1-SECURE-KEY';
+/**
+ * SECURITY (2026-11-03): this used to be a constant in the source, which made
+ * every terminal's recovery code computable by anyone with the repository — a
+ * universal manager-PIN backdoor. The secret is now provisioned per install
+ * (technician tool writes it at commissioning) and the lane **fails closed**
+ * when it is absent: no recovery codes can be generated or verified until the
+ * secret exists. Tests and the installer use `provisionTechnicianRecoverySecret`.
+ */
+const RECOVERY_SECRET_KEY = 'mobipos_technician_recovery_secret_v1';
+let provisionedOverride: string | null = null;
+
+/** Installer/test seam: set the per-install recovery secret (>= 16 chars). */
+export function provisionTechnicianRecoverySecret(secret: string): void {
+  const clean = String(secret ?? '').trim();
+  if (clean.length < 16) throw new Error('technician recovery secret must be >= 16 characters');
+  provisionedOverride = clean;
+  try {
+    if (typeof localStorage !== 'undefined') localStorage.setItem(RECOVERY_SECRET_KEY, clean);
+  } catch {
+    /* memory only this session */
+  }
+}
+
+/** True when this install has a recovery secret (the UI hides the lane otherwise). */
+export function technicianRecoveryConfigured(): boolean {
+  return technicianSecret() !== null;
+}
+
+function technicianSecret(): string | null {
+  if (provisionedOverride) return provisionedOverride;
+  try {
+    if (typeof localStorage === 'undefined') return null;
+    const v = localStorage.getItem(RECOVERY_SECRET_KEY);
+    return v && v.length >= 16 ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+function requireTechnicianSecret(): string {
+  const secret = technicianSecret();
+  if (!secret) throw new Error('TECHNICIAN_RECOVERY_NOT_CONFIGURED');
+  return secret;
+}
 const CROCKFORD_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 const ACTIVE_CHALLENGE_KEY = 'mobipos_active_tech_challenge';
 const BURNED_NONCES_KEY = 'mobipos_burned_tech_nonces';
@@ -61,7 +104,7 @@ async function hmacSha256(keyStr: string, message: string): Promise<Uint8Array> 
 }
 
 export async function computeChallengeChecksum(dateStr: string, nonce: string): Promise<string> {
-  const h = await hmacSha256(TECHNICIAN_MASTER_SECRET, `CHALLENGE:${dateStr}:${nonce}`);
+  const h = await hmacSha256(requireTechnicianSecret(), `CHALLENGE:${dateStr}:${nonce}`);
   const view = new DataView(h.buffer, h.byteOffset, h.byteLength);
   const val = view.getUint32(0, false);
   let res = '';
@@ -72,7 +115,7 @@ export async function computeChallengeChecksum(dateStr: string, nonce: string): 
 }
 
 export async function computeTechnicianOtp(dateStr: string, nonce: string): Promise<string> {
-  const h = await hmacSha256(TECHNICIAN_MASTER_SECRET, `RESPONSE:${dateStr}:${nonce}`);
+  const h = await hmacSha256(requireTechnicianSecret(), `RESPONSE:${dateStr}:${nonce}`);
   const view = new DataView(h.buffer, h.byteOffset, h.byteLength);
   const code = view.getUint32(0, false) % 1_000_000;
   return String(code).padStart(6, '0');
@@ -83,6 +126,7 @@ export async function computeTechnicianOtp(dateStr: string, nonce: string): Prom
  * Format: MOBI-XXXX-YYYY (e.g. MOBI-8F2A-W9ET)
  */
 export async function generateTechnicianChallenge(): Promise<string> {
+  if (!technicianRecoveryConfigured()) return '';
   const nonce = randomCrockford(4);
   const dateStr = getUtcDateString(0);
   const chk = await computeChallengeChecksum(dateStr, nonce);
@@ -153,6 +197,13 @@ export async function verifyTechnicianRecoveryCode(
   challenge: string,
   enteredOtp: string
 ): Promise<VerificationResult> {
+  if (!technicianRecoveryConfigured()) {
+    return {
+      ok: false,
+      error:
+        "Récupération technicien non configurée sur ce terminal : un technicien doit provisionner le secret de récupération avant utilisation.",
+    };
+  }
   const cleanChallenge = challenge.trim().toUpperCase();
   const cleanOtp = enteredOtp.trim();
 

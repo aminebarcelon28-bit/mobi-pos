@@ -191,3 +191,17 @@ entirely, so it subsumes steps 3–4 of B.
 - PA-DSS/SSF-style separation of duties for refunds and drawer variance is the
   merchant practice this repo already implements with manager PINs; SEC-01 moves
   the check to the native boundary.
+
+### Gate and current status (2026-11-03)
+
+- **Gate:** `node scripts/check-sql-boundary.mjs` lists every renderer write
+  statement in `src/` (currently **318**), with `--ratchet` failing on any new
+  one and `--fail` reserved for the end state (zero). CI runs the ratchet and the
+  report. The baseline (`scripts/sql-boundary-baseline.json`) may only shrink.
+- **Landed:** the native read-only lane (`src/sql_ro.rs`) with read-only open
+  flags, an authorizer allowlist, single-statement enforcement, row/time caps and
+  credential-table denial; 9 Rust tests and 11 app-path probes.
+- **Not landed:** flipping the renderer pool itself. Boot writes through it, so the
+  switch travels with the migration (the gate is the punch list). Money-path
+  migration stays gated on the latency budget: checkout p95 regression <= 10%,
+  measured on the same machine before/after.

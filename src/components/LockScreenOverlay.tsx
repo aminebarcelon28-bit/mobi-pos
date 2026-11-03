@@ -561,6 +561,11 @@ export const LockScreenOverlay: React.FC = () => {
     const existing = getActiveChallenge();
     const ch = existing || (await generateTechnicianChallenge());
     setRecoveryChallenge(ch);
+    if (!ch) {
+      setRecoveryError(
+        'Récupération technicien non configurée sur ce terminal. Un technicien doit provisionner le secret de récupération.',
+      );
+    }
     setShowTechRecovery(true);
   };
 

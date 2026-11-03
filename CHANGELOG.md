@@ -43,6 +43,24 @@ gate table is recorded in the same ledger.
 - Zero-tax gate converted to content anchors over all of `src-tauri/src`
   (23/23) — a moved line no longer fails, an edited or new one does.
 
+## [c01-rc-10] — 2026-11-03 (`4dd4d0e`)
+
+- **SEC-01 increment 2 step 2a:** native `sql_select_ro` — own connection with
+  `SQLITE_OPEN_READONLY`, authorizer allowlist, single-statement rule, row/time
+  caps, credential tables unreadable. App-path probes + writable controls in spec 92.
+- Persistent read-only connection: 2.8 ms → **0.4 ms** p50 (plugin pool 0.5 ms),
+  no long-lived read transaction.
+- **SQL boundary gate:** `scripts/check-sql-boundary.mjs` lists the 318 renderer
+  write statements, `--ratchet` fails on new ones, `--fail` reserved for the end
+  state; CI runs ratchet + report; baseline may only shrink.
+- **Security fix from the new secrets scan:** the technician recovery secret was a
+  constant in the source — a universal manager-PIN backdoor. It is now provisioned
+  per install and the lane **fails closed** until it exists (9-test regression,
+  including replay-burn and cross-install binding).
+- **Repo pass:** `SECURITY.md`, `OWNER_ACTIONS.md`, SBOM + third-party inventory
+  (`npm run sbom`, `gate:licences`: 27 runtime packages, all permissive), secrets
+  gate (`gate:secrets`), CI wiring.
+
 ## [c01-rc-6] — 2026-11-03 (`d57ddef`)
 
 - Role-bound IPC (R1) and the session principal in native code.

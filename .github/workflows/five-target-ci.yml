@@ -131,6 +131,23 @@ jobs:
       - name: Mock acquirer contract
         run: npm run test:acquirer
 
+      # SEC-01 / ADR-005: the renderer still writes; the baseline may only
+      # shrink. Flip to `--fail` when the write migration lands.
+      - name: SQL boundary ratchet (renderer writes may not grow)
+        run: node scripts/check-sql-boundary.mjs --ratchet
+
+      - name: SQL boundary report (visibility)
+        run: node scripts/check-sql-boundary.mjs
+
+      - name: Secrets scan (tracked files)
+        run: npm run gate:secrets
+
+      - name: Licence allowlist (shipped deps only)
+        run: npm run gate:licences
+
+      - name: Technician recovery lane (no secret in source)
+        run: npm run test:technician-recovery
+
       - name: Harness selftest
         run: node .opencode/skills/e2e-testing/scripts/selftest.mjs
 

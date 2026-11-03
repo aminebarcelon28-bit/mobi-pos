@@ -143,7 +143,13 @@
     "gen:arabic-cp864": "node scripts/gen-arabic-cp864.mjs",
     "test:sync-two-device": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types tests/sync-pipeline/two-device-faults.mts",
     "test:numbering": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_numbering.mts",
-    "test:two-instance": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types tests/harness/two-instance/run.mjs"
+    "test:two-instance": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types tests/harness/two-instance/run.mjs",
+    "gate:sql-boundary": "node scripts/check-sql-boundary.mjs --ratchet",
+    "gate:sql-boundary:report": "node scripts/check-sql-boundary.mjs",
+    "test:technician-recovery": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_technician_recovery.mts",
+    "gate:secrets": "node scripts/check-secrets.mjs",
+    "sbom": "node scripts/gen-sbom.mjs",
+    "gate:licences": "node scripts/gen-sbom.mjs --check"
   },
   "dependencies": {
     "@libsql/client": "^0.18.0",
