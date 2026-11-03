@@ -32,23 +32,36 @@
 - **Unblocks on approval:** the money gate and its CI jobs. It does **not** by itself make
   `c01-rc-6` ready — the 50-sec reproducibility blocker (HAR-006) must also be cleared.
 
-## HAR-005 — is the design-token ratchet a release criterion? (owner decision)
+## OD-001 (open item) — standing of the already-tagged `c01-rc-5`
 
-- **What:** `node scripts/check-design-tokens.mjs` reports **39 file violations** (24 files over
-  their pinned debt, 15 files absent from the baseline with debt > 0).
-- **Verified provenance:** total debt is **identical** at `c01-rc-5` and `HEAD` (5975 items
-  across 103 files, zero per-file deltas). The baseline was last written 2026-10-16
-  (`d913b4c`); the violating files were changed by later commits (`2193436`, `bdca981`,
-  `1a1f8d1`, `8c1fcf4`, …). Nothing this branch touched is in the violation set.
-- **Gate wiring:** **not** in `.github/workflows` (neither CI nor release) and **not** in
-  `npm test`; it is reachable only as `npm run test:tokens`.
-- **Decision needed:** (i) declare it non-blocking for `c01-rc-6` (recommended: it is not a
-  recorded release criterion), or (ii) adopt it as a criterion and authorize the remediation
-  lane, or (iii) authorize a baseline refresh — the last would bless 437+ inherited growth items
-  and should not be done casually.
-- **If remediation is later authorized:** per-file mapping only, reviewed against the semantic
-  token families (`surface-*`, `line-*`, `fg`, `muted`, `status-ok/warn/danger`) and re-run
-  `check-contrast`; no blind substitutions.
+- **Fact:** `c01-rc-5` (`51c9c70`) carries the **same** red `check-money-boundary` (58 vs 54;
+  177e6b1 is an ancestor) and a red zero-tax gate (6 sqlPluginAdapter whitelist entries were
+  already stale at that tree). The money gate is a blocking CI job in `five-target-ci.yml`.
+- **Question (not answered by this task):** does `c01-rc-5` stand as-is (retroactive waiver),
+  is it superseded by `c01-rc-6` once green, or should it be withdrawn? Tags must not be moved
+  or deleted without explicit authorization.
+- **No action taken.**
+
+## HAR-007 — re-pin the zero-tax whitelist after line shifts (needs authorization)
+
+- **What:** `node scripts/test_zero_tax.mjs` is **21/23**: the line-pinned whitelist is stale.
+- **Provenance:** six `src/db/sqlPluginAdapter.ts` entries were already stale at `c01-rc-5`
+  (pinned 2417/2419/4000/4001/4013/4014; actual tokens 2420/2422/4003/4004/4016/4017).
+  Five `src-tauri/src/lib.rs` entries went stale **because of R1**: the guards added at
+  `lib.rs:391` (+3) and `lib.rs:831` (+6) shift every later line by +9 (pinned
+  1048/1622/1626/1636/1640; actual 1057/1631/1635/1645/1649).
+- **Exact change (11 line numbers, no content change, no new allowances):**
+  sqlPluginAdapter +3 on the six entries; lib.rs +9 on the five entries.
+- **Why it needs authorization:** it is an allowlist adjustment, which the directive reserves.
+  It is bookkeeping repair, not a relaxation: the same 72 tokens remain whitelisted.
+- **Alternative:** leave the gate red (it blocks `npm test` → CI just like the money gate).
+
+## HAR-005 — design-token ratchet — DECIDED (D3): not a release criterion
+
+- Recorded owner decision (2026-11-03): **not** a release criterion for `c01-rc-6`; record as
+  inherited debt; **no baseline refresh**. No further action on this candidate.
+- Kept here for traceability: 39 files (24 over baseline, 15 newer than the 2026-10-16
+  baseline), debt identical at `c01-rc-5` and HEAD (5975 items, zero per-file deltas).
 
 ## HAR-006 — authorize the E2E unlock-wait fix and a 3× re-run (verification blocker)
 
@@ -75,6 +88,53 @@
   the two static-gate blockers this directive scopes, which is why it is not applied.
 - **Note:** the 3.1 s unlock latency is also a product-performance observation for low-end
   hardware; it does not weaken any security guarantee (the verdict and principal are correct).
+
+## HAR-008 — SHF-05 is wall-clock dependent (diagnosed; needs authorization)
+
+- **Symptom:** `40-shf` = 11/12 in three consecutive runs; the failing case is **SHF-05**, at
+  `40-shf-shifts.e2e.ts:3545`, `expect((closedMs - openedMs) / 3600000).toBeGreaterThan(8)`.
+- **Cause:** the test backdates the open to **yesterday 23:50 local** (`Date.now() - 24h` then
+  `setHours(23,50)`). It only has an >8 h span when the suite runs after ~07:50 local. The three
+  runs at ~01:15 local saw a 1.43 h span. The earlier 13:28 run passed; SHF-13 (the case that
+  failed before the harness fix) is green in all three runs and passes standalone/trio.
+- **Not a product defect:** the shift really does span midnight; only the harness premise assumes
+  a time of day. No product assertion is implicated.
+- **Proposed change (not applied — needs authorization):** backdate by **two** days
+  (`Date.now() - 2*24*3600*1000`, keep `setHours(23,50)`), so the span is ~25 h at every hour;
+  the `> 8` assertion and the case intent (crossing midnight) stay untouched. Alternative: run
+  this suite only in the 08:00–23:59 window (operationally brittle).
+- **Why it needs authorization:** it edits a test's setup. It is a premise fix, not an assertion
+  change.
+
+## HAR-009 — owner-requested suite runs: five PASS→FAIL deltas, all test-side
+
+The twelve suites (30–34, 51, 60, 65, 66, 70, 71, 75) ran on binary `7ac204d`. `delta.mjs`
+found **no regressions** in 31/32/33/34/71 and **two improvements** in 75 (LOY-04 FAIL→PASS,
+LOY-06 PARTIAL→PASS). The only PASS→FAIL deltas and their isolated re-runs:
+
+| Case | Full suite | Isolated | Classification |
+|---|---|---|---|
+| REF-19 (30) | `refund-pin` field never mounted | **PASS** | order-dependent state leakage (flake) |
+| IDN-12 (60) | mobile shell accepted the old PIN | **PASS** | order-dependent (mobile-shell state from earlier cases) |
+| DRW-08 (65) | `shift-open-dialog` never appeared | **PASS** | order-dependent (UI state) |
+| DRW-24 (66) | reconciliation step never appeared / click intercepted | **FAIL** | `element click intercepted` on `shift-blind-input` — overlay/actionability race |
+| CRM-02 (70) | expected 0555000000, got 0550123456 | **FAIL** | test-authoring bug: fixture types `+213 550 12 34 56`/`00213 550 12 34 56` but asserts `0555000000`; also trips **G-23** (duplicate phone), so it cannot pass as written |
+
+- **No product regression attributable to R1** was found in these suites. The three order-dependent
+  cases and the two deterministic test-side cases are evidence-infrastructure work, not rc-6
+  product changes.
+- **Unproven baselines:** `CASE_INDEX` marks IDN-12, DRW-08, DRW-24 and CRM-02 PASS **without a
+  `verdict_run`**. They were never stamped by a run; the new failures are real measurements against
+  an unproven baseline, which is why no verdict was written.
+- **51:** SEC-18/19/20 fail by design (catalogued P2 gaps; the index already says FAIL). SEC-13/17
+  are N/A via explicit VERDICT lines (the event stream also contains PASS — a tooling conflict,
+  reported by `verdicts.mjs`).
+- **60/65/66/75:** the remaining failures are already-FAIL catalogue rows or N/A→FAIL catalogue
+  mismatches (the specs execute cases the index marks N/A).
+- **Recommended (needs authorization):** (a) fix CRM-02's fixture/expectation and reconcile it with
+  G-23; (b) add a clear-toasts/wait-for-actionability step before `shift-blind-input` in DRW-24;
+  (c) isolate or reset the mobile-shell state in IDN-12; (d) make the REF-19/DRW-08 modals wait on
+  state. None is product code.
 
 ## HAR-002 — physical ESC/POS printer session (R4)
 

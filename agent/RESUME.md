@@ -1,31 +1,25 @@
 # RESUME — c01-rc6 work
 
-- **Phase:** release disposition (2026-11-02). **Disposition: BLOCKED — owner decision (HAR-001).**
-- **Baseline:** `c01-rc-5` = `51c9c70`. Branch: `c01-rc6-work`. R1 commit: `9d8ab66`.
-- **R1 (SEC-01): DONE, PASS** — native session principal + deny-by-default policy table
-  (`docs/adr/ADR-001-native-session-principal.md`). 50-sec **10/10**, assertion untouched.
-  `cargo test --lib` **452/452**. Mutation-proven coverage tests. 40-shf 12/12; 30 12/12;
-  31 15/15; 32 15/15; 33 18/18; 34 17/17. tsc clean. selftest 137/137. Register 68 rows / 0 OPEN.
-  Reconcile **RECONCILED 687** (PASS 222, non-flaky 221, FAIL 212, BLOCKED 117, N/A 116,
-  PASS-PARTIAL 20, FLAKY 1).
-- **Release disposition (E-0153):** both static gates reproduce red; the money gate is
-  CI-blocking (`npm test` → `test:boundaries` → `check-money-boundary`, and the isolated
-  `audit-money-gates` job). Provenance corrected: the 4 extra hits arrived with **`177e6b1`**,
-  an ancestor of `c01-rc-5`, not with `8c1fcf4`; the money gate is red at the existing candidate
-  too. Design-token debt is identical at rc-5 and HEAD (39 inherited violations) and the gate is
-  not wired into CI or `npm test`.
-- **Reproducibility (E-0154):** 50-sec is **FLAKY**, not green: 4/10 twice and 0/1 alone, while
-  `repeat-run` says PASS→FAIL→FAIL for SEC-01/02/03/04/06/09. Measured cause: native `pin_verify`
-  takes 3.09–3.21 s here vs a 2.5 s overlay budget in `unlockViaProfile`; the unlock itself
-  succeeds (audit row). 40-shf 11/12 (SHF-13, reconciliation step). Product source is identical
-  to the green runs; the refund specs do not use that helper.
-- **Next action:** owner decisions HAR-001 (money registry), HAR-006 (authorize the unlock-wait
-  harness fix + 3× re-run), HAR-005 (design-token criterion). Only after both HAR-001 and the
-  re-runs can the candidate be assessed for a tag.
-- **Then:** R2 (SYN-02/04/26/27), R3 (6 PASS-SIM cases against the loopback gateway, 10 blocked
-  on HAR-003), R4 (10 SW cases via a byte-capture sink; HW kit per `agent/triage/26-rcp.md`),
-  R5 (G-21/REF-86).
-- **Known transient classes (logged):** `database is locked` on `resetData` right after a build
-  → `npm run e2e:clean`; reports-gate mount race (fixed in 31 by waiting on state);
-  customers-dialog race under load (REF-67, isolated pass).
-
+- **Phase:** release disposition + owner-requested verification (2026-11-03).
+- **Baseline:** `c01-rc-5` = `51c9c70`; branch `c01-rc6-work`; last commit `7ac204d` (+ uncommitted
+  harness edits to specs 50/51, and the evidence/doc updates being written now).
+- **Disposition:** **BLOCKED — OWNER DECISION** (HAR-001 money registry; HAR-007 zero-tax re-pin;
+  HAR-008 SHF-05 premise). Tag `c01-rc-6` not created.
+- **R1/SEC-01:** PASS; **50-sec now STABLE 10/10 ×3** after the state-based unlock wait (E-0155).
+  `cargo 452/452`, tsc clean, selftest 137/137, register 68/0 OPEN, reconcile 687.
+- **D1 (money wrappers):** 2996/2998 redundant (12/12 identical across fractional-cent, negative,
+  repeated-qty, line-to-total; model run in `e2e-tests/results/d1_wrapper_equivalence.mts`); 2997
+  and 3001 are not (250.55 → 251 vs 250.55). B (cap 58) vs B′ (remove 2, cap 56) awaiting the owner;
+  analysis in `agent/D1-money-wrapper-analysis.md`.
+- **D2:** all conditions met (E-0155) — (a) state wait in 50/51; (b) negative control passes;
+  (c) SHF-13 green 3/3; (d) rc-5 2.36–2.45 s vs HEAD 2.46–2.50 s ≈ +29 ms (noise). 50-sec is
+  **STABLE 10/10 ×3**.
+- **D3:** design tokens **not** a release criterion; inherited debt, no baseline refresh.
+- **Requested runs (E-0156):** 31/32/33/34/71 clean; 75 two improvements; the only PASS→FAIL deltas
+  are test-side (REF-19/IDN-12/DRW-08 order-dependent, DRW-24 actionability, CRM-02 test-authoring).
+  No R1 product regression.
+- **40-shf:** 11/12 ×3 — SHF-05 wall-clock premise (HAR-008).
+- **New red gate:** `test_zero_tax` 21/23 — 6 sqlPluginAdapter entries stale since rc-5 + 5 lib.rs
+  entries shifted +9 by R1 (HAR-007; exact re-pin prepared, not applied).
+- **"guards 24/24":** only `node scripts/check-contrast.mjs` reports exactly 24/24.
+- **Next:** commit the harness fix + evidence, then owner decisions (D1 B/B′, HAR-001/007/008/009).

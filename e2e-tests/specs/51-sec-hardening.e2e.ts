@@ -3181,46 +3181,45 @@ describe('SEC - device, data & operational hardening (batch 10 / part 2)', () =>
     await browser.pause(350);
     await typeReal(await $(tid('login-pin-input')), pin, false);
     await browser.pause(250);
-    const cleared = async (): Promise<boolean> =>
-      browser
-        .waitUntil(async () => !(await $(tid('lock-screen')).isDisplayed().catch(() => false)), {
-          timeout: 2500,
-          interval: 150,
-        })
-        .then(() => true)
-        .catch(() => false);
+    const lockVisible = async (): Promise<boolean> =>
+      (await $(tid('lock-screen')).isDisplayed().catch(() => false));
+    // Click via JS. The driver's actionability middleware re-checks the
+    // button while React re-renders it (run 02: "did not become
+    // interactable" after a submit that had actually succeeded), and the
+    // button is only mounted at >= 6 digits on manager pads (:102-104).
+    const jsClickSubmit = async (): Promise<boolean> =>
+      (await browser.execute(() => {
+        const b = document.querySelector('[data-testid="login-submit"]') as HTMLButtonElement | null;
+        if (!b) return false;
+        b.click();
+        return true;
+      })) as boolean;
     // Cashier profiles auto-submit at their fixed 4-digit length
     // (LockScreenOverlay.tsx:885-887); manager profiles (6-8 digits) always
-    // confirm with Valider.
-    let done = await cleared();
-    if (!done && (await $(tid('lock-screen')).isDisplayed().catch(() => false))) {
-      // Click via JS. The driver's actionability middleware re-checks the
-      // button while React re-renders it (run 02: "did not become
-      // interactable" after a submit that had actually succeeded), and the
-      // button is only mounted at >= 6 digits on manager pads (:102-104).
-      const jsClickSubmit = async (): Promise<boolean> =>
-        (await browser.execute(() => {
-          const b = document.querySelector('[data-testid="login-submit"]') as HTMLButtonElement | null;
-          if (!b) return false;
-          b.click();
-          return true;
-        })) as boolean;
+    // confirm with Valider. Wait on STATE, never on a fixed budget: the native
+    // verify (OS keyring + Argon2id) measured 2.36-3.21 s on this host, so a
+    // 2.5 s probe is not a verdict. Either the overlay clears (cashier
+    // auto-submit) or the manager submit button mounts. A DENIED PIN produces
+    // neither, so the wait below times out and the test still fails.
+    await browser.waitUntil(
+      async () => !(await lockVisible()) || (await $(tid('login-submit')).isDisplayed().catch(() => false)),
+      {
+        timeout: 20000,
+        interval: 150,
+        timeoutMsg: `neither unlock nor submit mounted for ${profileId} (denied PIN or no session change)`,
+      },
+    );
+    if (await lockVisible()) {
       const clicked = await jsClickSubmit();
       if (!clicked) {
-        throw new Error(
-          `login-submit is not rendered for ${profileId}: a manager-pad profile only mounts it at >= 6 digits (LockScreenOverlay.tsx:102-104), so a 4-digit credential cannot be submitted on that pad`,
-        );
+        throw new Error(`login-submit reported displayed but missing for ${profileId}`);
       }
-      done = await cleared();
-      if (!done) {
-        await browser.pause(500);
-        await jsClickSubmit();
-      }
+      await browser.waitUntil(async () => !(await lockVisible()), {
+        timeout: 20000,
+        interval: 150,
+        timeoutMsg: `lock-screen did not clear after unlocking as ${profileId}`,
+      });
     }
-    await browser.waitUntil(async () => !(await $(tid('lock-screen')).isDisplayed().catch(() => false)), {
-      timeout: 20000,
-      timeoutMsg: `lock-screen did not clear after unlocking as ${profileId}`,
-    });
     await browser.pause(600);
   }
 
