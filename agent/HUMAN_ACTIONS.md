@@ -186,3 +186,16 @@ LOY-06 PARTIAL→PASS). The only PASS→FAIL deltas and their isolated re-runs:
   (online block reservation) converges to it; option C (keep timestamp+random + unique index) has
   no fiscal continuity. Full analysis: `agent/dossiers/D-SYN-numbering-ordering.md`.
   On approval: migration + per-device series + unique index + two-instance offline-uniqueness case.
+
+  **Status 2026-11-03 — implemented PROVISIONALLY (decided device-series).** The seam is
+  shipped: `src/utils/numbering.ts` mints `PREFIX-<SERIES>-<000001>` from a continuous
+  per-terminal counter (ADR-006), the legacy timestamp scheme stays selectable, two terminals
+  are proven disjoint (spec SYN-02 PASS + the two-instance harness), and a missing durable
+  counter degrades honestly instead of claiming continuity. `SYN-02` is stamped PASS against
+  this contract.
+
+  **Still needed from you (fiscal, pre-production):** confirm (a) the printed layout and
+  whether the series must be registered with the tax administration, (b) whether the series
+  resets annually, (c) whether one merchant series is expected instead. Then: move the counter
+  into the native DB transaction that writes the sale and add `UNIQUE(receipt_number)` once
+  every writer uses the seam.
