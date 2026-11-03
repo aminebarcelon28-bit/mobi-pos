@@ -70,9 +70,15 @@ async function loadModule() {
  * @param {Record<string, unknown>} settings   the app's receipt settings
  * @returns {Promise<number[]>} the exact byte array handed to the spooler
  */
-export async function buildReceiptBytes(transaction, settings) {
+export async function loadEscposModule() {
+  return await loadModule();
+}
+
+export async function buildReceiptBytes(transaction, settings, builderOptions = null) {
   const mod = await loadModule();
-  const bytes = mod.buildReceiptBuffer(transaction, settings ?? {});
+  const bytes = builderOptions
+    ? mod.buildReceiptBuffer(transaction, settings ?? {}, undefined, undefined, builderOptions)
+    : mod.buildReceiptBuffer(transaction, settings ?? {});
   return Array.from(bytes);
 }
 

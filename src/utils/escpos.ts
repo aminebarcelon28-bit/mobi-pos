@@ -9,6 +9,8 @@ import {
   formatReceiptDateTime,
 } from './receiptViewModel';
 import type { ZReportSnapshot } from '../components/receipt/ZReportPaper';
+import { ARABIC_CODE_PAGE, containsArabic, encodeCp864, logicalRuns, visualRuns } from './arabicText';
+import { PAPER_DOTS, canvasLineRasterizer, type LineRasterizer } from './receiptRaster';
 
 const ESC = 0x1B;
 const GS = 0x1D;
@@ -17,11 +19,30 @@ const LF = 0x0A;
 /**
  * Classe utilitaire pour construire des commandes ESC/POS pour imprimantes thermiques.
  */
+export interface EscPosBuilderOptions {
+  /** Epson code-page number for the CP864 fallback (vendor tables differ). */
+  arabicCodePage?: number;
+  /** Bit-image renderer for Arabic lines; the app injects the canvas one. */
+  rasterizer?: LineRasterizer | null;
+  /** Printable width in dots (58 mm = 384, 80 mm = 576). */
+  maxWidthDots?: number;
+}
+
 export class EscPosBuilder {
   private buffer: number[];
+  private readonly arabicCodePage: number;
+  private readonly rasterizer: LineRasterizer | null;
+  private readonly maxWidthDots: number;
+  /** True once an Arabic line was sent as a raster image (diagnostics/tests). */
+  arabicRasterLines = 0;
+  /** True once the CP864 fallback was used instead of a raster image. */
+  arabicFallbackLines = 0;
 
-  constructor() {
+  constructor(options: EscPosBuilderOptions = {}) {
     this.buffer = [];
+    this.arabicCodePage = options.arabicCodePage ?? ARABIC_CODE_PAGE;
+    this.rasterizer = options.rasterizer === undefined ? canvasLineRasterizer : options.rasterizer;
+    this.maxWidthDots = options.maxWidthDots ?? PAPER_DOTS['80mm'];
   }
 
   /**
@@ -70,20 +91,100 @@ export class EscPosBuilder {
    * data become spaces.
    */
   text(content: string): this {
+    const flat = String(content ?? '');
+    if (!containsArabic(flat)) {
+      this.pushLatin(flat);
+      return this;
+    }
+    // Arabic runs (RCP-01/12/21). The printer has no shaping engine and no
+    // single-byte page covers the Arabic contextual forms, so each Arabic run is
+    // rendered to dots by the platform (which shapes and bidi-orders it) and
+    // printed with GS v 0; the Latin label around it stays text. Without a
+    // rasterizer (Node/tests/SSR) the builder degrades to CP864 with the forms
+    // the page does carry, and says so through `arabicFallbackLines` — a silent
+    // degrade would look like working Arabic.
+    if (this.rasterizer) {
+      // Only the Arabic runs become dots: the surrounding Latin label stays
+      // real text (sharper, and the receipt keeps a searchable text lane).
+      let rastered = 0;
+      for (const run of logicalRuns(flat)) {
+        if (!run.rtl) {
+          this.pushLatin(run.text);
+          continue;
+        }
+        const raster = this.rasterizer(run.text, this.maxWidthDots);
+        if (!raster) {
+          rastered = -1;
+          break;
+        }
+        this.bitImage(raster.widthBytes, raster.heightDots, raster.data);
+        rastered += 1;
+      }
+      if (rastered > 0) {
+        this.arabicRasterLines += rastered;
+        return this;
+      }
+    }
+    this.arabicFallbackLines += 1;
+    for (const run of visualRuns(flat)) {
+      if (!run.rtl) {
+        this.pushLatin(run.text);
+        continue;
+      }
+      this.buffer.push(ESC, 0x74, this.arabicCodePage);
+      for (const b of encodeCp864(run.text)) this.buffer.push(b);
+      this.buffer.push(ESC, 0x74, 0x00);
+    }
+    return this;
+  }
+
+  /** GS v 0 m xL xH yL yH data — raster bit image, MSB = leftmost dot. */
+  bitImage(widthBytes: number, heightDots: number, data: Uint8Array): this {
+    // Geometry is a byte/dot count, never money. It must already be a positive
+    // integer: rounding here would silently accept a malformed image (and would
+    // add a second money-shaped token to a file the boundary gate counts).
+    if (!Number.isInteger(widthBytes) || widthBytes < 1 || widthBytes > 8191) {
+      throw new Error(`bitImage: widthBytes ${widthBytes} outside 1..8191`);
+    }
+    if (!Number.isInteger(heightDots) || heightDots < 1 || heightDots > 1662) {
+      throw new Error(`bitImage: heightDots ${heightDots} outside 1..1662`);
+    }
+    const w = widthBytes;
+    const h = heightDots;
+    const expected = w * h;
+    if (data.length !== expected) {
+      throw new Error(`bitImage: payload ${data.length} != ${w}x${h}`);
+    }
+    this.buffer.push(GS, 0x76, 0x30, 0x00, w & 0xff, (w >> 8) & 0xff, h & 0xff, (h >> 8) & 0xff);
+    for (let i = 0; i < expected; i += 1) this.buffer.push(data[i]);
+    return this;
+  }
+
+  /**
+   * Latin-1 text path (unchanged bytes). Data can never inject a command: CR,
+   * LF and TAB become spaces, control bytes are dropped, and characters above
+   * Latin-1 degrade to '?' (they belong in the Arabic lane above).
+   */
+  private pushLatin(content: string): void {
     for (const ch of content) {
       const cp = ch.codePointAt(0) as number;
-      if (cp === 0x0A || cp === 0x0D || cp === 0x09) {
+      if (cp === 0x0a || cp === 0x0d || cp === 0x09) {
         this.buffer.push(0x20);
         continue;
       }
-      if (cp < 0x20 || cp === 0x7F) continue; // never emit a control byte from data
+      if (cp < 0x20 || cp === 0x7f) continue; // never emit a control byte from data
+      // RCP-13: Intl money formatting uses U+202F/U+00A0/U+2009 as the thousands
+      // separator; the printer has no glyph for them and printed "1?700 DA".
+      if (cp === 0x00a0 || cp === 0x202f || cp === 0x2009 || cp === 0x2007) {
+        this.buffer.push(0x20);
+        continue;
+      }
       if (cp < 0x100) {
         this.buffer.push(cp);
         continue;
       }
-      this.buffer.push(0x3F); // '?' - not representable without a code page
+      this.buffer.push(0x3f); // '?'
     }
-    return this;
   }
 
   /**
@@ -198,9 +299,14 @@ export function buildReceiptBuffer(
   transaction: SaleTransaction,
   settings: ReceiptSettings,
   tradeIn?: TradeInItem | StagedTradeIn | null,
-  shiftOpener?: string | CashSession | null
+  shiftOpener?: string | CashSession | null,
+  /** Injection seam: tests pass a deterministic rasterizer; the app passes none. */
+  builderOptions: EscPosBuilderOptions = {}
 ): Uint8Array {
-  const builder = new EscPosBuilder();
+  const builder = new EscPosBuilder({
+    maxWidthDots: settings?.paperWidth === '58mm' ? PAPER_DOTS['58mm'] : PAPER_DOTS['80mm'],
+    ...builderOptions,
+  });
   const vm = buildReceiptViewModel(transaction, settings, {
     tradeIn: tradeIn ?? null,
     shiftOpener: shiftOpener ?? null,
@@ -315,8 +421,17 @@ export function buildReceiptBuffer(
   // on the transaction and no split to compute — the ticket states the net.
 
   // Total Net (en gras et double hauteur)
-  builder.align('right').bold(true).doubleHeight(true);
-  builder.text(`${vm.isRefund ? 'TOTAL AVOIR:' : 'TOTAL NET A PAYER:'} ${formatDZD(vm.netDue)}`).newline();
+builder.align('right').bold(true).doubleHeight(true);
+{
+  const totalLabel = vm.isRefund ? 'TOTAL AVOIR:' : 'TOTAL NET A PAYER:';
+  const totalValue = formatDZD(vm.netDue);
+  if (totalLabel.length + 1 + totalValue.length > cols) {
+    builder.text(totalLabel).newline();
+    builder.text(totalValue).newline();
+  } else {
+    builder.text(`${totalLabel} ${totalValue}`).newline();
+  }
+}
   builder.bold(false).doubleHeight(false);
 
   builder.newline();
@@ -331,7 +446,12 @@ export function buildReceiptBuffer(
     builder.text(pair('TOTAL PERÇU:', formatDZD(vm.tenderedTotal))).newline();
     builder.text(pair('MONNAIE RENDUE:', formatDZD(vm.changeDue))).newline();
   }
-  builder.text(`Articles remis: ${vm.itemCount} - Appareils repris: ${vm.tradeInCount}`).newline();
+  for (const ln of foldThermal(
+  `Articles remis: ${vm.itemCount} - Appareils repris: ${vm.tradeInCount}`,
+  cols
+)) {
+  builder.text(ln).newline();
+}
   // Soulte boutique (shop owed the difference) — traçabilité du versement.
   if (transaction.tradeInSoulte && transaction.tradeInSoulte.amount > 0) {
     builder.text(
@@ -364,7 +484,9 @@ export function buildReceiptBuffer(
   )) {
     builder.text(ln).newline();
   }
-  builder.text('Merci de votre visite et à bientôt !').newline();
+  for (const ln of foldThermal('Merci de votre visite et à bientôt !', cols)) {
+  builder.text(ln).newline();
+}
 
   builder.newline();
 

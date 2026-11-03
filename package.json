@@ -136,7 +136,11 @@
     "test:milestone-ranges": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_milestone_ranges.mts",
     "test:loyalty-backing": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_loyalty_backing.mts",
     "test:syn-faults": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_syn_faults.mjs",
-    "test:acquirer": "node scripts/test_acquirer_contract.mjs"
+    "test:acquirer": "node scripts/test_acquirer_contract.mjs",
+    "test:escpos": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_escpos_sink.mjs",
+    "escpos:sink": "node scripts/escpos_sink.mjs",
+    "escpos:kit": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/escpos_hardware_kit.mjs",
+    "gen:arabic-cp864": "node scripts/gen-arabic-cp864.mjs"
   },
   "dependencies": {
     "@libsql/client": "^0.18.0",

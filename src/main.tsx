@@ -131,6 +131,23 @@ if (import.meta.env.VITE_E2E === '1') {
       }
       return out;
     },
+    /**
+     * Receipt bytes from the REAL builder (E2E flavor only). RCP specs need the
+     * bytes the app would send, and the canvas exists only here: a host-side
+     * rebuild in Node has no text stack and would exercise the CP864 fallback
+     * instead of the Arabic raster lane. Returns a plain number[] (IPC-friendly).
+     */
+    buildReceipt: async (
+      tx: Record<string, unknown>,
+      settings: Record<string, unknown>,
+      opts?: { raster?: 'canvas' | 'off' },
+    ): Promise<number[]> => {
+      const { buildReceiptBuffer } = await import('./utils/escpos');
+      const bytes = buildReceiptBuffer(tx as never, settings as never, undefined, undefined, {
+        rasterizer: opts?.raster === 'off' ? null : undefined,
+      });
+      return Array.from(bytes);
+    },
   };
 }
 
