@@ -1,19 +1,20 @@
 /**
- * SEC-01 increment 2, step 2a — the native read-only lane, proven from the app.
+ * SEC-01 increment 2 — hardened native read-only lane, proven from the app.
  *
- * `sql_select_ro` opens its OWN connection with `PRAGMA query_only = 1` and runs
- * a parameterised SELECT. The case asserts, through the real IPC path:
- *   1. SELECTs return rows (a real read, not a stub);
- *   2. INSERT / UPDATE / DELETE / DDL are refused by SQLite with a readonly
- *      error — the app-path negative control the engine-level unit test cannot
- *      give;
- *   3. the write refused there is *accepted* by the app's normal lane, so the
- *      refusal is the read-only command and not a broken database;
- *   4. latency: the read-only lane vs the existing plugin SELECT (200 samples
- *      each) and a real checkout, so the cost is a number.
+ * Every guard in `src-tauri/src/sql_ro.rs` gets an app-path probe here, and each
+ * probe is paired with a control proving the database itself is writable (so a
+ * refusal cannot be blamed on a broken DB or a locked file):
  *
- * The renderer's own pool stays writable: flipping it is the write migration
- * (ADR-005), and this case is the half that can land safely before it.
+ *   - PRAGMA query_only=0 (same call, and a follow-up write on a new call)
+ *   - ATTACH / VACUUM INTO / PRAGMA writable_schema
+ *   - multi-statement smuggling
+ *   - INSERT ... RETURNING and WITH ... INSERT
+ *   - SELECT from a credential-bearing table (app_settings) and sqlite_master
+ *   - row cap
+ *
+ * The lane's normal use is also asserted: a parameterised SELECT returns rows,
+ * and 200-sample latency is recorded (native lane vs the plugin pool) plus a real
+ * checkout, so the cost stays a number.
  */
 import { browser, expect } from '@wdio/globals';
 import { APP_PIN, addSku, clearWebMirrors, ensureShiftOpen, payExactFlow, tid, unlockIfNeeded } from '../lib/pos';
@@ -33,14 +34,9 @@ const invoke = async (cmd: string, args: Record<string, unknown>): Promise<Call>
     );
     return { ok: true, value };
   } catch (e) {
-    // A WebDriver error object does not stringify to its message; keep every
-    // own property so the engine text survives.
     let msg: string;
     try {
-      msg =
-        typeof e === 'object' && e !== null
-          ? JSON.stringify(e, Object.getOwnPropertyNames(e))
-          : String(e);
+      msg = typeof e === 'object' && e !== null ? JSON.stringify(e, Object.getOwnPropertyNames(e)) : String(e);
     } catch {
       msg = String(e);
     }
@@ -48,16 +44,20 @@ const invoke = async (cmd: string, args: Record<string, unknown>): Promise<Call>
   }
 };
 
+const ro = (query: string, params: unknown[] = []) => invoke('sql_select_ro', { query, params });
+const plugin = (query: string, values: unknown[] = []) =>
+  invoke('plugin:sql|execute', { db: 'sqlite:mobi_pos.db', query, values });
+const pluginSelect = (query: string) => invoke('plugin:sql|select', { db: 'sqlite:mobi_pos.db', query, values: [] });
+
 const percentile = (samples: number[], p: number): number => {
   const s = [...samples].sort((a, b) => a - b);
   return s.length ? s[Math.min(s.length - 1, Math.floor(s.length * p))] : -1;
 };
 
-describe('SEC-01 increment 2 — native read-only lane', () => {
+describe('SEC-01 increment 2 — hardened read-only lane', () => {
   before(async () => {
     await browser.setTimeout({ pageLoad: 120000, script: 120000 });
     await unlockIfNeeded(APP_PIN);
-    // A standalone run needs its own catalogue + shift for the checkout leg.
     resetData();
     seedProducts([
       { id: 'SEC2-P', title: 'SEC2 Product', priceDa: 1000, stock: 20, barcode: '613000009201', costDa: 400 },
@@ -71,58 +71,67 @@ describe('SEC-01 increment 2 — native read-only lane', () => {
     await ensureShiftOpen();
   });
 
-  it('serves reads and refuses writes with SQLITE_READONLY on the app path', async () => {
-    const read = await invoke('sql_select_ro', {
-      query: 'SELECT name FROM sqlite_master WHERE type = ?1 ORDER BY name LIMIT 3',
-      params: ['table'],
-    });
-    const names = read.ok ? JSON.stringify(read.value) : read.error;
+  it('refuses every write/escape probe while the database stays writable', async () => {
+    // 1. normal use
+    const read = await ro('SELECT id, title FROM products WHERE id = ?1', ['SEC2-P']);
     const rows = read.ok && Array.isArray(read.value) ? (read.value as unknown[]).length : 0;
 
-    const writes: Array<{ label: string; query: string }> = [
-      { label: 'INSERT', query: "INSERT INTO app_settings (key, value_json) VALUES ('sec2a', '{}')" },
-      { label: 'UPDATE', query: "UPDATE app_settings SET value_json = '{}' WHERE key = 'sec2a'" },
-      { label: 'DELETE', query: "DELETE FROM app_settings WHERE key = 'sec2a'" },
-      { label: 'DDL', query: 'CREATE TABLE sec2a_probe (x INTEGER)' },
+    // 2. escape probes: each must be refused, and must leave no trace
+    const probes: Array<{ label: string; query: string }> = [
+      { label: 'PRAGMA query_only=0 (same call, then write)', query: "PRAGMA query_only=0; INSERT INTO app_settings (key, value_json) VALUES ('p1','{}')" },
+      { label: 'PRAGMA query_only=0 (alone)', query: 'PRAGMA query_only = 0' },
+      { label: 'ATTACH', query: "ATTACH DATABASE 'C:/tmp/sec2-attach.db' AS evil" },
+      { label: 'VACUUM INTO', query: "VACUUM INTO 'C:/tmp/sec2-vacuum.db'" },
+      { label: 'PRAGMA writable_schema', query: 'PRAGMA writable_schema = 1' },
+      { label: 'multi-statement smuggling', query: "SELECT 1; INSERT INTO app_settings (key, value_json) VALUES ('p2','{}')" },
+      { label: 'INSERT RETURNING', query: "INSERT INTO transactions (id, total) VALUES ('SEC2-X', 1) RETURNING id" },
+      { label: 'WITH ... INSERT', query: "WITH x AS (SELECT 1) INSERT INTO app_settings (key, value_json) SELECT 'p3','{}'" },
+      { label: 'credential table', query: 'SELECT * FROM app_settings' },
+      { label: 'sqlite_master', query: 'SELECT * FROM sqlite_master' },
+      { label: 'pin hash by key', query: "SELECT value_json FROM app_settings WHERE key = 'manager_pin'" },
     ];
-    const outcomes: Array<{ label: string; refused: boolean; readonly: boolean; error: string }> = [];
-    for (const w of writes) {
-      const r = await invoke('sql_select_ro', { query: w.query, params: [] });
-      outcomes.push({
-        label: w.label,
-        refused: !r.ok,
-        // engine text appears when the wrapper forwards it; the functional
-        // no-effect check below is the load-bearing assertion.
-        readonly: !r.ok,
-        error: r.ok ? '<accepted>' : r.error,
-      });
+    const refused: Array<{ label: string; ok: boolean; error: string }> = [];
+    for (const p of probes) {
+      const r = await ro(p.query);
+      refused.push({ label: p.label, ok: !r.ok, error: r.ok ? '<ACCEPTED>' : r.error.slice(0, 120) });
     }
 
-    // No-effect check: none of the refused writes may have landed.
-    const probe = await invoke('sql_select_ro', {
-      query:
-        "SELECT (SELECT COUNT(*) FROM app_settings WHERE key = 'sec2a') AS setting, (SELECT COUNT(*) FROM sqlite_master WHERE name = 'sec2a_probe') AS probe",
-      params: [],
-    });
-    const effects = probe.ok ? JSON.stringify(probe.value) : 'probe-failed';
-    const noEffect =
-      probe.ok && JSON.stringify(probe.value).includes('"setting":0') && JSON.stringify(probe.value).includes('"probe":0');
+    // 3. second call after the PRAGMA attempt: still read-only
+    const writeAfter = await ro("INSERT INTO app_settings (key, value_json) VALUES ('p4','{}')");
 
-    // Control: the app's normal lane accepts the same write, so the refusal is
-    // the read-only command, not a broken database.
-    const normalWrite = await invoke('plugin:sql|execute', {
-      db: 'sqlite:mobi_pos.db',
-      query:
-        "INSERT OR REPLACE INTO app_settings (key, value_json, updated_at) VALUES ('sec2a-control', '{}', datetime('now'))",
-      values: [],
-    });
-    const cleanup = await invoke('plugin:sql|execute', {
-      db: 'sqlite:mobi_pos.db',
-      query: "DELETE FROM app_settings WHERE key IN ('sec2a-control', 'sec2a')",
-      values: [],
-    });
+    // 4. no probe may have landed
+    const leftover = await pluginSelect(
+      "SELECT (SELECT COUNT(*) FROM app_settings WHERE key IN ('p1','p2','p3','p4')) AS settings, (SELECT COUNT(*) FROM transactions WHERE id = 'SEC2-X') AS tx",
+    );
+    const effects = leftover.ok ? JSON.stringify(leftover.value) : 'probe-failed';
+    const noEffect = leftover.ok && effects.includes('"settings":0') && effects.includes('"tx":0');
 
-    // Latency: read-only lane vs the plugin SELECT, 200 samples each.
+    // 5. control: the database is writable through the normal lane, so every
+    //    refusal above is the lane, not a broken/locked file
+    const controlCreate = await plugin('CREATE TABLE IF NOT EXISTS sec2_control (x INTEGER)');
+    const controlInsert = await plugin('INSERT INTO sec2_control (x) VALUES (1)');
+    const controlDrop = await plugin('DROP TABLE sec2_control');
+    const controlOk = controlCreate.ok && controlInsert.ok && controlDrop.ok;
+
+    // 6. row cap, exercised on an ALLOWLISTED table (products): seed 2 100
+    //    catalogue rows through the normal lane, read them, then clean up.
+    const bulkSeed = await plugin(
+      "WITH RECURSIVE seq(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM seq WHERE x < 2100) " +
+        "INSERT INTO products (id, sku, barcode, title, brand, category, price, stock, json_payload, updated_at, idempotency_key) " +
+        "SELECT 'SEC2-B-' || x, 'SEC2-B-' || x, 'SEC2B' || x, 'Bulk ' || x, 'Bulk', 'Test', 100, 0, '{}', datetime('now'), 'SEC2-B-' || x FROM seq",
+    );
+    // The WebDriver wrapper erases the engine message, so assert the cap by
+    // behaviour: a read of >cap rows must not return more than the cap (and the
+    // lane must still work afterwards). The exact "row limit exceeded" wording is
+    // pinned by the Rust unit test.
+    const capped = await ro('SELECT * FROM products');
+    const afterCap = await ro('SELECT COUNT(*) AS c FROM products');
+    const returnedRows = capped.ok && Array.isArray(capped.value) ? (capped.value as unknown[]).length : -1;
+    const capHeld = afterCap.ok && (!capped.ok || (returnedRows >= 0 && returnedRows <= 2000));
+    if (!capHeld) console.log(`[SEC2B] row-cap probe unexpected: ok=${capped.ok} rows=${returnedRows} after=${afterCap.ok}`);
+    await plugin("DELETE FROM products WHERE id LIKE 'SEC2-B-%'");
+
+    // 7. latency (200 samples each) and a real checkout
     const bench = (cmd: string, args: Record<string, unknown>) =>
       browser.executeAsync((c: string, a: Record<string, unknown>, done: (v: number[]) => void) => {
         const inv = (window as unknown as { __TAURI_INTERNALS__: { invoke: (c: string, p: unknown) => Promise<unknown> } })
@@ -141,45 +150,38 @@ describe('SEC-01 increment 2 — native read-only lane', () => {
           done(out);
         })();
       }, cmd, args);
-    const roSamples = ((await bench('sql_select_ro', {
-      query: 'SELECT COUNT(*) AS c FROM app_settings',
-      params: [],
-    })) as number[]).filter((n) => n >= 0);
+    const roSamples = ((await bench('sql_select_ro', { query: 'SELECT COUNT(*) AS c FROM products', params: [] })) as number[]).filter((n) => n >= 0);
     const pluginSamples = ((await bench('plugin:sql|select', {
       db: 'sqlite:mobi_pos.db',
-      query: 'SELECT COUNT(*) AS c FROM app_settings',
+      query: 'SELECT COUNT(*) AS c FROM products',
       values: [],
     })) as number[]).filter((n) => n >= 0);
-
-    // Checkout latency (3 real sales), the money path the lane must not disturb.
     const sales: number[] = [];
     for (let i = 0; i < 3; i += 1) {
       await addSku('SEC2 Product', { expectTitle: 'SEC2 Product' }).catch(() => undefined);
       const t0 = Date.now();
       await payExactFlow();
       sales.push(Date.now() - t0);
-      await browser.pause(300);
+      await browser.pause(250);
     }
 
-    const ro = { p50: percentile(roSamples, 0.5), p95: percentile(roSamples, 0.95), n: roSamples.length };
-    const plugin = { p50: percentile(pluginSamples, 0.5), p95: percentile(pluginSamples, 0.95), n: pluginSamples.length };
-    const allRefused = outcomes.every((o) => o.refused);
-    const ok = rows > 0 && allRefused && noEffect && normalWrite.ok && cleanup.ok && ro.n > 0 && plugin.n > 0;
+    const roStats = { p50: percentile(roSamples, 0.5), p95: percentile(roSamples, 0.95), n: roSamples.length };
+    const pluginStats = { p50: percentile(pluginSamples, 0.5), p95: percentile(pluginSamples, 0.95), n: pluginSamples.length };
+    const allRefused = refused.every((r) => r.ok);
+    const ok = rows === 1 && allRefused && !writeAfter.ok && noEffect && controlOk && capHeld && roStats.n > 0;
 
     console.log(
-      `[SEC2A] VERDICT=${ok ? 'PASS' : 'FAIL'} readRows=${rows} read=${names} writes=${JSON.stringify(outcomes)} ` +
-        `noEffect=${noEffect} effects=${effects} normalLaneWrite=${normalWrite.ok} cleanup=${cleanup.ok} ` +
-        `readLatencyMs={native_ro:${JSON.stringify(ro)},plugin_select:${JSON.stringify(plugin)}} ` +
-        `checkoutMs=${JSON.stringify(sales)} (read-only lane is additive; the renderer pool stays writable until the boot-write migration — ADR-005)`,
+      `[SEC2B] VERDICT=${ok ? 'PASS' : 'FAIL'} readRows=${rows} probes=${JSON.stringify(refused)} ` +
+        `writeAfterPragmaRefused=${!writeAfter.ok} noEffect=${noEffect} effects=${effects} ` +
+        `controlOk=${controlOk} rowCap=${capHeld} bulkErr=${bulkSeed.ok ? '-' : String(bulkSeed.error).slice(0, 200)} ` +
+        `readLatencyMs={native_ro:${JSON.stringify(roStats)},plugin_select:${JSON.stringify(pluginStats)}} checkoutMs=${JSON.stringify(sales)}`,
     );
 
-    expect(rows).toBeGreaterThan(0);
-    for (const o of outcomes) {
-      expect(o.refused).toBe(true);
-    }
+    expect(rows).toBe(1);
+    for (const r of refused) expect(r.ok).toBe(true);
+    expect(writeAfter.ok).toBe(false);
     expect(noEffect).toBe(true);
-    expect(normalWrite.ok).toBe(true);
-    expect(cleanup.ok).toBe(true);
-    expect(ro.n).toBeGreaterThan(0);
+    expect(controlOk).toBe(true);
+    expect(capHeld).toBe(true);
   });
 });
