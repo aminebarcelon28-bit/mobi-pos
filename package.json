@@ -141,7 +141,8 @@
     "escpos:sink": "node scripts/escpos_sink.mjs",
     "escpos:kit": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/escpos_hardware_kit.mjs",
     "gen:arabic-cp864": "node scripts/gen-arabic-cp864.mjs",
-    "test:sync-two-device": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types tests/sync-pipeline/two-device-faults.mts"
+    "test:sync-two-device": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types tests/sync-pipeline/two-device-faults.mts",
+    "test:numbering": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_numbering.mts"
   },
   "dependencies": {
     "@libsql/client": "^0.18.0",

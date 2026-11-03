@@ -22,14 +22,23 @@ import { all, columnNames, count, one, run, scalar, tableExists, tableNames } fr
 import { invokeRaw } from '../lib/invoke';
 import {
   APP_PIN,
+  addSku,
   clearWebMirrors,
   ensureShiftOpen,
   installErrorTrap,
+  payExactFlow,
   tid,
   unlockIfNeeded,
 } from '../lib/pos';
 import { resetData, seedCustomerFull, seedProducts } from '../lib/seed';
 import { ROOT } from '../lib/env';
+import {
+  activeNumberingScheme,
+  newDocumentNumber,
+  setDeviceSeries,
+  setNumberingScheme,
+  setSequenceStore,
+} from '../../src/utils/numbering';
 
 const P24 = 'SYN24-P';
 const P04 = 'SYN24-P04';
@@ -167,30 +176,68 @@ describe('SYN — sync / multi-device matrix (batch 24)', () => {
     expect(documented).toBe(true);
   });
 
-  it('[SYN-02] two terminals can mint the same receipt number and the DB accepts both', async () => {
-    const receipt = 'REC-SYN02-DUP';
-    const seeded = await tryInvokeRaw<{ sales: number }>('e2e_seed_state', {
-      payload: {
-        mockSales: [
-          { id: 'SYN02-A', receiptNumber: receipt, totalDa: 100, lines: [] },
-          { id: 'SYN02-B', receiptNumber: receipt, totalDa: 100, lines: [] },
-        ],
-      },
-    });
-    const duplicateRows = count('transactions', 'receipt_number = ?', receipt);
-    const receiptIdx = all<{ name: string; unique: number }>('PRAGMA index_list(transactions)').find(
-      (r) => r.name === 'idx_transactions_receipt',
+  it('[SYN-02] two terminals mint distinct fiscal numbers from their own series (device-series seam)', async () => {
+    // The contract (ADR-006, owner-provisional): a unique number per series,
+    // continuous within the series. The sale path must mint this terminal's
+    // series; two terminals must never share a number.
+    await addSku('SYN24 Product', { expectTitle: 'SYN24 Product' });
+    await payExactFlow();
+    await browser.pause(600);
+    const saleOk = Number(count('transactions')) > 0;
+    const newest = one<{ receipt_number: string }>(
+      'SELECT receipt_number FROM transactions ORDER BY rowid DESC LIMIT 1',
     );
-    const ids = readSrc('src/utils/ids.ts');
-    const fn = ids.slice(ids.indexOf('export function newReceiptNumber'), ids.indexOf('export function debtDepositMovementId'));
-    const deviceDiscriminator = /device|terminal|machine|shop/i.test(fn);
+    const printed = String(newest?.receipt_number ?? '');
+    const seriesOfPrinted = /^REC-([0-9A-Z]{4,8})-\d{6,}$/.exec(printed)?.[1] ?? '';
+    // The series the APP minted with lives in its own storage; the spec process
+    // is a different module instance, so it is read from the page, not assumed.
+    const appSeries = (await browser.execute(
+      () => localStorage.getItem('mobipos_numbering_series_v1') || '',
+    )) as string;
+    const appUsesSeries = Boolean(seriesOfPrinted) && seriesOfPrinted === appSeries && activeNumberingScheme() === 'device-series-v1';
+
+    // Two-terminal leg: independent stores, independent series, N draws each.
+    const makeTerminal = (series: string) => {
+      const map = new Map<string, number>();
+      setSequenceStore({ read: (k) => map.get(k) ?? null, write: (k, v) => void map.set(k, v) });
+      setDeviceSeries(series);
+      return [1, 2, 3, 4, 5].map(() => newDocumentNumber('REC', Date.now()));
+    };
+    const tA = makeTerminal('T2A1');
+    const tB = makeTerminal('T2B2');
+    const disjoint = tA.filter((n) => tB.includes(n)).length === 0;
+    const monotonic = (list: string[]) =>
+      list.every((n, i) => i === 0 || Number(n.slice(-6)) === Number(list[i - 1].slice(-6)) + 1);
+    const ordered = monotonic(tA) && monotonic(tB);
+
+    // Negative control: the SAME series on the same store must reproduce the
+    // first terminal's numbers — so the series is what separates terminals.
+    const map = new Map<string, number>();
+    setSequenceStore({ read: (k) => map.get(k) ?? null, write: (k, v) => void map.set(k, v) });
+    setDeviceSeries('T2A1');
+    const clone = [1, 2, 3, 4, 5].map(() => newDocumentNumber('REC', Date.now()));
+    const collisionWhenShared = clone[0] === tA[0];
+
+    // The legacy scheme stays swappable (characterisation, byte shape kept).
+    setNumberingScheme('legacy-timestamp');
+    const legacy = newDocumentNumber('REC', Date.now());
+    const legacyShape = /^REC-\d{8}-[0-9A-Z]+-\d{2}-[0-9A-Z]{5}$/.test(legacy);
+    setNumberingScheme('device-series-v1');
+
     console.log(
-      `[SYN-02] VERDICT=FAIL seedOk=${seeded.ok} duplicateRows=${duplicateRows} receiptIndexUnique=${receiptIdx?.unique ?? 'missing'} deviceDiscriminator=${deviceDiscriminator} sample=${JSON.stringify(receipt)}`,
+      `[SYN-02] VERDICT=${saleOk && appUsesSeries && disjoint && ordered && collisionWhenShared && legacyShape ? 'PASS' : 'FAIL'} ` +
+        `saleOk=${saleOk} receipt=${printed} series=${seriesOfPrinted} appSeries=${appSeries} appUsesSeries=${appUsesSeries} ` +
+        `A=${JSON.stringify(tA)} B=${JSON.stringify(tB)} disjoint=${disjoint} monotonic=${ordered} ` +
+        `sharedSeriesControl=${collisionWhenShared} legacyShape=${legacyShape} ` +
+        `(ADR-006: two terminals, a shared number collides by construction; PROVISIONAL - owner/accountant must confirm the fiscal numbering pre-production)`,
     );
-    expect(seeded.ok).toBe(true);
-    // Expected: one receipt number per sale; the DB must reject a duplicate or
-    // the generator must carry a device discriminator. Neither holds.
-    expect(duplicateRows).toBe(1);
+
+    expect(saleOk).toBe(true);
+    expect(appUsesSeries).toBe(true);
+    expect(disjoint).toBe(true);
+    expect(ordered).toBe(true);
+    expect(collisionWhenShared).toBe(true);
+    expect(legacyShape).toBe(true);
   });
 
   it('[SYN-03] retrying the same outbox idempotency key leaves one row', async () => {

@@ -24,6 +24,7 @@
  * Only the entropy width grows (3 → 5 chars). Opaque strings throughout —
  * no numeric parsing exists downstream, so sync dedupe is unaffected.
  */
+import { newDocumentNumber } from './numbering';
 
 /** Monotonic sequence, guaranteed strictly increasing within a millisecond. */
 let idCounter = 0;
@@ -96,30 +97,17 @@ export function deterministicId(prefix: string, ...parts: Array<string | number 
 }
 
 /**
- * Collision-safe receipt number: `PREFIX-<YYYYMMDD>-<seq>-<entropy>`.
+ * Fiscal document number (SYN-02, ADR-006).
  *
- * Receipt numbers are display-only strings (nothing parses them numerically;
- * they are printed verbatim on ESC/POS tickets and shown in the UI), so the
- * shape stays short and human-readable. Uniqueness does NOT rely on the random
- * suffix alone: the millisecond is carried as a compact base36 millisecond-of-day
- * token, and the monotonic sequence makes same-millisecond receipts strictly
- * ordered. Together they are unique within one process; the entropy covers a
- * second tab or process generating in the same millisecond. The old
- * `.slice(-6)` form kept only ~16.7 minutes of resolution and repeated all day.
+ * Delegates to the numbering seam: the default scheme is a per-terminal series
+ * with a continuous counter (`PREFIX-<SERIES>-<000001>`), because a single
+ * merchant-wide counter cannot allocate while a terminal is offline. The legacy
+ * timestamp format stays available via `setNumberingScheme('legacy-timestamp')`
+ * and is used automatically when no durable counter exists (counted, never
+ * silent).
  */
 export function newReceiptNumber(prefix: string): string {
-  const ms = Date.now();
-  const seq = nextSequence(ms);
-  const d = new Date(ms);
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  // Single clock basis (local): ms-of-day is measured from LOCAL midnight so
-  // the token always belongs to the YYYYMMDD prefix printed beside it. The
-  // old `ms % 86_400_000` was UTC-based while the prefix was local — the two
-  // disagreed by the UTC offset around every midnight boundary.
-  const msOfDay = ms - new Date(y, d.getMonth(), d.getDate()).getTime();
-  return `${prefix}-${y}${m}${day}-${msOfDay.toString(36).toUpperCase()}-${String(seq).padStart(2, '0')}-${randomSuffix(5)}`;
+  return newDocumentNumber(prefix);
 }
 
 /**
