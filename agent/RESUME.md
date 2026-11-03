@@ -1,22 +1,20 @@
 # RESUME — c01-rc6 work
 
-- **Phase:** rc-6 close-out (2026-11-03). Branch `c01-rc6-work`.
-- **Disposition:** all software-fixable blockers are being closed; tag `c01-rc-6` will be cut on a
-  clean worktree after the final verification pass.
-- **Closed this session:**
-  - **D1 = B′:** unwrap 2996/2998, cap 54→56, clamp matrix; money **65/65**, cash-terms **32/32**.
-  - **HAR-007:** zero-tax **23/23**, content anchors over all of `src-tauri/src`, controls proven.
-  - **HAR-008:** SHF-05 clock-independent (48-slot sweep), **40-shf 12/12**.
-  - **HAR-009:** REF-19 (native-setter PIN entry); REF-17 (OS-keyring lockout blob cap → prune +
-    bound, failing-then-passing Rust test); refund-value checker debt-relief lane (negative
-    control proven); 60–75 boot-marker wait (DRW-24 interceptor named); CRM-02 unique-per-run
-    fixtures.
-  - **OD-001:** `c01-rc-5` superseded by `c01-rc-6`, no waiver, tag untouched.
-- **Verified this session:** 30 **12/12 + 0 money violations**; 31 **15/15**; 33 **18/18**;
-  34 **17/17 cases** (after-all G-21 parked, queue 2); cargo **453/453**; tsc 0; selftest
-  **137/137**; reconcile **687**; register 68/0 OPEN; seven guard scripts green.
-- **Next:** confirm 32 after the REF-91 dialog-wait fix; commit the batch with E-0158; final
-  clean-worktree run (50-sec ×3, 40-shf, 30–34); tag `c01-rc-6`.
-- **Queue 2 (after the tag, never moving rc-6):** SYN-02/27 + SYN-04/26 ADRs → G-21/G-05 →
-  REF-86 → SEC-18/19/20 → 60/65/66/70/75 harness re-runs → harness-BLOCKED 24-syn (two-instance +
-  gateway) → SEC-01 enterprise role-bound IPC design.
+- **rc-6 is tagged** at `d57ddef` (annotated). Never move it.
+- **Branch:** `c01-rc6-work`; latest queue-2 commits: `7c4d204` (G-05), `ef20b6c` (ADRs + SYN notes),
+  `9434706` (harness waits, E-0160).
+- **Gates on rc-6 (all green):** money 65/65 · zero-tax 23/23 · cash-terms 32/32 · tsc 0 · cargo
+  453/453 · selftest 137/137 · reconcile 687 · register 68/0 OPEN · seven guards · 50-sec 10/10 ×3
+  · 40-shf 12/12 · 30/31/32/33 12/15/15/18 · 34 17/17 + clean invariants (after the G-05 fix).
+- **Queue 2 done so far:** G-21 (create-path delivery stamp), G-05 (fixture registers units), CRM-02
+  (unique-per-run variants), DRW-24 (named interceptor = late lock-screen overlay + React-set blind
+  input), IDN-12 and DRW-08 (boot-marker/reload unlock), ADR-002 convergence model, ADR-003 at-rest
+  residual, SYN-02 numbering decision (HAR-004 options), SYN-27 mitigation note.
+- **Next queue:** validate 66/65/75 full suites with the harness fixes → REF-86 (D6 aggregation
+  measurement + fix) → SEC-18 (audit app_version + structured session column, migration v129) →
+  SEC-19 (browse throttle/audit) → SEC-20 (content protection + clipboard auto-clear) → two-instance
+  + gateway harness (24-syn PASS-SIM/RUN) → ESC/POS capture sink → SEC-01 enterprise design record.
+- **Owner-only blockers:** SYN-02 numbering rule (HAR-004: A device-series recommended), printer
+  session (HAR-002), merchant gateway + device keys (HAR-003).
+- **Known parks:** REF-86 (mega-refund perf; D6 aggregation), 24-syn 10 blocked on the gateway,
+  26-rcp 10 software-verifiable + 4 hardware, G-23/CRM-03/06 product gaps.
