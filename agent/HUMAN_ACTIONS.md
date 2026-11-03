@@ -181,3 +181,8 @@ LOY-06 PARTIAL→PASS). The only PASS→FAIL deltas and their isolated re-runs:
   (merchant-scoped sequence vs device-prefixed sequence) before the R2 fix.
 - **Why:** both are defensible; the choice changes the migration and the printed number format.
 - **Time:** a decision, then ~half a day to implement + migrate.
+- **Detail (2026-11-03):** recommended **device series** (`PREFIX-<series>-<YYYYMMDD>-<seq>`,
+  printed with a legend) because a single merchant counter cannot allocate offline; option B
+  (online block reservation) converges to it; option C (keep timestamp+random + unique index) has
+  no fiscal continuity. Full analysis: `agent/dossiers/D-SYN-numbering-ordering.md`.
+  On approval: migration + per-device series + unique index + two-instance offline-uniqueness case.
