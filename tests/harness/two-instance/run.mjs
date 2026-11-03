@@ -48,7 +48,7 @@ if (!fs.existsSync(BIN)) {
 
 fs.mkdirSync(OUT, { recursive: true });
 
-const instance = (name, port) => {
+const instance = (name, port, skewMs) => {
   const sandbox = path.join(BASE, name);
   fs.rmSync(sandbox, { recursive: true, force: true });
   fs.mkdirSync(sandbox, { recursive: true });
@@ -57,6 +57,7 @@ const instance = (name, port) => {
   return {
     name,
     port,
+    skewMs,
     sandbox,
     result,
     child: null,
@@ -64,8 +65,9 @@ const instance = (name, port) => {
   };
 };
 
-const a = instance('A', 4511);
-const b = instance('B', 4512);
+// B's clock is 90 s ahead: a live skew, not a mock.
+const a = instance('A', 4511, 0);
+const b = instance('B', 4512, 90_000);
 
 const start = (i) =>
   new Promise((resolve) => {
@@ -81,6 +83,7 @@ const start = (i) =>
           POS_WDIO_SANDBOX: i.sandbox,
           POS_TAURI_DRIVER_PORT: String(i.port),
           POS_INSTANCE: i.name,
+          POS_FAKE_CLOCK_SKEW_MS: String(i.skewMs),
           POS_RESULT_FILE: i.result,
           WDIO_LOG_LEVEL: 'warn',
         },
@@ -127,6 +130,18 @@ const overlap =
   Boolean(ra?.startedAt) && Boolean(rb?.startedAt) && Date.parse(ra.startedAt) < Date.parse(rb.finishedAt) && Date.parse(rb.startedAt) < Date.parse(ra.finishedAt);
 check('the two terminals really ran at the same time', overlap, `${ra?.startedAt}..${ra?.finishedAt} vs ${rb?.startedAt}..${rb?.finishedAt}`);
 check('no receipt number collides across terminals', !(ra?.receipts ?? []).some((r) => (rb?.receipts ?? []).includes(r)));
+// Fake clock: B's app clock must actually be shifted, and the fiscal number must
+// be identical in shape (series + counter), i.e. numbering ignores wall time.
+const skewApplied =
+  Boolean(ra?.appClock) && Boolean(rb?.appClock) && Date.parse(rb.appClock) - Date.parse(ra.appClock) > 60_000;
+check('the fake clock is applied on the second terminal (skew visible to the app)', skewApplied, `${ra?.appClock} vs ${rb?.appClock}`);
+check(
+  'the skewed clock does not leak into the fiscal number (no date token)',
+  /^REC-[0-9A-Z]{4,8}-\d{6,}$/.test(String(ra?.receipt ?? '')) &&
+    /^REC-[0-9A-Z]{4,8}-\d{6,}$/.test(String(rb?.receipt ?? '')) &&
+    !String(rb?.receipt ?? '').includes(String(new Date(rb?.appClock ?? 0).getFullYear())),
+  `${ra?.receipt} / ${rb?.receipt}`,
+);
 
 fs.writeFileSync(
   path.join(OUT, 'two-instance.json'),

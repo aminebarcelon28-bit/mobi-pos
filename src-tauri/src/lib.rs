@@ -28,6 +28,7 @@ pub mod trust_core;
 // `any(debug_assertions, feature = "e2e")` and are registered in the handler
 // only on the same cfg — production binaries expose no `e2e_*` IPC.
 pub mod e2e; pub mod import;
+#[cfg(test)] pub mod sql_boundary;
 
 use crate::trust_core::{
     capability_policy::Capability,

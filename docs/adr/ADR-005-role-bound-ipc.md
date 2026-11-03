@@ -126,14 +126,39 @@ without the intermediate proof; shipping D would be theatre.
 4. Negative control: flipping the role table entry to `Any` must make the cashier
    test fail — proving the test measures the gate, not the plumbing.
 
-## Increment 2 (B) — design sketch
+## Increment 2 (B) — status: mechanism proven, switch waits on the write migration
 
-- Add a read pool (`PRAGMA query_only=1`) for `tauri-plugin-sql`; every mutation
-  becomes a command. Measure the write-path latency before/after on the refund
-  and checkout lanes (the two money paths) and keep the conservation checks
-  natively.
-- Guardrail test: attempt an `INSERT` through the WebView handle and require
-  `SQLITE_READONLY`; attempt the same through the command and require success.
+**Landed (E-0176):** `src-tauri/src/sql_boundary.rs` proves, against the real
+SQLite engine, that
+
+- `PRAGMA query_only = 1` refuses `INSERT`/`UPDATE`/`DELETE` with
+  `SQLITE_READONLY` while `SELECT` keeps working;
+- a second normal connection — the native lane (rusqlite commands) — still writes
+  the same rows and the read-only handle observes them;
+- the **negative control**: the same `INSERT` succeeds without the pragma, so the
+  refusal is the pragma and not a schema artefact;
+- read cost: 200 SELECTs on each connection measured
+  `normal=0.0047 ms`, `query_only=0.0348 ms` per query (~30 µs absolute; the
+  relative gap is planner noise at this size, far below a frame). The numbers are
+  printed by the test for the evidence line.
+
+**Measured blocker (why the switch is not on in the app yet):** the renderer's own
+pool is used **during boot** (settings, mirrors, session). A trial with
+`PRAGMA query_only=1` applied at plugin connect made the app never reach the
+lock screen (`setup did not yield lock/dashboard`, spec probe retained in
+E-0176's log). Turning the boundary on therefore has to travel **with** the write
+migration, not before it — the staged approach:
+
+1. (this increment) engine-level proof + telemetry (above);
+2. migrate the boot-critical writes to native commands (settings, session, mirror
+   seed), each behind its own test;
+3. then enable the read-only pool by default, with the boot smoke test as the
+   gate that would have caught the trial failure;
+4. finally move checkout/refund writes, measuring the money-path latency before
+   and after (the two lanes that must not regress).
+
+Increment 3 (C) — the data-plane gateway — is unchanged: it removes the pool
+entirely, so it subsumes steps 3–4 of B.
 
 ## Increment 3 (C) — design sketch
 

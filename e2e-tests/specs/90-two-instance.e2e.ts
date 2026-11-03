@@ -44,6 +44,27 @@ describe(`two-instance terminal ${INSTANCE}`, () => {
 
   it('sells from its own data dir and records a distinct fiscal series', async () => {
     const startedAt = new Date().toISOString();
+    // Fake clock: a terminal whose clock is off is exactly the multi-device case
+    // the numbering seam must survive. Patching the WebView's Date proves the
+    // fiscal number does NOT depend on the wall clock (series + counter only).
+    const skewMs = Number(process.env.POS_FAKE_CLOCK_SKEW_MS ?? 0);
+    if (skewMs !== 0) {
+      await browser.execute((skew: number) => {
+        const RealDate = Date;
+        const shifted = () => RealDate.now() + skew;
+        class FakeDate extends RealDate {
+          constructor(...args: unknown[]) {
+            if (args.length === 0) super(shifted());
+            else super(...(args as [number]));
+          }
+          static now(): number {
+            return shifted();
+          }
+        }
+        (window as unknown as { Date: typeof Date }).Date = FakeDate as unknown as typeof Date;
+      }, skewMs);
+      console.log(`[two-instance] ${INSTANCE}: fake clock skew ${skewMs} ms`);
+    }
     await addSku(`Two Instance Product ${INSTANCE}`, { expectTitle: `Two Instance Product ${INSTANCE}` });
     await payExactFlow();
     await browser.pause(800);
@@ -56,8 +77,11 @@ describe(`two-instance terminal ${INSTANCE}`, () => {
     );
     const identity = one<{ device_id: string }>('SELECT device_id FROM device_identity LIMIT 1');
     const series = /^REC-([0-9A-Z]{4,8})-\d{6,}$/.exec(String(tx?.receipt_number ?? ''))?.[1] ?? '';
+    const appClock = (await browser.execute(() => new Date().toISOString())) as string;
     const payload = {
       instance: INSTANCE,
+      skewMs,
+      appClock,
       startedAt,
       finishedAt: new Date().toISOString(),
       dbPath: process.env.POS_WDIO_SANDBOX ?? '',
