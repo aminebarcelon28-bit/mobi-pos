@@ -12,6 +12,10 @@ export interface NativeAuditAppendRequest {
    * Auxiliary attribution (not chain-covered) — legacy rows map at read time.
    */
   actorId?: string;
+  /** SEC-18: app build that wrote the row (native fills it when omitted). */
+  appVersion?: string;
+  /** SEC-18: structured session (shift/drawer) reference. */
+  sessionId?: string;
   /**
    * Optional caller-derived idempotency key (becomes the native event id).
    * Repeats with identical body replay the original receipt instead of

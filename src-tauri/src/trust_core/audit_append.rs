@@ -70,8 +70,13 @@ pub struct AuditAppendRequest {
     /// `event_id`: a repeat with identical body returns the original receipt
     /// (replay) instead of appending a second row + link. A repeat with a
     /// different body is a caller keying bug and fails typed (the funnel
-    /// swallows + counts it per policy — the chain is never forked).
+    /// swallows + counts it per policy - the chain is never forked).
     pub idempotency_key: Option<String>,
+    /// SEC-18: per-row app build. Native fills it from the package version when
+    /// the caller omits it. Outside `canonical_bytes`, so old links stay valid.
+    pub app_version: Option<String>,
+    /// SEC-18: structured session (shift/drawer) reference for the row.
+    pub session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -184,6 +189,31 @@ fn chain_head(conn: &Connection) -> Result<String, TrustError> {
     })
 }
 
+/// SEC-18 self-heal: the per-row app build and session reference are additive
+/// attribution columns. The v129 migration is the primary path, but a database
+/// whose ledger stopped short (the e2e base-schema flow is one) must still get
+/// them — a missing additive column may never block an audit write, exactly
+/// like the `entity_keys.version` self-heal.
+fn ensure_attribution_columns(tx: &rusqlite::Transaction) -> Result<(), TrustError> {
+    let cols = table_columns(tx)?;
+    for (name, ddl) in [
+        (
+            "app_version",
+            "ALTER TABLE security_audit_logs ADD COLUMN app_version TEXT;",
+        ),
+        (
+            "session_id",
+            "ALTER TABLE security_audit_logs ADD COLUMN session_id TEXT;",
+        ),
+    ] {
+        if !cols.contains(name) {
+            tx.execute_batch(ddl)
+                .map_err(|e| TrustError::op_failed(format!("audit column self-heal: {e}")))?;
+        }
+    }
+    Ok(())
+}
+
 /// Append one audit row + chain link in a single native transaction.
 /// `mac_key`: `Some` seals the link; `None` writes the row unchained
 /// (receipt says so). Never throws for missing keys — audit is telemetry.
@@ -210,6 +240,7 @@ pub fn append_audit_event(
         .transaction()
         .map_err(|e| TrustError::op_failed(format!("audit txn: {e}")))?;
     {
+        ensure_attribution_columns(&tx)?;
         let cols = table_columns(&tx)?;
         for required in ["id", "timestamp", "user", "action", "details"] {
             if !cols.contains(required) {
@@ -242,6 +273,14 @@ pub fn append_audit_event(
         if cols.contains("actor_id") {
             names.push("actor_id");
             values.push(req.actor_id.clone().unwrap_or_default());
+        }
+        if cols.contains("app_version") {
+            names.push("app_version");
+            values.push(req.app_version.clone().unwrap_or_default());
+        }
+        if cols.contains("session_id") {
+            names.push("session_id");
+            values.push(req.session_id.clone().unwrap_or_default());
         }
         if cols.contains("version") {
             names.push("version");
@@ -932,6 +971,12 @@ pub fn audit_append(
         super::Capability::OperationalWrites,
         |_| {
             use tauri::Manager;
+            // SEC-18: every row carries the build that wrote it. The caller may
+            // override it; otherwise the package version is authoritative.
+            let mut request = request;
+            if request.app_version.as_deref().map(str::trim).unwrap_or("").is_empty() {
+                request.app_version = Some(app.package_info().version.to_string());
+            }
             let path = db_path_for(&app)?;
             let app_dir = app
                 .path()
@@ -1303,7 +1348,25 @@ mod tests {
             ip_address: None,
             actor_id: None,
             idempotency_key: None,
+            app_version: None,
+            session_id: None,
         }
+    }
+
+    #[test]
+    fn attribution_columns_self_heal_on_append() {
+        let _g = serial_test_lock();
+        let mut conn = fixture_conn();
+        append_audit_event(&mut conn, None, &req("heal"), "EV-H", "2026-01-01T00:00:00Z").unwrap();
+        let cols: Vec<String> = conn
+            .prepare("PRAGMA table_info(security_audit_logs)")
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(1))
+            .unwrap()
+            .filter_map(Result::ok)
+            .collect();
+        assert!(cols.contains(&"app_version".to_string()), "app_version self-heal");
+        assert!(cols.contains(&"session_id".to_string()), "session_id self-heal");
     }
 
     #[test]

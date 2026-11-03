@@ -2364,6 +2364,8 @@ fn apply_refund_in_txn(
         ip_address: req.audit.ip_address.clone(),
         actor_id: None,
         idempotency_key: None,
+            app_version: None,
+            session_id: None,
     };
     let event_id = format!("AUD-{}", req.refund_id);
     append_in_tx(tx, mac_key, &audit_req, &event_id, now)

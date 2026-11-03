@@ -291,7 +291,7 @@ fn delete_cloud_credentials(app_handle: tauri::AppHandle) -> Result<(), TrustErr
 /// largest `version` in `base_schema_migrations()` below. A DB stamped above
 /// this means a NEWER app wrote it — opening it here could silently skip
 /// migrations it depends on, so startup refuses instead (contract C6).
-const EXPECTED_MAX_DB_USER_VERSION: u32 = 128;
+const EXPECTED_MAX_DB_USER_VERSION: u32 = 129;
 
 /// SQLite file header magic: first 16 bytes are always "SQLite format 3\0".
 const SQLITE_HEADER_MAGIC: &[u8; 16] = b"SQLite format 3\0";
@@ -889,6 +889,9 @@ fn decrypt_snapshot_for_recovery(
                 ip_address: None,
                 actor_id: None,
                 idempotency_key: None,
+                // Kernel recovery rows carry the build too (SEC-18).
+                app_version: Some(env!("CARGO_PKG_VERSION").to_string()),
+                session_id: None,
             };
             if let Err(e) = crate::trust_core::audit_append::append_kernel_row(&app_dir, &row) {
                 eprintln!("[snapshot-crypto] recovery audit row dropped: {e:?}");
@@ -2284,6 +2287,19 @@ fn base_schema_migrations() -> Vec<Migration> {
             "#,
             kind: MigrationKind::Up,
         },
+    Migration {
+        // v129 - SEC-18 audit non-repudiation: per-row app build and a
+        // structured session (shift/drawer) reference. Additive nullable
+        // columns, deliberately OUTSIDE the MAC canonical bytes so every
+        // historical link keeps verifying byte-for-byte.
+        version: 129,
+        description: "Audit rows carry app version + session reference",
+        sql: r#"
+ALTER TABLE security_audit_logs ADD COLUMN app_version TEXT;
+ALTER TABLE security_audit_logs ADD COLUMN session_id TEXT;
+"#,
+        kind: MigrationKind::Up,
+    },
     ]
 }
 

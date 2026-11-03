@@ -486,6 +486,8 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
     // an unresolvable name stays NULL and the read-time fallback maps it
     // deterministically (`legacy:<slug>`) — names never become keys by guess.
     const actorId = resolveActorIdForWrite(effectiveUser, get().activeCashier, get().cashierUsers);
+    // SEC-18: structured session reference for the row (shift/drawer lane).
+    const activeShiftId = get().activeShift?.id;
     const { securityAuditLog } = get();
     // Enterprise audit telemetry: every entry carries an ISO-8601 creation
     // timestamp (sortable + range-filterable) plus the originating
@@ -522,6 +524,7 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
       ...(deviceId ? { deviceId } : {}),
       ...(ipAddress ? { ipAddress } : {}),
       ...(actorId ? { actorId } : {}),
+      ...(activeShiftId ? { sessionId: activeShiftId } : {}),
     };
     // P6/C6: persist BEFORE the in-memory append. saveAuditLog is an upsert,
     // so a same-ms duplicate id would silently overwrite the earlier audit
@@ -562,6 +565,7 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
             deviceId,
             ipAddress,
             ...(actorId ? { actorId } : {}),
+            ...(activeShiftId ? { sessionId: activeShiftId } : {}),
             ...(idempotencyKey && idempotencyKey.trim() ? { idempotencyKey: idempotencyKey.trim() } : {}),
           });
         } catch (nativeErr) {

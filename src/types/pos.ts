@@ -1810,6 +1810,13 @@ export interface SecurityAuditLogEntry {
    */
   actorId?: string;
   /**
+   * SEC-18: structured session (shift/drawer) reference and the app build that
+   * wrote the row. Both are outside the native MAC canonical bytes (additive
+   * attribution columns; historical links still verify).
+   */
+  sessionId?: string;
+  appVersion?: string;
+  /**
    * FT-06/C provenance. `'local'` (default) = written on this device through
    * the native chain; `'imported'` = merged from a backup envelope
    * (insert-only, carries no chain links). Absent (legacy rows) reads as

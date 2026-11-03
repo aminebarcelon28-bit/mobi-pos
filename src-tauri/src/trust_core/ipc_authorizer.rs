@@ -907,6 +907,8 @@ fn clock_anomaly_request(kind: &str, wall_now_ms: u64, anchor_ms: Option<u64>) -
         ip_address: None,
         actor_id: None,
         idempotency_key: None,
+            app_version: None,
+            session_id: None,
     }
 }
 fn emit_clock_anomaly_row(kind: &str, wall_now_ms: u64, anchor_ms: Option<u64>) {
