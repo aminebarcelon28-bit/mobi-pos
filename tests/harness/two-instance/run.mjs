@@ -106,6 +106,11 @@ const start = (i) =>
           POS_TAURI_DRIVER_PORT: String(i.port),
           POS_INSTANCE: i.name,
           POS_FAKE_CLOCK_SKEW_MS: String(i.skewMs),
+          // Two wdio processes sharing one ts-node cache raced on the tsconfig
+          // read ("@wdio/config ... tsConfigPathFromConfigFile"). Transpile-only
+          // plus a per-instance cache dir removes the shared mutable state.
+          TS_NODE_TRANSPILE_ONLY: '1',
+          TS_NODE_CACHE_DIRECTORY: path.join(i.sandbox, 'tsnode'),
           POS_RESULT_FILE: i.result,
           WDIO_LOG_LEVEL: 'warn',
         },
@@ -115,8 +120,26 @@ const start = (i) =>
     i.child.on('exit', (code) => resolve(code ?? 1));
   });
 
-console.log(`[two-instance] starting A and B concurrently (ports ${a.port}/${b.port})`);
-const codes = await Promise.all([start(a), start(b)]);
+const dbOf = (i) => path.join(i.sandbox, 'home', 'AppData', 'Roaming', 'com.mobi.pos.e2e', 'mobi_pos.db');
+
+/**
+ * Launch A, wait until its DB exists (state, not a sleep), then launch B. Both
+ * apps are then alive at the same time, but the two WebView2 runtimes do not
+ * race each other at process start — that race made the second session die on
+ * this host ("session deleted as the browser has closed the connection").
+ */
+const launchSecond = async () => {
+  const first = start(a);
+  const deadline = Date.now() + 90_000;
+  while (!fs.existsSync(dbOf(a)) && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  const second = start(b);
+  return [await first, await second];
+};
+
+console.log(`[two-instance] launching A then B (ports ${a.port}/${b.port})`);
+const codes = await launchSecond();
 killStale(a.sandbox);
 killStale(b.sandbox);
 const read = (i) => {

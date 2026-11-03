@@ -55,3 +55,29 @@ to identity + numbering + isolation, where it is the only evidence.
 What the harness changes for them: the "we cannot even run two terminals here"
 objection is gone — the remaining blocker is the merchant gateway and its enrolled
 device keys, which only the owner can provide.
+
+## Reproducibility note (2026-11-03, parked)
+
+The harness produced **10/10 twice** (E-0174, E-0177) and then became unreliable on
+this host: whichever process starts **second** dies while loading the WDIO config
+(`@wdio/config … tsConfigPathFromConfigFile`), or its app session closes during
+boot. Isolated runs of the same spec always pass, so the failure is the two
+concurrent `wdio` processes (config/tsconfig resolution), not the app, the
+numbering or the sandboxes.
+
+Attempts made (stopping per the three-attempt rule):
+
+1. **Parallel launch** — passed twice, then the second process failed at config load.
+2. **Process hygiene** — orphaned `msedgewebview2` processes held the per-instance
+   `EBWebView` lock (a real defect, fixed: the runner now kills by sandbox command
+   line before/after). This made the harness pass again, then it failed later for
+   the config reason.
+3. **Staggered launch** (start A, wait for its DB, then B) — A passes, B still fails
+   at config load.
+4. **Per-instance ts-node cache + transpile-only** — same failure.
+
+Parked, not deleted: the harness stays in the tree and its checks stay runnable;
+nothing depends on it (the six SYN cases are BLOCKED on HAR-003, and no verdict is
+derived from this runner). Reliable concurrency needs either a single-process
+multi-session WDIO setup or a machine/runner where two wdio processes can start
+together — recorded as harness debt, not a product defect.
