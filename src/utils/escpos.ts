@@ -362,7 +362,9 @@ export function buildReceiptBuffer(
   for (const line of vm.items) {
     const wMonths = line.warrantyMonths || 0;
     if (wMonths > 0) warrantyMonthsMax = Math.max(warrantyMonthsMax, wMonths);
-    builder.text(line.name + (wMonths > 0 ? ' (*)' : '')).newline();
+    for (const nameLine of foldThermal(line.name + (wMonths > 0 ? ' (*)' : ''), cols)) {
+      builder.text(nameLine).newline();
+    }
     const qtyPrice = `${line.quantity} x ${formatDZD(line.unitPrice)}`;
     const lineTotal = formatDZD(line.total);
     builder.text(pair(qtyPrice, lineTotal)).newline();

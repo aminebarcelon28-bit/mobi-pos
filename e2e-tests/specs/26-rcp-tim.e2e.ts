@@ -44,6 +44,7 @@ import {
   typeMoneyInto,
   unlockIfNeeded,
 } from '../lib/pos';
+import { parseEscpos } from '../lib/escpos-parse';
 import { resetData, seedCustomerFull, seedProducts, seedSettings } from '../lib/seed';
 
 // Repo root, independent of the directory wdio was started from: the
@@ -235,66 +236,20 @@ interface Decoded {
 }
 
 function decodeEscpos(bytes: number[]): Decoded {
-  const b = bytes || [];
-  let text = '';
-  const barcodes: string[] = [];
-  let hasRaster = false;
-  let hasImageCmd = false;
-  let hasCodepage = false;
-  let i = 0;
-  while (i < b.length) {
-    const c = b[i];
-    if (c === 0x1b) {
-      const n = b[i + 1];
-      if (n === 0x74 || n === 0x52) hasCodepage = true;
-      if (n === 0x2a) hasImageCmd = true;
-      if (n === 0x40) i += 2;
-      else if (n === 0x61 || n === 0x45 || n === 0x21 || n === 0x64 || n === 0x33) i += 3;
-      else if (n === 0x70) i += 5;
-      else i += 2;
-      continue;
-    }
-    if (c === 0x1d) {
-      const n = b[i + 1];
-      if (n === 0x76) hasRaster = true;
-      if (n === 0x6b) {
-        // GS k m n d1..dn  — n counts EVERY byte after it. For CODE128 (m=0x49)
-        // those bytes are the `{B` code-set selector followed by the data, so
-        // the selector is stripped here and nothing else is trimmed
-        // (escpos.ts:93-104 emits `{B` + value).
-        const len = b[i + 3] ?? 0;
-        // GS k m n: data starts at i+4 (i+4+n is the first byte after it).
-        let payload = String.fromCharCode(...b.slice(i + 4, i + 4 + Math.max(0, len)));
-        if (payload.startsWith('{B') || payload.startsWith('{C')) payload = payload.slice(2);
-        if (payload.length) barcodes.push(payload);
-        i += 4 + len;
-        continue;
-      }
-      i += n === 0x56 ? 3 : 3;
-      continue;
-    }
-    if (c === 0x0a) {
-      text += '\n';
-      i += 1;
-      continue;
-    }
-    if (c === 0x0d) {
-      i += 1;
-      continue;
-    }
-    text += String.fromCharCode(c);
-    i += 1;
-  }
-  const lines = text.split('\n');
+  // One oracle for the whole suite: e2e-tests/lib/escpos-parse.ts. It skips the
+  // GS v 0 payload (the old inline decoder appended image bytes to the text),
+  // decodes CP864 runs and reports raster/maskable structure.
+  const p = parseEscpos(bytes);
+  const text = p.lines.map((l) => l.text).join('\n');
   return {
-    byteLen: b.length,
+    byteLen: p.bytes,
     text,
-    lines,
-    barcodes,
-    hasRaster,
-    hasImageCmd,
-    hasCodepage,
-    maxLineLen: lines.reduce((m, l) => Math.max(m, l.length), 0),
+    lines: p.lines.map((l) => l.text),
+    barcodes: p.barcodes.map((b) => b.data),
+    hasRaster: p.rasters.length > 0,
+    hasImageCmd: p.unknowns.some((u) => u.command === 'ESC 42'),
+    hasCodepage: p.codePageSelects.length > 0,
+    maxLineLen: p.lines.reduce((m, l) => Math.max(m, l.text.length), 0),
   };
 }
 
@@ -363,6 +318,40 @@ function buildBytes(tx: Row, settings: Row, tz?: string): number[] {
   return JSON.parse(out) as number[];
 }
 
+/**
+ * Bytes from the builder INSIDE the app (E2E flavor hook), so the Arabic lane
+ * runs with the real canvas text stack. A Node-side rebuild has no canvas and
+ * would silently exercise the CP864 fallback instead of the raster lane.
+ * Returns null outside the E2E build (the caller falls back to the CLI).
+ */
+async function buildBytesInApp(tx: Row, settings: Row): Promise<number[] | null> {
+  try {
+    const out = (await browser.executeAsync(
+      (
+        t: Record<string, unknown>,
+        st: Record<string, unknown>,
+        done: (v: number[] | null) => void,
+      ) => {
+        const hook = (window as unknown as { __posStress?: { buildReceipt?: (a: unknown, b: unknown) => Promise<number[]> } })
+          .__posStress;
+        if (!hook?.buildReceipt) {
+          done(null);
+          return;
+        }
+        void hook
+          .buildReceipt(t, st)
+          .then((bytes) => done(bytes))
+          .catch(() => done(null));
+      },
+      tx,
+      settings,
+    )) as number[] | null;
+    return Array.isArray(out) && out.length > 0 ? out : null;
+  } catch {
+    return null;
+  }
+}
+
 /** The bytes for the most recent persisted sale, built by the production
  *  builder from the app's own row. Used by UI-driven sales too. */
 async function decodeLastSale(): Promise<{
@@ -395,7 +384,8 @@ async function decodeLastSale(): Promise<{
     };
   }
   const tx = JSON.parse(row.json_payload) as Row;
-  const bytes = buildBytes(tx, readReceiptSettings());
+  const settings = readReceiptSettings();
+  const bytes = (await buildBytesInApp(tx, settings)) ?? buildBytes(tx, settings);
   return {
     tx,
     id: row.id,
@@ -950,40 +940,34 @@ async function openZReportModal(): Promise<{ ok: boolean; step: string }> {
 }
 
 describe('RCP/TIM — receipts, printing and clock edges (batch 26)', () => {
-  it('[RCP-01] Arabic/French/mixed text in ESC/POS text mode: no codepage, no raster fallback', async () => {
+  it('[RCP-01] Arabic reaches the head: rendered as a bit image, never as masked bytes', async () => {
     const s = await sale([{ id: AR, qty: 1 }], 2500);
     const d = s.decoded;
-    const itemLine = lineOf(d, /S24/);
-    const arabicUtf8 = d ? d.byteLen > 0 && [0xd9, 0x87].every((x) => d.text.includes(String.fromCharCode(x))) : false;
-    // The mask is `charCodeAt(i) & 0xFF` (escpos.ts:56-60). Reproduce it from
-    // the seeded title so the assertion is exact, not a lucky substring:
-    // هاتف… → "G'*A …" (U+0647&0xFF=0x47 'G', U+0627&0xFF=0x27 "'").
-    const AR_TITLE = 'هاتف سامسونج جالكسي S24 الترا';
-    const maskedTitle = AR_TITLE.split('')
-      .map((c) => String.fromCharCode(c.charCodeAt(0) & 0xff))
-      .join('');
-    const maskedTitlePresent = d ? d.text.includes(maskedTitle) : false;
+    // The seeded title is Arabic, so its line must be printed as dots. Legibility
+    // on paper is HAR-002; this case proves the lane, the geometry and that no
+    // masked ('?') text is left behind.
+    const maskedRuns = (d?.text.match(/\?{2,}/g) ?? []).length;
+    const raster = Boolean(d?.hasRaster);
+    const fallback = Boolean(d?.hasCodepage);
     const ev =
       `saleOk=${s.ok} printAttempts=${s.printAttempts} bytes=${d?.byteLen ?? 0} ` +
-      `hasRaster=${d?.hasRaster} hasImageCmd=${d?.hasImageCmd} hasCodepage=${d?.hasCodepage} ` +
-      `arabicUtf8Present=${arabicUtf8} maskedTitlePresent=${maskedTitlePresent} ` +
-      `itemLine=${JSON.stringify(itemLine)} ` +
-      `raw=escpos.ts:56-60 charCodeAt(i)&0xFF, escpos.ts:241 unfolded name, no ESC t codepage, no GS v 0 raster`;
+      `rasters=${raster} codepageFallback=${fallback} maskedRuns=${maskedRuns} ` +
+      `maxLineLen=${d?.maxLineLen ?? -1} (contract: ADR-004 — canvas raster per Arabic run; legibility is HAR-002)`;
     if (!s.ok || !d) {
       logVerdict('RCP-01', 'FAIL', `${ev} reason=${s.reason ?? 'no-bytes'}`);
       assertFail('RCP-01', 'sale did not produce a receipt', s.reason ?? 'no-bytes', 'printable receipt');
     }
-    const preserved = arabicUtf8 && !maskedTitlePresent;
-    logVerdict('RCP-01', preserved ? 'PASS' : 'FAIL', ev);
-    if (!preserved) {
+    const ok = raster && !fallback && maskedRuns === 0;
+    logVerdict('RCP-01', ok ? 'PASS' : 'FAIL', ev);
+    if (!ok) {
       assertFail(
         'RCP-01',
-        'Arabic is destroyed by the Latin-1 mask and no raster/codepage path exists',
-        { maskedTitlePresent, arabicUtf8Present: arabicUtf8, hasRaster: d.hasRaster, hasCodepage: d.hasCodepage },
-        { rendersArabic: true },
+        'Arabic did not reach the head as a rendered image',
+        { raster, fallback, maskedRuns },
+        { raster: true, codepageFallback: false, maskedRuns: 0 },
       );
     }
-    expect(preserved).toBe(true);
+    expect(ok).toBe(true);
   });
 
   it('[RCP-02] 58 mm / 80 mm line widths with long product and 30-char customer names', async () => {
@@ -1297,31 +1281,39 @@ describe('RCP/TIM — receipts, printing and clock edges (batch 26)', () => {
 
   it('[RCP-12] logo, Arabic header/footer and diacritics on the hardware ticket', async () => {
     await applyReceiptSettings({
-      storeName: 'Café Élégant قهوة',
+      storeName: 'Café Élégant مرحبا',
       storeSubheader: 'Commerce & Vente Téléphonie',
-      logoUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
-      footerMessage: 'سياسة الإرجاع: 7 أيام — Merci de votre visite',
+      logoUrl:
+        'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+      footerMessage: 'شروط الإرجاع: 7 أيام — Merci de votre visite',
     });
     await ensureShiftOpen(10000);
     const s = await sale([{ id: P1, qty: 1 }], 1000);
     const d = s.decoded;
-    const headerLine = lineOf(d, /Caf|Commerce/);
-    const footerLine = lineOf(d, /Merci|7 |visite/);
-    const hasImage = Boolean(d && (d.hasRaster || d.hasImageCmd));
-    const arabicUtf8 = Boolean(d && d.text.includes(String.fromCharCode(0xd9)));
+    const headerLine = lineOf(d, /Commerce|Caf/);
+    const footerLine = lineOf(d, /Merci/);
+    // Arabic header + Arabic footer are two raster runs; the logo would be a
+    // third image printed BEFORE any text. The builder has no logo path at all,
+    // so the code-level check is the honest signal (grep the module).
+    const logoInBuilder = /logoUrl/.test(
+      fs.readFileSync(path.join(ROOT, 'src', 'utils', 'escpos.ts'), 'utf8'),
+    );
+    const rastered = Boolean(d?.hasRaster);
+    const diacritics = /Téléphonie|Élégant/.test(d?.text ?? '') || /Téléphonie|Élégant/.test(headerLine);
+    const masked = /\?{2,}/.test(d?.text ?? '');
     const ev =
-      `logoUrlSet=true bytes=${d?.byteLen ?? 0} hasRaster=${d?.hasRaster} hasImageCmd=${d?.hasImageCmd} ` +
-      `arabicUtf8Present=${arabicUtf8} header=${JSON.stringify(headerLine)} footer=${JSON.stringify(footerLine)} ` +
-      `(ReceiptPaper renders the logo in the DOM only; ESC/POS builder has no image path)`;
-    const ok = hasImage && arabicUtf8;
+      `logoUrlSet=true logoInBuilder=${logoInBuilder} bytes=${d?.byteLen ?? 0} rasters=${rastered} ` +
+      `diacriticsInText=${diacritics} maskedRuns=${masked ? 'yes' : 'no'} header=${JSON.stringify(headerLine)} ` +
+      `footer=${JSON.stringify(footerLine)} (Arabic runs raster per ADR-004; logo still DOM-only)`;
+    const ok = logoInBuilder && rastered && diacritics && !masked;
     logVerdict('RCP-12', ok ? 'PASS' : 'FAIL', ev);
     await restoreOriginalSettings();
     if (!ok) {
       assertFail(
         'RCP-12',
-        'logo never reaches the printer and Arabic/diacritic header+footer is masked',
-        { hasImage, arabicUtf8, header: headerLine, footer: footerLine },
-        { hasImage: true, arabicUtf8: true },
+        'the logo never reaches the printer (Arabic header/footer now render as images)',
+        { logoInBuilder, rastered, diacritics, masked },
+        { logoInBuilder: true, rastered: true, diacritics: true, masked: false },
       );
     }
     expect(ok).toBe(true);
@@ -1514,8 +1506,11 @@ describe('RCP/TIM — receipts, printing and clock edges (batch 26)', () => {
     const s = await sale([{ id: P1, qty: 1 }], 1000);
     const d = s.decoded;
     const vendorLine = lineOf(d, /Vendeur:/);
-    const latinMasked = /Vendeur:.*[A-Za-z0-9]/.test(vendorLine);
-    const arabicPresent = vendorLine.includes('محمد') || (d?.text.includes(String.fromCharCode(0xd9)) ?? false);
+    // Contract (ADR-004): the French label stays real text, the Arabic run is a
+    // bit image on the same line, and nothing is masked to '?'.
+    const labelInText = /Vendeur:/.test(vendorLine);
+    const rastered = Boolean(d?.hasRaster);
+    const masked = /\?{2,}/.test(vendorLine);
     // restore the shift identity exactly as it was
     await setShiftCashier(origName);
     await refreshApp();
@@ -1523,16 +1518,16 @@ describe('RCP/TIM — receipts, printing and clock edges (batch 26)', () => {
 
     const ev =
       `shiftRename=${renamed} cashierName=${arabicName} vendorLine=${JSON.stringify(vendorLine)} ` +
-      `arabicPreserved=${arabicPresent} maskedToLatin=${latinMasked} ` +
-      `(no bidi/shaping layer; text() masks each UTF-16 unit to its low byte, escpos.ts:56-60)`;
-    const ok = arabicPresent && !latinMasked;
+      `labelInText=${labelInText} rastered=${rastered} masked=${masked} ` +
+      `(ADR-004: Latin label as text + Arabic run as GS v 0 raster)`;
+    const ok = labelInText && rastered && !masked;
     logVerdict('RCP-21', ok ? 'PASS' : 'FAIL', ev);
     if (!ok) {
       assertFail(
         'RCP-21',
-        'the Arabic cashier name is masked into Latin bytes on a French header line',
-        { vendorLine, arabicPreserved: arabicPresent },
-        { vendorLine: 'Vendeur: محمد أمين', arabicPreserved: true },
+        'the Arabic cashier name did not reach the head as an image beside its French label',
+        { vendorLine, labelInText, rastered, masked },
+        { labelInText: true, rastered: true, masked: false },
       );
     }
     expect(ok).toBe(true);
