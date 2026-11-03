@@ -220,6 +220,9 @@ fn set_cloud_credentials(app_handle: tauri::AppHandle, url: String, token: Strin
         "set_cloud_credentials",
         Capability::LicenseManagement,
         |_| {
+            // SEC-01 increment 1: the merchant's sync identity decides where
+            // fiscal rows are shipped; a cashier cannot repoint it.
+            crate::trust_core::session_principal::authorize("set_cloud_credentials", "")?;
             if url.len() > 8 * 1024 || token.len() > 16 * 1024 {
                 return Err(TrustError::IPCProtocolError {
                     reason: "cloud credentials oversized",
@@ -270,6 +273,8 @@ fn delete_cloud_credentials(app_handle: tauri::AppHandle) -> Result<(), TrustErr
         "delete_cloud_credentials",
         Capability::LicenseManagement,
         |_| {
+            // SEC-01 increment 1: only a manager may erase the sync identity.
+            crate::trust_core::session_principal::authorize("delete_cloud_credentials", "")?;
             #[cfg(not(mobile))]
             {
                 match keyring::Entry::new("mobi-pos-cloud-sync", "credentials") {

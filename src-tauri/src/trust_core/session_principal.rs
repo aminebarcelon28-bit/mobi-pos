@@ -148,6 +148,10 @@ pub const PRIVILEGED_COMMANDS: &[(&str, Policy)] = &[
     ("decrypt_snapshot_for_recovery", Policy::ManagerOnly),
     ("prune_snapshots", Policy::ManagerOnly),
     ("pin_set", Policy::SelfOrManager),
+    // SEC-01 increment 1: the merchant's sync identity (gateway URL + token)
+    // decides where fiscal rows are shipped. A cashier cannot repoint it.
+    ("set_cloud_credentials", Policy::ManagerOnly),
+    ("delete_cloud_credentials", Policy::ManagerOnly),
 ];
 
 /// The policy for `command`, or `None` when it is not privileged.
@@ -263,6 +267,37 @@ mod tests {
         set("usr-a", Role::Cashier);
         assert!(authorize_pin_set("pin_set", "usr-a", false).is_ok(), "own PIN");
         assert!(authorize_pin_set("pin_set", "usr-b", false).is_err(), "peer PIN");
+        clear();
+    }
+
+    /// SEC-01 increment 1: the merchant's sync identity is manager-only. This
+    /// test fails against the previous policy table (the two commands were not
+    /// registered, so `policy_for` returned None), and passes once registered —
+    /// the before/after is recorded in the evidence line.
+    #[test]
+    fn sync_credentials_are_manager_only() {
+        let _g = serial_test_lock();
+        clear();
+        for cmd in ["set_cloud_credentials", "delete_cloud_credentials"] {
+            assert_eq!(
+                policy_for(cmd),
+                Some(Policy::ManagerOnly),
+                "{cmd} must be registered as manager-only"
+            );
+            assert!(authorize(cmd, "").is_err(), "{cmd} must deny without a session");
+        }
+        set("usr-cashier", Role::Cashier);
+        for cmd in ["set_cloud_credentials", "delete_cloud_credentials"] {
+            let err = authorize(cmd, "").expect_err(cmd);
+            assert!(
+                reason(err).contains("AUTHZ_ROLE_REQUIRED:role-denied"),
+                "a cashier must be denied: {cmd}"
+            );
+        }
+        set("usr-admin", Role::Manager);
+        for cmd in ["set_cloud_credentials", "delete_cloud_credentials"] {
+            assert!(authorize(cmd, "").is_ok(), "a manager must be allowed: {cmd}");
+        }
         clear();
     }
 
