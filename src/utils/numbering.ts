@@ -1,7 +1,7 @@
 /**
  * Document numbering (fiscal seam) — SYN-02, ADR-006.
  *
- * The tax rule is a *unique number, based on one or more series*, in
+ * The fiscal rule is a *unique number, based on one or more series*, in
  * chronological order (EU VAT Directive 2006/112/EC art. 226 is the canonical
  * statement; Algerian practice is the same "chronologique et continue"). A
  * single merchant-wide counter cannot allocate offline, so the POS uses **one
