@@ -220,6 +220,11 @@ export const config: Options.Testrunner = {
       {
         appBinaryPath: BIN_PATH,
         driverProvider: 'external',
+        // Two-instance harness: each app process needs its own tauri-driver
+        // port, otherwise the second run collides with the first on 4444.
+        ...(Number(process.env.POS_TAURI_DRIVER_PORT) > 0
+          ? { tauriDriverPort: Number(process.env.POS_TAURI_DRIVER_PORT) }
+          : {}),
         tauriDriverPath: DRIVER_PATH_FINAL,
         autoInstallTauriDriver: false,
         // msedgedriver is not pre-installed on this machine; the service
