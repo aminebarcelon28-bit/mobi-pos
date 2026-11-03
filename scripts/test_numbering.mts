@@ -18,7 +18,7 @@ import {
   seriesFromDevice,
   numberingState,
   degradedNumberingDraws,
-  useMemorySequenceStore,
+  installMemorySequenceStore,
 } from '../src/utils/numbering';
 
 let pass = 0;
@@ -36,7 +36,7 @@ const check = (name: string, cond: boolean, detail = '') => {
 const fixedNow = Date.parse('2026-11-03T09:30:00.000Z');
 
 // ── 1. Device series: continuous, formatted, monotonic ─────────────────────
-useMemorySequenceStore();
+installMemorySequenceStore();
 setNumberingScheme('device-series-v1');
 setDeviceSeries('A1B2');
 const a = [1, 2, 3, 4, 5].map(() => newDocumentNumber('REC', fixedNow));

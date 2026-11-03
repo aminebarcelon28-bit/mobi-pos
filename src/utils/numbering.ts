@@ -154,7 +154,7 @@ export function setSequenceStore(next: SequenceStore): void {
 }
 
 /** Swaps to a process-local, non-persistent store (tests / degraded hosts). */
-export function useMemorySequenceStore(): void {
+export function installMemorySequenceStore(): void {
   memory.clear();
   store = memoryStore;
 }
