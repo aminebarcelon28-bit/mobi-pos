@@ -3298,6 +3298,25 @@ describe('REF — refunds, returns & avoirs (batch 8 / part 5)', () => {
     expect(Number(ref?.total)).toBe(300);
     expect(cashOf(ref)).toBe(300);
     expect(stockOf(P75)).toBe(stockAfterSale + 1);
+    // G-05 fixture hygiene (queue 2): the flip simulated an operator ENABLING
+    // serial tracking after the sale; registering the units that flag implies
+    // is part of that workflow. Without this the invariant correctly sees
+    // serialized stock with no IMEI records. Unique serials per run.
+    {
+      const need = stockOf(P75);
+      for (let i = 0; i < need; i += 1) {
+        run(
+          `INSERT INTO imei_records
+             (imei, product_id, purchase_order_id, sale_transaction_id, warranty_expires_at,
+              received_at, sold_at, version, warranty_months, status)
+           VALUES (?, ?, NULL, NULL, NULL, ?, NULL, 1, 12, 'in_stock')
+           ON CONFLICT(imei) DO NOTHING`,
+          `REF75-${Date.now()}-${i}`,
+          P75,
+          new Date().toISOString(),
+        );
+      }
+    }
     console.log('[REF-75] the refund restocks the line generically — the later serialization flag demands no returned IMEI (the sale never had one to hand back).');
   });
 
