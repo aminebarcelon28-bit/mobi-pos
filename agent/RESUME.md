@@ -1,31 +1,48 @@
-# RESUME — after c01-rc-6, queue 2 (toward c01-rc-7)
+# RESUME — c01-rc-7
 
-- **c01-rc-6** is tagged at `d57ddef` (immutable). Branch `c01-rc6-work`.
-- **Latest commits:** `c6ed8bc` (ESC/POS sink + Arabic lane) · `96fe3b7` (RCP oracles,
-  clusters) · `3e1501c` (two-device suite + ADR-005) · `88057fd` (repo
-  professionalization).
-- **Queue 2 done:** REF-86 measured (D6 not built, evidence) · two-client fault
-  suite + mock acquirer · ESC/POS capture sink + decoder + byte goldens + Arabic
-  raster lane (ADR-004) + hardware kit · SEC-18/19/20 · G-21/G-05 · CRM-02 ·
-  DRW-24/IDN-12/DRW-08 harness waits · ADR-002/003/004/005 · two-device + gateway
-  fault suite.
-- **Floors on HEAD (main tree and clean worktree `88057fd`):** money 65/65 ·
-  zero-tax 23/23 (worktree needs the root `*.db` test artifacts copied in — the
-  gate inspects real DBs and fails closed without them) · cash-terms 32/32 ·
-  tsc 0 · selftest 137/137 · reconcile 687 · escpos 27/27 · syn-faults 8/8 ·
-  two-device 19/19 · acquirer 15/15.
-- **E2E on HEAD:** spec 26 16 PASS (RCP-01/02/13/21 now PASS), the rest are
-  pre-existing product gaps; 50-sec / 40-shf / 30–34 re-run under the rc-7
-  verification (see E-0169/E-0170).
-- **Parked, with reasons:**
-  - **Two GUI app instances** (SYN-05/06/07/11/21/29): the protocol half is
-    proven (two-device + gateway suite); the GUI half needs a second enrolled
-    terminal + merchant gateway (HAR-003).
-  - **Arabic legibility on paper** (HAR-002): bytes verified; a human must print
-    `npm run escpos:kit` and sign `CHECKLIST.md`.
-  - **Fiscal numbering** (HAR-004): device-series recommended; needs the owner /
-    accountant confirmation before SYN-02 changes the printed number.
-  - Product gaps still failing by design: RCP-05/07/10/11/12/15/16/18/22/23,
-    TIM-02/07, CRM-03/06, G-23.
-- **Next:** SEC-01 increment 1 (role requirement in the native authorizer +
-  tests, ADR-005), then the owner asks above.
+- **Tag:** `c01-rc-7` at the handoff commit; verified content is `488d6bd` (the
+  only commits after it are the E-0171 evidence line and this handoff — docs
+  only). `c01-rc-6` stays at `d57ddef`; rc-1…rc-6 are untouched.
+- **Branch:** `c01-rc6-work`.
+- **Verified on a clean worktree of `488d6bd`** (`%TEMP%/opencode/rc7-wt`,
+  tracked-clean, binary rebuilt there):
+
+  | Gate | Result |
+  |---|---|
+  | money boundary | `65 PASSED, 0 FAILED` |
+  | zero-tax | `23 PASSED, 0 FAILED` |
+  | cash terms | `32 Passed, 0 Failed` |
+  | tsc | exit 0 |
+  | lint (oxlint) | exit 0 (0 errors) |
+  | selftest | `SELFTEST OK` (137/137) |
+  | reconcile | `RECONCILED 687 active cases` |
+  | cargo | `454 passed; 0 failed` |
+  | 50-sec | 10/10 |
+  | 40-shf | 12/12 |
+  | refund 30/31/32/33/34 | 12/12 · 15/15 · 15/15 · 18/18 · 17/17 |
+  | 51 hardening | 10/10 |
+  | ESC/POS sink | 27/27 (PASS-SIM) |
+  | sync faults | 8/8 (PASS-SIM) |
+  | two-device + gateway | 19/19 (PASS-SIM) |
+  | acquirer contract | 15/15 |
+
+- **Shipped in the rc-6 → rc-7 window (queue 2):** REF-86 measurement + D6
+  decision · two-client fault suite + mock acquirer · ESC/POS capture sink,
+  decoder oracle, byte goldens, Arabic raster lane (ADR-004) and hardware kit ·
+  SEC-18/19/20 · G-21/G-05 · CRM-02 · DRW-24/IDN-12/DRW-08 harness waits ·
+  two-device + gateway fault suite · ADR-002/003/004/005 · repo
+  professionalization (README/CONTRIBUTING/CHANGELOG/LICENSE/ADR index/AGENTS
+  rules/CI harness gates) · lint 0 errors (RefundModal conditional hook fixed).
+- **Next (queue remains):** SEC-01 increment 1 (role requirement in the native
+  authorizer + tests, ADR-005) → product gaps still failing by design (RCP-05/07/
+  10/11/12/15/16/18/22/23, TIM-02/07, CRM-03/06, G-23) → real two-terminal run
+  once HAR-003 is supplied.
+- **Owner-only, minimised:**
+  1. **HAR-002 printer:** 58 mm and 80 mm rolls, one Epson-class and one clone,
+     plus the interface (USB / network IP:port / Bluetooth name). Then
+     `npm run escpos:kit -- --host <ip>` + the 11-line `CHECKLIST.md`.
+  2. **HAR-003 gateway:** a merchant gateway URL with the terminals' Ed25519
+     public keys enrolled (and PSP sandbox credentials only if a real acquirer
+     is to be contract-tested).
+  3. **HAR-004 numbering:** confirm the fiscal numbering rule (device-series
+     recommended) before SYN-02 changes the printed number.
