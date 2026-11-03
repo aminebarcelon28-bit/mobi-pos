@@ -22,7 +22,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 
 const ROOT = process.cwd();
 const BIN = path.join(ROOT, 'target-e2e', 'debug', process.platform === 'win32' ? 'mobi-pos.exe' : 'mobi-pos');
@@ -48,8 +48,30 @@ if (!fs.existsSync(BIN)) {
 
 fs.mkdirSync(OUT, { recursive: true });
 
+/**
+ * Kill anything still holding this instance's sandbox. A crashed run leaves
+ * WebView2 processes behind; they keep EBWebView/\*.lock and the next app exits
+ * on start ("session deleted as the browser has closed the connection").
+ * Matching is by command line, so no other app's webviews are touched.
+ */
+const killStale = (sandbox) => {
+  if (process.platform !== 'win32') return;
+  const needle = sandbox.replace(/\\/g, '\\\\');
+  const script =
+    "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*" +
+    needle +
+    "*' -and ($_.Name -like 'mobi-pos*' -or $_.Name -like 'msedgewebview2*' -or $_.Name -like 'msedgedriver*') } | " +
+    'ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }';
+  try {
+    execFileSync('powershell', ['-NoProfile', '-Command', script], { stdio: 'ignore', timeout: 30000 });
+  } catch {
+    /* best effort: a stale process is a hygiene problem, not a verdict */
+  }
+};
+
 const instance = (name, port, skewMs) => {
   const sandbox = path.join(BASE, name);
+  killStale(sandbox);
   fs.rmSync(sandbox, { recursive: true, force: true });
   fs.mkdirSync(sandbox, { recursive: true });
   const result = path.join(OUT, `two-instance-${name}.json`);
@@ -95,6 +117,8 @@ const start = (i) =>
 
 console.log(`[two-instance] starting A and B concurrently (ports ${a.port}/${b.port})`);
 const codes = await Promise.all([start(a), start(b)]);
+killStale(a.sandbox);
+killStale(b.sandbox);
 const read = (i) => {
   try {
     return JSON.parse(fs.readFileSync(i.result, 'utf8'));
