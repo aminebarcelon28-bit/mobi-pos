@@ -1127,6 +1127,7 @@ pub static ALL_COMMAND_FNS_IN_TESTS: &[&str] = &[
     "list_database_backups",
     "sqlite_check_db_version",
     "sqlite_db_maintenance",
+    "sql_select_ro",
     "emergency_export_ledger",
     "launch_dialer",
     "launch_call",
