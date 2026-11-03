@@ -28,6 +28,7 @@ pub mod trust_core;
 // `any(debug_assertions, feature = "e2e")` and are registered in the handler
 // only on the same cfg — production binaries expose no `e2e_*` IPC.
 pub mod e2e; pub mod import;
+pub mod sql_ro;
 #[cfg(test)] pub mod sql_boundary;
 
 use crate::trust_core::{
@@ -2448,6 +2449,7 @@ pub fn run() {
             decrypt_snapshot_for_recovery,
             sqlite_check_db_version,
             sqlite_db_maintenance,
+            sql_ro::sql_select_ro,
             emergency_export::emergency_export_ledger,
             sav_attachments::sav_attachment_write,
             sav_attachments::sav_attachment_read,
@@ -2528,6 +2530,7 @@ pub fn run() {
             decrypt_snapshot_for_recovery,
             sqlite_check_db_version,
             sqlite_db_maintenance,
+            sql_ro::sql_select_ro,
             emergency_export::emergency_export_ledger,
             sav_attachments::sav_attachment_write,
             sav_attachments::sav_attachment_read,

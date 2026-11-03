@@ -457,6 +457,9 @@ static COMMAND_REGISTRY: &[(&str, Capability)] = &[
     ("import_commit_batch", Capability::OperationalWrites),
     ("import_get_staged_batch", Capability::ReadOperationalData),
     ("import_list_batches", Capability::ReadOperationalData),
+    // SEC-01 increment 2: native read-only query lane (query_only on its own
+    // connection; writes are refused by SQLite).
+    ("sql_select_ro", Capability::ReadOperationalData),
 ];
 
 /// Public commands: no capability required, callable in every state
