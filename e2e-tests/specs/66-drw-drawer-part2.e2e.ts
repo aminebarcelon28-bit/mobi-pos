@@ -1174,7 +1174,23 @@ describe('DRW - cash drawer state, part 2 (batch 12 / DRW-16..30)', () => {
     await browser.pause(2500);
     await pollUntil(async () => (await browser.execute(() => document.readyState)) === 'complete', 60000, 'reload never completed');
     await installErrorTrap().catch(() => {});
-    await unlockIfNeeded().catch((e) => console.log(`[reloadWithQ] unlock: ${String((e as Error)?.message ?? e)}`));
+    // HAR-009/DRW-24 (2026-11-03): the lock overlay can mount AFTER the first
+    // unlock attempt on a slow boot. The old code swallowed that failure and the
+    // overlay then intercepted every later click (named interceptor:
+    // [data-testid=lock-screen]). Unlock, re-check, and fail loudly if it stays.
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const locked = await $(tid('lock-screen')).isDisplayed().catch(() => false);
+      if (!locked) break;
+      try {
+        await unlockIfNeeded();
+      } catch (e) {
+        console.log(`[reloadWithQ] unlock attempt ${attempt + 1}: ${String((e as Error)?.message ?? e)}`);
+      }
+      await browser.pause(500);
+    }
+    if (await $(tid('lock-screen')).isDisplayed().catch(() => false)) {
+      throw new Error('[reloadWithQ] still locked after 3 unlock attempts');
+    }
     return ok;
   }
 
@@ -2831,7 +2847,9 @@ describe('DRW - cash drawer state, part 2 (batch 12 / DRW-16..30)', () => {
 
   async function readReconciliation(): Promise<{ expectedDa: number; countedDa: number; varianceDa: number }> {
     const expEl = await $(tid('shift-expected'));
-    await expEl.waitForDisplayed({ timeout: 12000, timeoutMsg: 'RECONCILIATION step never appeared (shift-expected hidden)' });
+    // HAR-009 (2026-11-03): the mobile shell can take longer than 12 s to swap
+    // the blind-count step after a reload; this is a state timeout, not a sleep.
+    await expEl.waitForDisplayed({ timeout: 30000, timeoutMsg: 'RECONCILIATION step never appeared (shift-expected hidden)' });
     await browser.pause(250);
     const expectedText = await expEl.getText().catch(() => '');
     const countedText = await (await $(tid('shift-counted'))).getText().catch(() => '');
@@ -3977,6 +3995,25 @@ describe('DRW - cash drawer state, part 2 (batch 12 / DRW-16..30)', () => {
     if (skipped) await browser.pause(1600);
     await d2Click('^Gestion$').catch(() => false);
     await browser.pause(600);
+    // DRW-24: the lock overlay mounts AFTER the shell settles on a slow boot; a
+    // reload-time unlock can run too early and the overlay then intercepts the
+    // close-modal clicks (named interceptor: [data-testid=lock-screen]).
+    await ensureUnlocked();
+  }
+
+  async function ensureUnlocked(): Promise<void> {
+    for (let i = 0; i < 3; i += 1) {
+      await browser.pause(600);
+      if (!(await $(tid('lock-screen')).isDisplayed().catch(() => false))) return;
+      try {
+        await unlockIfNeeded();
+      } catch (e) {
+        console.log(`[ensureUnlocked] attempt ${i + 1}: ${String((e as Error)?.message ?? e)}`);
+      }
+    }
+    if (await $(tid('lock-screen')).isDisplayed().catch(() => false)) {
+      throw new Error('[ensureUnlocked] lock screen still present after 3 attempts');
+    }
   }
 
   async function d2CloseReceipt(): Promise<void> {
@@ -4564,9 +4601,42 @@ describe('DRW - cash drawer state, part 2 (batch 12 / DRW-16..30)', () => {
       await browser.pause(250);
     }
     const blind = await $(tid('shift-blind-input'));
-    await blind.click();
-    await blind.clearValue();
-    await blind.setValue('10500');
+    try {
+      await blind.click();
+    } catch (e) {
+      // Name the interceptor instead of guessing (HAR-009/DRW-24).
+      const probe = await browser.execute(() => {
+        const el = document.querySelector('[data-testid="shift-blind-input"]') as HTMLElement | null;
+        if (!el) return { missing: true };
+        const r = el.getBoundingClientRect();
+        const x = Math.round(r.left + r.width / 2);
+        const y = Math.round(r.top + r.height / 2);
+        const top = document.elementFromPoint(x, y) as HTMLElement | null;
+        const path: string[] = [];
+        let n: HTMLElement | null = top;
+        for (let i = 0; n && i < 6; i += 1) {
+          path.push(
+            `${n.tagName.toLowerCase()}${n.getAttribute('data-testid') ? `[data-testid=${n.getAttribute('data-testid')}]` : ''}.${String(n.className || '').split(' ').slice(0, 3).join('.')}`,
+          );
+          n = n.parentElement;
+        }
+        return { x, y, rect: { w: Math.round(r.width), h: Math.round(r.height) }, top: path };
+      });
+      console.log(`[DRW-24] blind-input interceptor: ${JSON.stringify(probe)}`);
+      throw e;
+    }
+    // Set the value through React's own path: a raw setValue can leave the
+    // component state empty, so "next" stays on the blind step (DRW-24, 30 s
+    // timeout). The native setter + input event is the pattern the other
+    // helpers use.
+    await browser.execute(() => {
+      const el = document.querySelector('[data-testid="shift-blind-input"]') as HTMLInputElement | null;
+      if (!el) return;
+      el.focus();
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+      setter?.call(el, '10500');
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    });
     await (await $(tid('shift-blind-next'))).click();
     const r2 = await readReconciliation();
     expect(r2.expectedDa).toBe(10500);

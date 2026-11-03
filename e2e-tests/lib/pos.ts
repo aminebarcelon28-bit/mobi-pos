@@ -112,6 +112,13 @@ export async function detectBootScreen(): Promise<BootScreen | null> {
   if (await setup.isDisplayed().catch(() => false)) return 'setup';
   const lock = await $(tid('lock-screen'));
   if (await lock.isDisplayed().catch(() => false)) return 'lock';
+  // HAR-009/DRW-24: the mobile shell mounts without the desktop header, so the
+  // old header-only probe timed out for 60 s and the (delayed) lock overlay
+  // then intercepted clicks. The shell dataset is the honest boot signal.
+  const shell = (await browser
+    .execute(() => (document.documentElement.dataset.shell ?? '') as string)
+    .catch(() => '')) as string;
+  if (shell === 'mobile') return 'dashboard';
   const header = await $('header');
   if (await header.isDisplayed().catch(() => false)) return 'dashboard';
   return null;

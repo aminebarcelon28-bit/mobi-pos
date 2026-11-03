@@ -1221,7 +1221,23 @@ describe('LOY - loyalty earn, redeem, refund, campaign and adjustment (batch 15)
     await browser.pause(2500);
     await pollUntil(async () => (await browser.execute(() => document.readyState)) === 'complete', 60000, 'reload never completed');
     await installErrorTrap().catch(() => {});
-    await unlockIfNeeded().catch((e) => console.log(`[reloadWithQ] unlock: ${String((e as Error)?.message ?? e)}`));
+    // HAR-009/DRW-24 (2026-11-03): the lock overlay can mount AFTER the first
+    // unlock attempt on a slow boot. The old code swallowed that failure and the
+    // overlay then intercepted every later click (named interceptor:
+    // [data-testid=lock-screen]). Unlock, re-check, and fail loudly if it stays.
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const locked = await $(tid('lock-screen')).isDisplayed().catch(() => false);
+      if (!locked) break;
+      try {
+        await unlockIfNeeded();
+      } catch (e) {
+        console.log(`[reloadWithQ] unlock attempt ${attempt + 1}: ${String((e as Error)?.message ?? e)}`);
+      }
+      await browser.pause(500);
+    }
+    if (await $(tid('lock-screen')).isDisplayed().catch(() => false)) {
+      throw new Error('[reloadWithQ] still locked after 3 unlock attempts');
+    }
     return ok;
   }
 
