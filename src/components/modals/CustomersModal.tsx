@@ -31,6 +31,10 @@ type ViewMode = 'list' | 'form' | 'profile';
 type TierFilter = 'Tous' | PricingTier;
 type ProfileSubTab = 'purchases' | 'repairs' | 'tradeins' | 'vouchers' | 'debt' | 'loyalty';
 
+// SEC-19: customer-directory browsing is auditable. Throttled at module level
+// (one row per 10 s) so a fast scan is visible without flooding the chain.
+let lastDirectoryAuditAt = 0;
+
 export const CustomersModal: React.FC = () => {
   const { showToast } = useToast();
   const {
@@ -42,7 +46,7 @@ export const CustomersModal: React.FC = () => {
   } = usePosStore();
 
   const [mainTab, setMainTab] = useState<'directory' | 'debts'>('directory');
-  // UPGRADE-04: dedicated management surface for contract price books.
+// UPGRADE-04: dedicated management surface for contract price books.
   const [isPriceBooksOpen, setIsPriceBooksOpen] = useState(false);
   const [profileTab, setProfileTab] = useState<ProfileSubTab>('purchases');
   const [searchQuery, setSearchQuery] = useState('');
@@ -696,7 +700,22 @@ export const CustomersModal: React.FC = () => {
                   data-testid="customer-search"
                   type="text"
                   value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
+                  onChange={(e) => {
+                setSearchQuery(e.target.value);
+                // SEC-19: directory browsing is auditable (throttled at module
+                // level: one row per 10 s, so a fast scan is visible without
+                // flooding the hash chain).
+                const now = Date.now();
+                if (now - lastDirectoryAuditAt > 10_000) {
+                  lastDirectoryAuditAt = now;
+                  void usePosStore.getState().logSecurityAction(
+                    'Consultation Clients',
+                    'Recherche dans le répertoire clients (navigation)',
+                    undefined,
+                    false,
+                  );
+                }
+              }}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' && filteredCustomers.length > 0) {
                       e.preventDefault();

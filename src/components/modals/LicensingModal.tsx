@@ -20,6 +20,7 @@ import {
   CheckCircle2,
 } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
+import { copySensitive } from '../../utils/clipboard';
 import { resolveDeviceFingerprint } from '../../licensing/hwid';
 import { loadStoredLicenseToken } from '../../licensing/store';
 import { verifyLicenseToken, type LicenseTokenPayload } from '../../licensing/token';
@@ -80,14 +81,14 @@ export const LicensingModal: React.FC = () => {
 
   const handleCopyHwid = () => {
     if (!hwid?.formatted) return;
-    navigator.clipboard.writeText(hwid.formatted);
+    void copySensitive(hwid.formatted);
     setCopiedHwid(true);
     setTimeout(() => setCopiedHwid(false), 2000);
   };
 
   const handleCopyKey = () => {
     if (!tokenPayload?.lic_key) return;
-    navigator.clipboard.writeText(tokenPayload.lic_key);
+    void copySensitive(tokenPayload.lic_key);
     setCopiedKey(true);
     setTimeout(() => setCopiedKey(false), 2000);
   };
