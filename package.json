@@ -143,7 +143,7 @@
     "gen:arabic-cp864": "node scripts/gen-arabic-cp864.mjs",
     "test:sync-two-device": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types tests/sync-pipeline/two-device-faults.mts",
     "test:numbering": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_numbering.mts",
-    "test:two-instance": "node tests/harness/two-instance/run.mjs"
+    "test:two-instance": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types tests/harness/two-instance/run.mjs"
   },
   "dependencies": {
     "@libsql/client": "^0.18.0",

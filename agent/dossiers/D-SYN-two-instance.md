@@ -1,83 +1,68 @@
-# D-SYN two-instance harness (GUI half) — what it proves, what stays blocked
+# D-SYN two-instance + gateway faults harness
 
-**Date:** 2026-11-03 · **Evidence:** E-0174 · **Command:** `npm run test:two-instance`
+**Date:** 2026-11-03 · **Evidence:** E-0180 (delivered), E-0174/E-0177 (first form), E-0179 (park reason) · **Command:** `npm run test:two-instance`
 
-## What runs
+## What it is now
 
-`tests/harness/two-instance/run.mjs` starts **two real app processes at the same
-time** — each with its own `POS_WDIO_SANDBOX` data dir and its own
-`POS_TAURI_DRIVER_PORT` (4511/4512) — and each runs
-`e2e-tests/specs/90-two-instance.e2e.ts`:
+One hermetic suite, one command, deterministic:
 
-1. reset + seed a catalogue in its own DB, reload the WebView, unlock, open shift;
-2. one real sale through the checkout UI;
-3. record its fiscal number, its enrolled `device_identity.device_id` and its
-   data dir into a per-instance result file.
+```
+loopback merchant gateway (2 enrolled TEST keys, ALLOW_TEST_KEY gated)
+  → app instance A: own sandbox + driver port, real checkout, real fiscal number
+  → app instance B: own sandbox, +90 s fake clock, real checkout
+  → runner-driven fault schedule against the gateway, signed with the two test keys:
+      partition (socket dropped) → heal → duplicate delivery → reorder (future hole)
+      → crash-before-ACK replay → clock skew → revocation isolation
+  → invariants: one ledger row per (device, seq); cursors A=4 B=4
+```
 
-The runner then asserts (8 checks, all green):
+Artifact: `tests/results/two-instance.json` (each check, the ledger, cursors, both
+instance payloads) plus per-instance WDIO logs.
 
-- both processes exit 0 and both produce results;
-- **different data dirs** (no shared DB);
-- **different enrolled device ids**;
-- **different fiscal series**, each starting at `000001` — i.e. no shared counter,
-  which is exactly the SYN-02 contract under two live terminals;
-- the two run **concurrently** (their start/finish windows overlap);
-- no receipt number collides across terminals.
+## What it proves (16 checks, green twice — 16/16 both times)
 
-Artifacts: `tests/results/two-instance.json`, `tests/results/two-instance-{A,B}.json`
-and the per-instance WDIO logs.
+1. Two real app processes, each with its own data dir, its own enrolled device id,
+   its own fiscal series (both starting at `000001`).
+2. A terminal 90 s ahead: the fake clock is visible to the app and does **not**
+   leak into the fiscal number (series + counter only).
+3. Transport faults against the local gateway:
+   - partition: a dropped socket is a failure, never a silent ACK, zero ingestion;
+   - heal: the batch commits with contiguous ACKs and a `SERVERTIME_V1` token;
+   - duplicate: replay ACKs idempotently, no second row;
+   - reorder: a future hole is refused with `expected_<n>_received_<m>`;
+   - crash-before-ACK: replaying the same batch leaves 4 rows, not 8;
+   - revocation: the revoked device is refused while the other keeps syncing;
+   - final: one row per (device, seq), cursors equal the highest contiguous seq.
 
-## What it deliberately does not re-prove
+## Honest boundary (what is real and what is simulated)
 
-The gateway/signature half is already proven, with real Ed25519 and faults, by:
+- **Real:** the two app processes, their sandboxes, their enrolled device
+  identities, their fiscal numbers, and the gateway's signature/gap/replay/
+  revocation logic (the same `proxy/gateway.mjs` the server would run).
+- **Simulated:** the mutations in the fault schedule are signed by the runner with
+  the two enrolled **test** keys. The app's own signed lane only mints rows on
+  refunds; driving the full refund UI twice would not add anything to the fault
+  proof, so the suite does not pretend to test the app's signing path — that path
+  is covered by `test:sync-e2e` (real Ed25519, native command) and by the Rust
+  `signed_server_time_ingestion` test.
+- Therefore: **REAL for the instances, PASS-SIM for the transport.** The six cases
+  that need a merchant-issued gateway with real enrolled keys (SYN-05/06/07/11/21/
+  29) stay **BLOCKED on HAR-003**.
 
-- `npm run test:sync-e2e` — signed envelopes, gap arbitration (`409
-  expected/received`), replay dedupe, revocation, verbatim `SERVERTIME_V1`;
-- `npm run test:sync-two-device` — two protocol clients, fake clocks, partition/
-  heal, duplicate, reorder, crash-before-ACK replay, concurrent same-ticket,
-  revocation, tamper control.
+## Why sequential instances, not concurrent
 
-Running the signed **refund** lane from two GUI processes would duplicate that
-coverage while adding an unstable UI dependency; the harness keeps the GUI layer
-to identity + numbering + isolation, where it is the only evidence.
+An earlier version launched two concurrent `wdio` processes; the second kept dying
+at config load (`tsConfigPathFromConfigFile`) on this host, and concurrent WebView2
+runtimes also fought over sandbox locks (orphaned `msedgewebview2` processes — a
+real hygiene defect, now fixed by killing by sandbox command line). The current
+design removes the race instead of retrying around it: instances run one at a
+time, and the faults are a scripted sequence, which is also what makes the suite
+deterministic enough to assert exact sequence numbers.
 
-## The six SYN cases that stay BLOCKED (and why)
+## Kept for later
 
-| Case | Needs | Status |
-|---|---|---|
-| SYN-05 (money conflict on two devices) | merchant gateway + enrolled per-device keys, so two terminals can actually exchange and resolve a refund/loyalty/stock conflict | BLOCKED — HAR-003 |
-| SYN-06 (stock counter vs ledger offline) | same, plus the server apply lane | BLOCKED — HAR-003 |
-| SYN-07 (delete vs edit) | same | BLOCKED — HAR-003 |
-| SYN-11 (schema/app version mismatch) | a second terminal on a **different app version** + gateway | BLOCKED — HAR-003 (+ a second device) |
-| SYN-21 (propagation SLA) | gateway + a real remote peer to measure end-to-end latency | BLOCKED — HAR-003 |
-| SYN-29 (migration while offline for days) | gateway + a fleet with mixed versions + time | BLOCKED — HAR-003 |
-
-What the harness changes for them: the "we cannot even run two terminals here"
-objection is gone — the remaining blocker is the merchant gateway and its enrolled
-device keys, which only the owner can provide.
-
-## Reproducibility note (2026-11-03, parked)
-
-The harness produced **10/10 twice** (E-0174, E-0177) and then became unreliable on
-this host: whichever process starts **second** dies while loading the WDIO config
-(`@wdio/config … tsConfigPathFromConfigFile`), or its app session closes during
-boot. Isolated runs of the same spec always pass, so the failure is the two
-concurrent `wdio` processes (config/tsconfig resolution), not the app, the
-numbering or the sandboxes.
-
-Attempts made (stopping per the three-attempt rule):
-
-1. **Parallel launch** — passed twice, then the second process failed at config load.
-2. **Process hygiene** — orphaned `msedgewebview2` processes held the per-instance
-   `EBWebView` lock (a real defect, fixed: the runner now kills by sandbox command
-   line before/after). This made the harness pass again, then it failed later for
-   the config reason.
-3. **Staggered launch** (start A, wait for its DB, then B) — A passes, B still fails
-   at config load.
-4. **Per-instance ts-node cache + transpile-only** — same failure.
-
-Parked, not deleted: the harness stays in the tree and its checks stay runnable;
-nothing depends on it (the six SYN cases are BLOCKED on HAR-003, and no verdict is
-derived from this runner). Reliable concurrency needs either a single-process
-multi-session WDIO setup or a machine/runner where two wdio processes can start
-together — recorded as harness debt, not a product defect.
+- Concurrency (two terminals writing at the same instant) is a *gateway* property
+  and is covered by `test:sync-two-device` (two protocol clients, fake clocks,
+  concurrent same-ticket).
+- Once HAR-003 supplies a real gateway, this suite can point at it by configuration
+  and the same schedule becomes the production-transport proof.

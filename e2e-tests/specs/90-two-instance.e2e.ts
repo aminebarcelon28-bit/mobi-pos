@@ -1,17 +1,17 @@
 /**
- * Two-instance harness spec (one app process per invocation).
+ * Two-instance harness, instance spec (one app process per invocation; the
+ * runner starts A, then B — sequential so the suite cannot race itself).
  *
- * The runner (`tests/harness/two-instance/run.mjs`) starts two of these at the
- * same time with different sandbox dirs and driver ports. Each instance:
- *   - boots its own data dir (no shared DB),
- *   - seeds a catalogue and performs a REAL sale through the checkout UI,
- *   - records its fiscal number (device series), enrolled device id and the
- *     result file the runner compares.
+ * Each instance proves the things only a real app process can: its own data dir,
+ * its own enrolled device identity, its own fiscal series starting at 000001,
+ * and (for B) that a +90 s wall clock does not leak into the number.
  *
- * The gateway/signature half is proven by `npm run test:sync-e2e` and
- * `npm run test:sync-two-device` (real Ed25519, gaps, replay, revocation); this
- * spec is about two concurrent terminals with separate identities, which no
- * single-sandbox spec can show.
+ * Gateway/signature faults live in the runner (`run.mjs`), which owns the
+ * loopback merchant gateway, injects partition/heal/drop/duplicate/reorder/
+ * crash-replay/revocation between and around these runs, and signs the test
+ * mutations with the enrolled test keys. That split is deliberate: the app
+ * contributes identity + numbering + isolation; the runner contributes the
+ * fault schedule, so the suite is deterministic instead of racing two drivers.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -31,7 +31,14 @@ describe(`two-instance terminal ${INSTANCE}`, () => {
     await installErrorTrap();
     resetData();
     seedProducts([
-      { id: PRODUCT, title: `Two Instance Product ${INSTANCE}`, priceDa: 1000, stock: 10, barcode: `6130000090${INSTANCE === 'A' ? '1' : '2'}`, costDa: 500 },
+      {
+        id: PRODUCT,
+        title: `Two Instance Product ${INSTANCE}`,
+        priceDa: 1000,
+        stock: 10,
+        barcode: `6130000090${INSTANCE === 'A' ? '1' : '2'}`,
+        costDa: 500,
+      },
     ]);
     await clearWebMirrors();
     await browser.waitUntil(
@@ -45,15 +52,11 @@ describe(`two-instance terminal ${INSTANCE}`, () => {
   it('sells from its own data dir and records a distinct fiscal series', async () => {
     const startedAt = new Date().toISOString();
     // Fake clock: a terminal whose clock is off is exactly the multi-device case
-    // the numbering seam must survive. Patching the WebView's Date proves the
-    // fiscal number does NOT depend on the wall clock (series + counter only).
+    // the numbering seam must survive. Every Date overload is forwarded so the
+    // WebView's own internals keep working.
     const skewMs = Number(process.env.POS_FAKE_CLOCK_SKEW_MS ?? 0);
     if (skewMs !== 0) {
       await browser.execute((skew: number) => {
-        // Forward ALL constructor forms: the previous subclass-only patch broke
-        // WebView internals that call new Date(y, m, d) (session died with
-        // ECONNREFUSED after the patch). Returning a real Date instance keeps
-        // every overload intact.
         const RealDate = Date;
         const shifted = () => RealDate.now() + skew;
         function FakeDate(this: unknown, ...args: unknown[]) {
@@ -68,6 +71,7 @@ describe(`two-instance terminal ${INSTANCE}`, () => {
       }, skewMs);
       console.log(`[two-instance] ${INSTANCE}: fake clock skew ${skewMs} ms`);
     }
+
     await addSku(`Two Instance Product ${INSTANCE}`, { expectTitle: `Two Instance Product ${INSTANCE}` });
     await payExactFlow();
     await browser.pause(800);
@@ -75,8 +79,8 @@ describe(`two-instance terminal ${INSTANCE}`, () => {
     const tx = one<{ receipt_number: string; id: string }>(
       'SELECT receipt_number, id FROM transactions ORDER BY rowid DESC LIMIT 1',
     );
-    const receipts = all<{ receipt_number: string }>('SELECT receipt_number FROM transactions ORDER BY rowid').map(
-      (r) => String(r.receipt_number),
+    const receipts = all<{ receipt_number: string }>('SELECT receipt_number FROM transactions ORDER BY rowid').map((r) =>
+      String(r.receipt_number),
     );
     const identity = one<{ device_id: string }>('SELECT device_id FROM device_identity LIMIT 1');
     const series = /^REC-([0-9A-Z]{4,8})-\d{6,}$/.exec(String(tx?.receipt_number ?? ''))?.[1] ?? '';

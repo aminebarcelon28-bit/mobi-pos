@@ -1,37 +1,50 @@
 #!/usr/bin/env node
 /**
- * Two-instance app harness (SYN queue item 2, GUI half).
+ * Two-instance + gateway fault suite — ONE headless command, hermetic.
  *
- * Starts TWO real app processes at the same time, each with its own sandbox data
- * dir and its own tauri-driver port, and proves what one sandbox cannot:
- *   - the two terminals run concurrently (their result windows overlap),
- *   - each has its own enrolled device identity,
- *   - each mints fiscal numbers from its OWN series (no shared counter),
- *   - neither can see the other's database.
+ *   npm run test:two-instance
  *
- * The gateway/signature/partition half is covered by `npm run test:sync-e2e`
- * (real Ed25519, gap arbitration, replay, revocation, SERVERTIME tokens) and
- * `npm run test:sync-two-device` (two protocol clients + faults); this runner
- * deliberately does not re-implement them.
+ * What runs:
+ *   1. a loopback merchant gateway (proxy/gateway.mjs) with two ENROLLED device
+ *      keys (fixed test seeds, ALLOW_TEST_KEY gated);
+ *   2. the real app, twice, one at a time (A then B), each in its own sandbox
+ *      data dir and driver port, each performing a real checkout. B runs on a
+ *      +90 s fake clock;
+ *   3. a deterministic fault schedule driven by this runner against the gateway,
+ *      signing the two devices' mutations with their enrolled test keys:
+ *        partition (dropped socket) → heal → duplicate delivery → reorder (future
+ *        hole) → crash-before-ACK replay → clock skew → revocation isolation.
  *
- * Hermetic: sandboxes under %TEMP%/opencode/pos-two-instance, driver ports
- * 45xx, results under tests/results, no network beyond loopback.
+ * Why sequential instances: two concurrent WDIO processes race on config load on
+ * this host (documented in D-SYN-two-instance). Concurrency is not what this
+ * suite is for — the app instances supply identity/numbering/isolation, the
+ * runner supplies the fault schedule, so every step is deterministic and the
+ * whole thing is one command with one artifact.
  *
- * Usage: node tests/harness/two-instance/run.mjs
- * Requires a built e2e binary (`npm run build:e2e`).
+ * Dev-only: no network beyond loopback, no credentials, no hardware.
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn, execFileSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
+import { createGatewayServer, publicKeyHexFromSeedHex } from '../../../proxy/gateway.mjs';
+import { postMutations } from '../../../src/api/syncGateway.ts';
+import { envelopeFor, signEnvelope, deviceKeypair } from '../../fixtures/mockGatewayServer.mjs';
+
+process.env.ALLOW_TEST_KEY = '1';
 
 const ROOT = process.cwd();
 const BIN = path.join(ROOT, 'target-e2e', 'debug', process.platform === 'win32' ? 'mobi-pos.exe' : 'mobi-pos');
 const OUT = path.join(ROOT, 'tests', 'results');
 const BASE = path.join(process.env.TEMP || '/tmp', 'opencode', 'pos-two-instance');
 
+const SEED_A = '11'.repeat(32);
+const SEED_B = '22'.repeat(32);
+
 let pass = 0;
 let fail = 0;
+const checks = [];
 const check = (name, cond, detail = '') => {
+  checks.push({ name, ok: Boolean(cond), detail });
   if (cond) {
     pass += 1;
     console.log(`  PASS  ${name}`);
@@ -45,15 +58,9 @@ if (!fs.existsSync(BIN)) {
   console.error(`[two-instance] missing e2e binary at ${BIN} — run npm run build:e2e first`);
   process.exit(2);
 }
-
 fs.mkdirSync(OUT, { recursive: true });
 
-/**
- * Kill anything still holding this instance's sandbox. A crashed run leaves
- * WebView2 processes behind; they keep EBWebView/\*.lock and the next app exits
- * on start ("session deleted as the browser has closed the connection").
- * Matching is by command line, so no other app's webviews are touched.
- */
+// ── sandbox / process hygiene ───────────────────────────────────────────────
 const killStale = (sandbox) => {
   if (process.platform !== 'win32') return;
   const needle = sandbox.replace(/\\/g, '\\\\');
@@ -63,137 +70,207 @@ const killStale = (sandbox) => {
     "*' -and ($_.Name -like 'mobi-pos*' -or $_.Name -like 'msedgewebview2*' -or $_.Name -like 'msedgedriver*') } | " +
     'ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }';
   try {
-    execFileSync('powershell', ['-NoProfile', '-Command', script], { stdio: 'ignore', timeout: 30000 });
+    spawnSync('powershell', ['-NoProfile', '-Command', script], { stdio: 'ignore', timeout: 30000 });
   } catch {
-    /* best effort: a stale process is a hygiene problem, not a verdict */
+    /* best effort */
   }
 };
 
-const instance = (name, port, skewMs) => {
+const runInstance = (name, port, skewMs) => {
   const sandbox = path.join(BASE, name);
+  const result = path.join(OUT, `two-instance-${name}.json`);
+  const log = path.join(OUT, `two-instance-${name}.log`);
   killStale(sandbox);
   fs.rmSync(sandbox, { recursive: true, force: true });
   fs.mkdirSync(sandbox, { recursive: true });
-  const result = path.join(OUT, `two-instance-${name}.json`);
   fs.rmSync(result, { force: true });
+
+  const fd = fs.openSync(log, 'w');
+  const r = spawnSync(
+    process.platform === 'win32' ? 'npx.cmd' : 'npx',
+    ['wdio', 'run', 'e2e-tests/wdio.conf.ts', '--spec', 'e2e-tests/specs/90-two-instance.e2e.ts'],
+    {
+      cwd: ROOT,
+      shell: process.platform === 'win32',
+      env: {
+        ...process.env,
+        POS_WDIO_SANDBOX: sandbox,
+        POS_TAURI_DRIVER_PORT: String(port),
+        POS_INSTANCE: name,
+        POS_RESULT_FILE: result,
+        POS_FAKE_CLOCK_SKEW_MS: String(skewMs),
+        WDIO_LOG_LEVEL: 'warn',
+      },
+      stdio: ['ignore', fd, fd],
+      timeout: 10 * 60 * 1000,
+    },
+  );
+  fs.closeSync(fd);
+  killStale(sandbox);
+  let payload = null;
+  try {
+    payload = JSON.parse(fs.readFileSync(result, 'utf8'));
+  } catch {
+    payload = null;
+  }
+  return { name, code: r.status ?? 1, result: payload, log };
+};
+
+// ── gateway ────────────────────────────────────────────────────────────────
+const gw = createGatewayServer({});
+gw.registerDevice('dev-A', publicKeyHexFromSeedHex(SEED_A));
+gw.registerDevice('dev-B', publicKeyHexFromSeedHex(SEED_B));
+const addr = await gw.listen(0);
+const baseUrl = `http://127.0.0.1:${addr.port ?? addr}`;
+
+const keys = { 'dev-A': deviceKeypair(SEED_A), 'dev-B': deviceKeypair(SEED_B) };
+/** A signed mutation exactly in the shape the native lane emits. */
+const mutation = (deviceId, seq, verifiedMs, ticket = 'TKT-TWO') => {
+  const refundId = `REF-${deviceId}-${seq}`;
+  const envelope = envelopeFor(ticket, refundId, 100 + seq, deviceId, seq, verifiedMs);
   return {
-    name,
-    port,
-    skewMs,
-    sandbox,
-    result,
-    child: null,
-    log: path.join(OUT, `two-instance-${name}.log`),
+    seqNo: seq,
+    ticketId: `${ticket}-${seq}`,
+    payload: JSON.stringify({ id: refundId, net: 100 + seq }),
+    deviceSignature: signEnvelope(keys[deviceId].privateKey, envelope),
+    envelope,
   };
 };
-
-// B's clock is 90 s ahead: a live skew, not a mock.
-const a = instance('A', 4511, 0);
-const b = instance('B', 4512, 90_000);
-
-const start = (i) =>
-  new Promise((resolve) => {
-    const log = fs.openSync(i.log, 'w');
-    i.child = spawn(
-      process.platform === 'win32' ? 'npx.cmd' : 'npx',
-      ['wdio', 'run', 'e2e-tests/wdio.conf.ts', '--spec', 'e2e-tests/specs/90-two-instance.e2e.ts'],
-      {
-        cwd: ROOT,
-        shell: process.platform === 'win32',
-        env: {
-          ...process.env,
-          POS_WDIO_SANDBOX: i.sandbox,
-          POS_TAURI_DRIVER_PORT: String(i.port),
-          POS_INSTANCE: i.name,
-          POS_FAKE_CLOCK_SKEW_MS: String(i.skewMs),
-          // Two wdio processes sharing one ts-node cache raced on the tsconfig
-          // read ("@wdio/config ... tsConfigPathFromConfigFile"). Transpile-only
-          // plus a per-instance cache dir removes the shared mutable state.
-          TS_NODE_TRANSPILE_ONLY: '1',
-          TS_NODE_CACHE_DIRECTORY: path.join(i.sandbox, 'tsnode'),
-          POS_RESULT_FILE: i.result,
-          WDIO_LOG_LEVEL: 'warn',
-        },
-        stdio: ['ignore', log, log],
-      },
-    );
-    i.child.on('exit', (code) => resolve(code ?? 1));
-  });
-
-const dbOf = (i) => path.join(i.sandbox, 'home', 'AppData', 'Roaming', 'com.mobi.pos.e2e', 'mobi_pos.db');
-
-/**
- * Launch A, wait until its DB exists (state, not a sleep), then launch B. Both
- * apps are then alive at the same time, but the two WebView2 runtimes do not
- * race each other at process start — that race made the second session die on
- * this host ("session deleted as the browser has closed the connection").
- */
-const launchSecond = async () => {
-  const first = start(a);
-  const deadline = Date.now() + 90_000;
-  while (!fs.existsSync(dbOf(a)) && Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, 200));
-  }
-  const second = start(b);
-  return [await first, await second];
-};
-
-console.log(`[two-instance] launching A then B (ports ${a.port}/${b.port})`);
-const codes = await launchSecond();
-killStale(a.sandbox);
-killStale(b.sandbox);
-const read = (i) => {
+const send = async (deviceId, mutations) => {
   try {
-    return JSON.parse(fs.readFileSync(i.result, 'utf8'));
-  } catch {
-    return null;
+    const res = await postMutations(baseUrl, { deviceId, mutations });
+    return { ok: true, acks: res.ackSeqNos ?? [], token: res.serverTimeToken };
+  } catch (e) {
+    return { ok: false, error: String(e?.message ?? e) };
   }
 };
-const ra = read(a);
-const rb = read(b);
-const tail = (i) => {
-  try {
-    return fs.readFileSync(i.log, 'utf8').split(/\r?\n/).slice(-6).join(' | ');
-  } catch {
-    return '<no log>';
-  }
-};
+const ledgerOf = (deviceId) => gw.ledger().filter((m) => m.deviceId === deviceId);
 
-check('both app processes exited 0', codes[0] === 0 && codes[1] === 0, `A=${codes[0]} B=${codes[1]} :: ${tail(a)} :: ${tail(b)}`);
-check('both instances produced a result', Boolean(ra) && Boolean(rb), `${Boolean(ra)}/${Boolean(rb)}`);
-check('the two sandboxes are different data dirs', ra?.dbPath !== rb?.dbPath, `${ra?.dbPath} vs ${rb?.dbPath}`);
-check('each terminal has its own enrolled device id', Boolean(ra?.deviceId) && Boolean(rb?.deviceId) && ra.deviceId !== rb.deviceId, `${ra?.deviceId} vs ${rb?.deviceId}`);
-check(
-  'each terminal mints from its own fiscal series',
-  Boolean(ra?.series) && Boolean(rb?.series) && ra.series !== rb.series,
-  `${ra?.series} vs ${rb?.series}`,
-);
-check(
-  'both start their own series at 000001 (no shared counter)',
-  String(ra?.receipt ?? '').endsWith('-000001') && String(rb?.receipt ?? '').endsWith('-000001'),
-  `${ra?.receipt} / ${rb?.receipt}`,
-);
-const overlap =
-  Boolean(ra?.startedAt) && Boolean(rb?.startedAt) && Date.parse(ra.startedAt) < Date.parse(rb.finishedAt) && Date.parse(rb.startedAt) < Date.parse(ra.finishedAt);
-check('the two terminals really ran at the same time', overlap, `${ra?.startedAt}..${ra?.finishedAt} vs ${rb?.startedAt}..${rb?.finishedAt}`);
-check('no receipt number collides across terminals', !(ra?.receipts ?? []).some((r) => (rb?.receipts ?? []).includes(r)));
-// Fake clock: B's app clock must actually be shifted, and the fiscal number must
-// be identical in shape (series + counter), i.e. numbering ignores wall time.
-const skewApplied =
-  Boolean(ra?.appClock) && Boolean(rb?.appClock) && Date.parse(rb.appClock) - Date.parse(ra.appClock) > 60_000;
-check('the fake clock is applied on the second terminal (skew visible to the app)', skewApplied, `${ra?.appClock} vs ${rb?.appClock}`);
-check(
-  'the skewed clock does not leak into the fiscal number (no date token)',
-  /^REC-[0-9A-Z]{4,8}-\d{6,}$/.test(String(ra?.receipt ?? '')) &&
-    /^REC-[0-9A-Z]{4,8}-\d{6,}$/.test(String(rb?.receipt ?? '')) &&
-    !String(rb?.receipt ?? '').includes(String(new Date(rb?.appClock ?? 0).getFullYear())),
-  `${ra?.receipt} / ${rb?.receipt}`,
-);
+try {
+  // ── 1. two real app instances ───────────────────────────────────────────
+  console.log('[two-instance] instance A (real clock)');
+  const a = runInstance('A', 4511, 0);
+  console.log(`[two-instance] instance B (fake clock +90 s)`);
+  const b = runInstance('B', 4512, 90_000);
 
-fs.writeFileSync(
-  path.join(OUT, 'two-instance.json'),
-  JSON.stringify({ at: new Date().toISOString(), pass, fail, A: ra, B: rb, codes }, null, 2),
-);
+  check('instance A exited 0 and produced a result', a.code === 0 && Boolean(a.result), `A=${a.code}`);
+  check('instance B exited 0 and produced a result', b.code === 0 && Boolean(b.result), `B=${b.code}`);
+  check(
+    'the two instances used different data dirs',
+    Boolean(a.result?.dbPath) && a.result.dbPath !== b.result?.dbPath,
+    `${a.result?.dbPath} vs ${b.result?.dbPath}`,
+  );
+  check(
+    'each terminal has its own enrolled device identity',
+    Boolean(a.result?.deviceId) && Boolean(b.result?.deviceId) && a.result.deviceId !== b.result.deviceId,
+    `${a.result?.deviceId} vs ${b.result?.deviceId}`,
+  );
+  check(
+    'each terminal mints from its own fiscal series, both at 000001',
+    Boolean(a.result?.series) && Boolean(b.result?.series) && a.result.series !== b.result.series &&
+      String(a.result?.receipt).endsWith('-000001') && String(b.result?.receipt).endsWith('-000001'),
+    `${a.result?.receipt} / ${b.result?.receipt}`,
+  );
+  check(
+    'the fake clock is visible to the second terminal and does not leak into the number',
+    Date.parse(b.result?.appClock ?? 0) - Date.parse(a.result?.appClock ?? 0) > 60_000 &&
+      /^REC-[0-9A-Z]{4,8}-\d{6,}$/.test(String(b.result?.receipt ?? '')),
+    `${a.result?.appClock} vs ${b.result?.appClock}`,
+  );
 
-console.log(`\nTWO-INSTANCE HARNESS: ${pass} passed, ${fail} failed`);
+  // ── 2. fault schedule against the gateway ──────────────────────────────
+  const appClockB = Date.parse(b.result?.appClock ?? Date.now());
+  const aBatch = [1, 2, 3].map((s) => mutation('dev-A', s, Date.now()));
+
+  // partition: the socket is dropped before the server reads the batch
+  gw.simulateDrop(1);
+  const dropped = await send('dev-A', aBatch);
+  check('partition: a dropped socket is a failure, never a silent ACK', !dropped.ok, dropped.ok ? 'unexpected ACK' : 'refused');
+  check('partition: no row was ingested', ledgerOf('dev-A').length === 0, `rows=${ledgerOf('dev-A').length}`);
+
+  // heal: the same batch goes through
+  const healed = await send('dev-A', aBatch);
+  check(
+    'heal: the batch commits with contiguous ACKs and a time token',
+    healed.ok && healed.acks.join(',') === '1,2,3' && String(healed.token ?? '').startsWith('SERVERTIME_V1.'),
+    JSON.stringify(healed.acks ?? healed.error),
+  );
+
+  // duplicate delivery
+  const dup = await send('dev-A', aBatch);
+  check(
+    'duplicate: a replay ACKs without double-inserting',
+    dup.ok && ledgerOf('dev-A').length === 3,
+    `rows=${ledgerOf('dev-A').length}`,
+  );
+
+  // reorder: B's seq 2 arrives before seq 1
+  const bBatch = [1, 2, 3, 4].map((s) => mutation('dev-B', s, appClockB));
+  const gap = await send('dev-B', [bBatch[1]]);
+  const expected = Number(/expected_(\d+)_received_(\d+)/.exec(String(gap.error ?? ''))?.[1] ?? -1);
+  check(
+    'reorder: a future hole is refused with expected/received',
+    !gap.ok && expected === 1 && ledgerOf('dev-B').length === 0,
+    String(gap.error ?? '').slice(0, 90),
+  );
+
+  // clock skew: B's envelopes carry its +90 s clock; seq (not time) orders
+  const skewed = await send('dev-B', bBatch);
+  check(
+    'clock skew: a device 90 s ahead syncs in sequence order',
+    skewed.ok && skewed.acks.join(',') === '1,2,3,4' &&
+      ledgerOf('dev-B').map((m) => m.seqNo).join(',') === '1,2,3,4',
+    JSON.stringify(skewed.acks ?? skewed.error),
+  );
+
+  // crash before the ACK is read: replay the same batch after restart
+  const replay = await send('dev-B', bBatch);
+  check(
+    'crash-before-ACK: the replay is idempotent (4 rows, not 8)',
+    replay.ok && ledgerOf('dev-B').length === 4,
+    `rows=${ledgerOf('dev-B').length}`,
+  );
+
+  // revocation isolates one device
+  gw.setDeviceStatus('dev-B', 'revoked');
+  const revoked = await send('dev-B', [mutation('dev-B', 5, appClockB)]);
+  const stillA = await send('dev-A', [mutation('dev-A', 4, Date.now())]);
+  check(
+    'revocation: the revoked device is refused while the other keeps syncing',
+    !revoked.ok && /DEVICE_REVOKED|403/.test(String(revoked.error ?? '')) && stillA.ok,
+    `${String(revoked.error ?? '').slice(0, 40)} | A=${JSON.stringify(stillA.acks ?? stillA.error)}`,
+  );
+
+  // ── 3. invariants ──────────────────────────────────────────────────────
+  const all = gw.ledger();
+  // A: 3 healed + 1 after B was revoked = 4. B: 1..4 = 4. No duplicates.
+  const expectedRows = 4 + 4;
+  check(
+    'final: every ACKed mutation appears exactly once across both devices',
+    all.length === new Set(all.map((m) => `${m.deviceId}:${m.seqNo}`)).size && all.length === expectedRows,
+    `rows=${all.length} expected=${expectedRows}`,
+  );
+  check(
+    'final: per-device cursors match the highest contiguous seq',
+    gw.cursorOf('dev-A') === 4 && gw.cursorOf('dev-B') === 4,
+    `A=${gw.cursorOf('dev-A')} B=${gw.cursorOf('dev-B')}`,
+  );
+
+  const record = {
+    at: new Date().toISOString(),
+    pass,
+    fail,
+    mode: 'sequential-instances + runner-driven gateway faults',
+    instances: { A: a.result, B: b.result },
+    exitCodes: { A: a.code, B: b.code },
+    ledger: all.map((m) => ({ deviceId: m.deviceId, seqNo: m.seqNo })),
+    cursors: { A: gw.cursorOf('dev-A'), B: gw.cursorOf('dev-B') },
+    checks,
+  };
+  fs.writeFileSync(path.join(OUT, 'two-instance.json'), JSON.stringify(record, null, 2));
+} finally {
+  await gw.close();
+}
+
+console.log(`\nTWO-INSTANCE + GATEWAY FAULTS: ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
