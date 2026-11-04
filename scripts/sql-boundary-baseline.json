@@ -1,12 +1,12 @@
 {
-  "at": "2026-11-04T17:07:52.098Z",
+  "at": "2026-11-04T17:58:53.575Z",
   "count": 318,
   "entries": [
     "src/api/syncGateway.ts:72",
     "src/api/syncGateway.ts:76",
-    "src/db/adapters/customerAdapter.ts:137",
-    "src/db/adapters/customerAdapter.ts:590",
-    "src/db/adapters/customerAdapter.ts:596",
+    "src/db/adapters/customerAdapter.ts:162",
+    "src/db/adapters/customerAdapter.ts:613",
+    "src/db/adapters/customerAdapter.ts:619",
     "src/db/adapters/deviceTrustAdapter.ts:94",
     "src/db/adapters/deviceTrustAdapter.ts:111",
     "src/db/adapters/deviceTrustAdapter.ts:154",
