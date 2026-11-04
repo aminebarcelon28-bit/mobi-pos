@@ -153,7 +153,8 @@
     "gate:schema-heal": "node scripts/check-schema-heal-drift.mjs",
     "gen:schema-heal": "node scripts/gen-schema-heal.mjs",
     "gate:schema-equiv": "node scripts/test_schema_equiv.mjs",
-    "gen:schema-equiv-fixture": "node scripts/make-double-fixture.mjs"
+    "gen:schema-equiv-fixture": "node scripts/make-double-fixture.mjs",
+    "gate:capture-release": "node scripts/check-capture-release.mjs"
   },
   "dependencies": {
     "@libsql/client": "^0.18.0",

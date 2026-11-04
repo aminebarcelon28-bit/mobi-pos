@@ -49,6 +49,23 @@ const src = fs.readFileSync('src/db/sqlPluginAdapter.ts', 'utf8').split(/\r?\n/)
 const sourceRegion = norm(src.slice(88, 1055).join('\n'));
 const sourceSha = sha256(sourceRegion);
 
+// ── 2a. Only heal-owned DDL ───────────────────────────────────────────────
+// A capture is taken from a real app run, and a run can execute statements that
+// are NOT part of the heal (test probes, other lanes' tables). Including them
+// would ship captured noise in the migration. A DDL statement is accepted only
+// when the object it creates/alters is part of the golden schema.
+const goldenNames = new Set(
+  (JSON.parse(fs.readFileSync('docs/schema-manifest.json', 'utf8')).objects || []).map((o) =>
+    String(o.name).toLowerCase(),
+  ),
+);
+const ddlTarget = (sql) => {
+  const m = /^(?:CREATE\s+(?:UNIQUE\s+)?(?:TABLE|INDEX|TRIGGER)\s+(?:IF\s+NOT\s+EXISTS\s+)?"?([A-Za-z_][A-Za-z0-9_]*)|ALTER\s+TABLE\s+"?([A-Za-z_][A-Za-z0-9_]*))/i.exec(
+    sql,
+  );
+  return (m && (m[1] || m[2]) ? (m[1] || m[2]) : '').toLowerCase();
+};
+
 // ── 2. Statements the app ran, owned by those functions ─────────────────────
 const TX = /^(BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE)\b/i;
 // Pre-v100 app_settings shape only (no id/data_json on a modern DB), plus the
@@ -66,6 +83,8 @@ for (const line of lines) {
   // Heal-owned if it appears in the heal sources OR is any captured DDL
   // (idempotent; some ALTERs live in adjacent heal helpers).
   const isDdl = /^(CREATE|ALTER|DROP)\b/i.test(n);
+  // Captured DDL is only heal-owned when it targets a golden object.
+  if (isDdl && !goldenNames.has(ddlTarget(n))) continue;
   if (!sourceRegion.includes(n) && !isDdl) continue;
   seen.add(n);
   owned.push(n);
@@ -153,7 +172,7 @@ const quote = (name) => `"${String(name).replace(/"/g, '""')}"`;
 const master = db
   .prepare(
     `SELECT type, name, tbl_name, sql FROM sqlite_master
-      WHERE name NOT LIKE 'sqlite_%' AND name <> '_sqlx_migrations'
+      WHERE name NOT LIKE 'sqlite_%' AND name <> '_sqlx_migrations' AND name NOT LIKE 'vec_%'
         AND (sql IS NULL OR sql NOT LIKE 'CREATE VIRTUAL TABLE%')
       ORDER BY type, name`,
   )
@@ -207,8 +226,10 @@ const out = `//! GENERATED — do not edit by hand.
 //! Native replay of the renderer's schema heal, captured from a real boot and
 //! matched to its source functions. Regenerate:
 //!
-//!   POS_SQL_CAPTURE=1 <run the app once>
-//!   node scripts/gen-schema-heal.mjs %TEMP%/mobi-sql-capture.log <healed.db>
+//!   node scripts/gen-schema-heal.mjs <capture.log> <healed.db>
+//!
+//! <capture.log> was recorded from a renderer boot before the heal moved native.
+//! The capture hook has since been deleted, so there is exactly one frozen list.
 //!
 //! Drift gate: SOURCE_SHA256 is the hash of the heal functions in
 //! src/db/sqlPluginAdapter.ts. scripts/check-schema-heal-drift.mjs fails when the

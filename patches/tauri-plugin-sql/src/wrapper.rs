@@ -28,24 +28,6 @@ use sqlx::sqlite::SqlitePoolOptions;
 /// pool is read-only; a refused write names its SQL here so the boot-write
 /// migration has an exact list instead of a guess.
 #[cfg(debug_assertions)]
-/// SEC-01 migration capture (debug only): with \`POS_SQL_CAPTURE=1\` every
-/// renderer write is recorded verbatim, so the native migration can be generated
-/// from what the app actually runs instead of a hand-copied list.
-#[cfg(debug_assertions)]
-fn record_captured_sql(query: &str) {
-    if std::env::var("POS_SQL_CAPTURE").ok().as_deref() != Some("1") {
-        return;
-    }
-    let path = std::env::temp_dir().join("mobi-sql-capture.log");
-    use std::io::Write;
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
-        let _ = writeln!(f, "{}", query.replace('\n', " "));
-    }
-}
-
-#[cfg(not(debug_assertions))]
-fn record_captured_sql(_query: &str) {}
-
 fn record_write_violation(query: &str, err: &str) {
     if std::env::var("POS_SQL_QUERY_ONLY").ok().as_deref() != Some("1") {
         return;
@@ -247,7 +229,6 @@ impl DbPool {
                         BoundValue::Json(j) => query = query.bind(j),
                     }
                 }
-                record_captured_sql(&_query);
             let result = match pool.execute(query).await {
                 Ok(r) => r,
                 Err(e) => {

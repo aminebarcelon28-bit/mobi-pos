@@ -46,15 +46,13 @@ for (const [re, label] of forbidden) {
   if (re.test(body)) problems.push(`generated statements contain a ${label}`);
 }
 
-// The capture hook must be debug-only in the patched plugin.
+// The capture hook has served its purpose (the list is captured and frozen).
+// It must not exist in the plugin at all, so no build can ever record SQL.
 const wrapper = fs.readFileSync('patches/tauri-plugin-sql/src/wrapper.rs', 'utf8');
-const captureIdx = wrapper.indexOf('fn record_captured_sql');
-const captureFn = wrapper.slice(Math.max(0, captureIdx - 200), wrapper.indexOf('fn record_write_violation'));
-if (!captureFn.includes('#[cfg(debug_assertions)]') || !captureFn.includes('#[cfg(not(debug_assertions))]')) {
-  problems.push('record_captured_sql is not debug-gated (would ship in release)');
-}
-if (!/#\[cfg\(not\(debug_assertions\)\)\][\s\S]{0,80}fn record_captured_sql\(_query: &str\) \{\}/.test(wrapper)) {
-  problems.push('record_captured_sql has no release no-op');
+for (const marker of ['POS_SQL_CAPTURE', 'mobi-sql-capture', 'record_captured_sql']) {
+  if (wrapper.includes(marker)) {
+    problems.push(`capture hook still present in the SQL plugin (${marker})`);
+  }
 }
 
 if (problems.length) {
@@ -62,4 +60,4 @@ if (problems.length) {
   for (const p of problems) console.error('  - ' + p);
   process.exit(1);
 }
-console.log('[schema-heal-drift] OK (source hash matches, fixed literals only, capture hook debug-gated)');
+console.log('[schema-heal-drift] OK (source hash matches, fixed literals only, capture hook removed)');

@@ -212,10 +212,72 @@ Until that lane exists the fresh path cannot be 0 and the plugin default stays
 opt-in; the JS heal call and the capture hook stay until the fresh probe reaches
 0, per the ruling.
 
+## Fiscal shift-open lane (2026-11-04, E-0196)
+
+**Failing first.** The lane was written with the session insert only, and the
+parity test asserted the outbox row and the entity key. `cargo test --lib
+shift_lane` failed all three tests (`QueryReturnedNoRows`, `left: 0, right: 1`),
+which is the recorded gap; the parity was then added and the same three passed.
+
+`src-tauri/src/shift_lane.rs` — one native transaction (`OperationalWrites`):
+
+| Step | Detail |
+|---|---|
+| device identity | resolved from `app_settings.sync.device_id`, minted if absent; the request struct has **no** device field |
+| double-open | refused by the same query the renderer used, with a typed `SHIFT_ALREADY_OPEN` |
+| session | `cash_sessions` insert, fixed literal |
+| entity key | `entity_keys` row (UUID) in the same transaction |
+| outbox | `sync_outbox` UPSERT with the bumped version; `deviceId`/`version` are rewritten natively so the payload cannot spoof either |
+
+The renderer skips its SQL insert **and** its `fireSync` when the native lane runs
+(the native transaction already wrote the outbox), and falls back to SQL only on a
+non-Tauri host. Money-rule suites re-run: **40-shf 12/12, 30-ref 12/12,
+34-ref 17/17**, and spec 50 10/10 / spec 92 1/1.
+
+**Fresh-install probe (real wipe, `POS_SQL_QUERY_ONLY=1`): 0 refused renderer
+writes**, shift `OPEN`:
+
+```
+[0-0] SHIFTPROBE {"id":"SHIFT-1793806239950-1-Z0Z6","status":"OPEN"}
+--- refusals ---
+NONE
+```
+
+That 0 was reached after removing the last renderer write paths on boot **and**
+fixing four defects the probe exposed:
+
+1. **Capture pollution** — the capture log had been appended to by a spec run, and
+   the "all captured DDL" rule pulled `CREATE/DROP TABLE sec2_control` into the
+   generated migration (259 statements). The generator now accepts DDL only when
+   its target is a golden-manifest object → 221 statements, no probe names.
+2. **Lazy native tables** — `device_identity` is in the golden manifest but was
+   only created on first use, so a fresh install failed the post-condition. It is
+   now ensured before the heal (`ensure_native_schema`).
+3. **Manifest ownership** — `time_anchor`/`import_*` are created by other native
+   lanes and are now allowed by exact name; vector tables (`vec_*`) are excluded
+   on both sides because better-sqlite3 (generator) cannot load `vec0` while the
+   Rust side can, which made the two manifests disagree.
+4. **Stale-state probes** — `npm run e2e:clean` does not wipe the app database; a
+   probe without `POS_E2E_WIPE=1` measured a leftover live shift and reported a
+   false `SHIFT_ALREADY_OPEN`. Probes now wipe explicitly.
+
+**Hook deleted.** `record_captured_sql` and its call are gone from the patched
+plugin; the renderer heal is no longer called on Tauri at all (an unapplied native
+heal is a fail-closed stop, never a second writer). `schema_heal_sql.rs` is the
+frozen list. `npm run gate:capture-release -- --build` builds the plugin in
+release and proves the artifact carries no capture marker (9 rlibs checked).
+
+**Still blocking the default flip:** the money write paths. `beginImmediate` is
+still called from the renderer for checkout (`writeCheckoutAtomic`), void,
+refund, restitution, FIFO reconcile, repair COGS, inventory deltas and sync order;
+a read-only pool would refuse those. They are the next lanes, in that order, and
+the plugin default stays opt-in until a full e2e run under the flag is clean.
+
 ## Next, in order
 
-1. `open_shift` native lane (fiscal state: transaction + audit + outbox parity),
-   with a failing→passing test and the refund suites re-run; re-probe fresh to 0.
-2. Delete the JS heal call + capture hook; full e2e under `POS_SQL_QUERY_ONLY=1`.
-3. Money-path p95 budget; release gate for the capture path; concurrent
-   same-entity case; REPO/OWNER one-liners; tag after the clean-worktree floor.
+1. Native lanes for the money write transactions (checkout first, then void/refund),
+   each with a failing→passing test and the refund suites re-run.
+2. Full e2e under `POS_SQL_QUERY_ONLY=1`; rework spec 92's writable controls to a
+   native lane (they deliberately write through the pool today).
+3. Money-path p95 before/after (budget ≤10 %); concurrent same-entity case;
+   REPO/OWNER one-liners; clean-worktree floor and tag.

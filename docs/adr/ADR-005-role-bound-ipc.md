@@ -242,3 +242,16 @@ The fresh-install refusal count fell 13 → 1 after moving the device-identity w
 commands. `set_app_setting` explicitly refuses sensitive keys by name. The one
 remaining write is the shift-open insert (`cash_sessions`), a fiscal business
 write that needs its own tests and refund-suite re-runs before it can have a lane.
+
+9. **A capture log is not a clean input.** It was appended to by a later spec run,
+   and the "include all captured DDL" rule pulled a test's `sec2_control` table
+   into the migration. DDL is now accepted only when its target is a golden object.
+10. **Lazy native tables are not optional in the post-condition.** `device_identity`
+   is in the golden manifest but was created on first use; a fresh install failed
+   the migration. Native-owned tables are ensured before the heal.
+11. **Two different SQLite builds saw two different schemas.** The JS generator
+   (no `vec0`) treated the vector table as a NULL-sql object; Rust (with `vec0`)
+   excluded it. Vector objects are excluded on both sides.
+12. **`npm run e2e:clean` does not wipe the app database.** A probe without
+   `POS_E2E_WIPE=1` reported `SHIFT_ALREADY_OPEN` from a leftover shift; the
+   first "shift UI fails under query_only" conclusion was measurement error.

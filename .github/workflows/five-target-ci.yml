@@ -96,6 +96,27 @@ jobs:
         continue-on-error: true
         run: cargo test -p mobi-pos --lib money::
 
+  # Release hygiene: the SQL capture hook must not exist in a release
+  # build. Source-level cfg review is not enough — this builds the patched
+  # plugin in release and greps the artifact for the capture markers.
+  capture-release:
+    name: Release build ships no SQL capture path
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Desktop build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libudev-dev
+
+      - name: Capture-path release gate
+        run: npm run gate:capture-release -- --build
+
   # Native-heal equivalence: the migration must reproduce the renderer's
   # schema AND its data changes on real legacy databases (rc-5/rc-6), a
   # row-driven-backfill fixture and the current schema.

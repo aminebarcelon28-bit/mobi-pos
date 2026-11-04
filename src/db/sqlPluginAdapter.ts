@@ -1319,11 +1319,16 @@ export function getLocalDb(): Promise<Database> {
       }
     }
     if (!columnsEnsured) {
-      // The native schema heal replays the same 131 statements (captured from
-      // this very function) at startup. Skip only when it reported zero
-      // failures; a partial heal must fall back to the renderer pass.
+      // The native migration owns schema on Tauri (see boot_maintenance).
+      // A Tauri boot where it did not apply is a STOP, never a renderer heal:
+      // after the read-only flip this pool cannot write, and a silent second
+      // writer would hide a broken migration. Web preview keeps the SQL heal.
       if (nativeSchemaHeal) {
         columnsEnsured = true;
+      } else if (isTauriEnv()) {
+        throw new Error(
+          'schema heal not applied natively — refusing to boot against a half-migrated database',
+        );
       } else {
         await ensureLocalSyncColumns(cached);
         columnsEnsured = true;

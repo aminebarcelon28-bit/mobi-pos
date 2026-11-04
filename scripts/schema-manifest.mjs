@@ -46,7 +46,7 @@ const db = new Database(dbPath, { readonly: true });
 const objects = db
   .prepare(
     `SELECT type, name, tbl_name, sql FROM sqlite_master
-      WHERE name NOT LIKE 'sqlite_%' AND name <> '_sqlx_migrations'
+      WHERE name NOT LIKE 'sqlite_%' AND name <> '_sqlx_migrations' AND name NOT LIKE 'vec_%'
         AND (sql IS NULL OR sql NOT LIKE 'CREATE VIRTUAL TABLE%')
       ORDER BY type, name`,
   )

@@ -259,6 +259,12 @@ pub const LEGACY_EXTRA_INDEXES: &[&str] = &[
 /// Compare the migrated schema with the golden manifest:
 ///  - every golden object must exist with identical definition;
 ///  - additional objects are allowed only for [LEGACY_EXTRA_INDEXES].
+/// Tables created by other native lanes, outside the heal's contract:
+/// lazy native-owned tables (time anchor, import staging) that a run may create
+/// after the first migration. They are allowed by exact name; anything else
+/// extra is a mismatch.
+pub const NATIVE_OWNED_TABLES: &[&str] = &["time_anchor", "import_batches", "import_staging_rows"];
+
 pub fn manifest_compatible(golden: &str, actual: &str) -> Result<(), String> {
     let g: serde_json::Value = serde_json::from_str(golden)
         .map_err(|e| format!("golden manifest parse: {e}"))?;
@@ -296,7 +302,9 @@ pub fn manifest_compatible(golden: &str, actual: &str) -> Result<(), String> {
         }
         let name = o.get("name").and_then(|v| v.as_str()).unwrap_or("");
         let typ = o.get("type").and_then(|v| v.as_str()).unwrap_or("");
-        if typ != "index" || !LEGACY_EXTRA_INDEXES.contains(&name) {
+        let allowed = (typ == "index" && LEGACY_EXTRA_INDEXES.contains(&name))
+            || (typ == "table" && NATIVE_OWNED_TABLES.contains(&name));
+        if !allowed {
             return Err(format!("unexpected schema object: {k}"));
         }
     }
@@ -320,7 +328,7 @@ pub fn schema_manifest(conn: &Connection) -> Result<String, String> {
     let mut stmt = conn
         .prepare(
             "SELECT type, name, tbl_name, sql FROM sqlite_master
-              WHERE name NOT LIKE 'sqlite_%' AND name <> '_sqlx_migrations'
+              WHERE name NOT LIKE 'sqlite_%' AND name <> '_sqlx_migrations' AND name NOT LIKE 'vec_%'
               AND (sql IS NULL OR sql NOT LIKE 'CREATE VIRTUAL TABLE%')
               ORDER BY type, name",
         )
@@ -1132,9 +1140,18 @@ pub fn migrate_and_heal_path(path: &std::path::Path) -> Result<(MigrationReport,
         prep_columns(&conn)?;
         retry_skipped_migrations(&mut conn, &migrations.retry_versions)?;
     }
-    let _ = crate::trust_core::audit_append::ensure_audit_schema(&mut conn);
+    ensure_native_schema(&mut conn);
     let heal = run_schema_heal(&mut conn).map_err(|f| f.to_string())?;
     Ok((migrations, heal))
+}
+
+/// Create/verify the native-owned tables that are part of the golden manifest
+/// but are otherwise created lazily (audit chain, device identity). The heal's
+/// post-condition runs right after this, so a fresh install must already have
+/// them; anything this does not create is caught by the manifest check.
+pub fn ensure_native_schema(conn: &mut Connection) {
+    let _ = crate::trust_core::audit_append::ensure_audit_schema(conn);
+    let _ = crate::trust_core::device_identity::ensure_schema(conn);
 }
 
 /// Full native startup: migrate base schema, ensure native objects, back up an
@@ -1156,7 +1173,7 @@ pub fn run_native_startup(
         .map_err(|e| format!("startup fk: {e}"))?;
 
     let migrations = native_migrate(&mut conn)?;
-    let _ = crate::trust_core::audit_append::ensure_audit_schema(&mut conn);
+    ensure_native_schema(&mut conn);
 
     let (backup_path, backup_sha) = if existed {
         let backups = app_dir.join("backups");
@@ -1277,7 +1294,7 @@ pub fn run_schema_heal_at_startup(app_dir: &std::path::Path) -> Result<SchemaHea
     // (they are created lazily elsewhere; a legacy DB may predate them).
     {
         let mut conn = Connection::open(&path).map_err(|e| format!("heal open: {e}"))?;
-        let _ = crate::trust_core::audit_append::ensure_audit_schema(&mut conn);
+        ensure_native_schema(&mut conn);
     }
     let backups = app_dir.join("backups");
     let (backup_path, backup_sha) = backup_before_heal(&path, &backups)?;
@@ -1740,7 +1757,7 @@ mod tests {
             let mut conn = Connection::open(&path).expect("equiv fixture open");
             conn.busy_timeout(std::time::Duration::from_millis(15000)).unwrap();
             crate::boot_maintenance::native_migrate(&mut conn).expect("native migrations");
-            let _ = crate::trust_core::audit_append::ensure_audit_schema(&mut conn);
+            ensure_native_schema(&mut conn);
             println!("EQUIV_MIGRATE_OK");
             return;
         }

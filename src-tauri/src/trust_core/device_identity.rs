@@ -292,6 +292,15 @@ CREATE TABLE IF NOT EXISTS device_identity (
     last_outbox_seq INTEGER NOT NULL DEFAULT 0
 );";
 
+/// Ensure the native-owned identity table exists. Called before the schema
+/// migration so its golden-manifest post-condition can see every native table
+/// the manifest lists (a fresh install starts empty).
+pub fn ensure_schema(conn: &Connection) -> Result<(), TrustError> {
+    conn.execute_batch(IDENTITY_DDL)
+        .map_err(|e| TrustError::op_failed(format!("device identity table: {e}")))?;
+    ensure_seq_column(conn)
+}
+
 /// Idempotent sequence-counter column for pre-DDL rows (fresh CREATEs carry
 /// it; upgraded rows gain it here — duplicate-tolerant by probe, since bare
 /// ALTER fails when the column exists).

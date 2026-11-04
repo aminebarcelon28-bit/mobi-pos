@@ -540,34 +540,76 @@ export const shiftAdapter = {
       ...{ openedBy: opener, currentCashier: baseSession.cashierName },
     };
 
+    let openedNatively = false;
     if (isTauriEnv()) {
-      const { getLocalDb } = await import('../sqlPluginAdapter');
-      const sql = (await getLocalDb()) as unknown as SqlDb;
+      // Fiscal write: opening a shift inserts the session AND enqueues its sync
+      // row. Both must land together, so the Tauri path goes through the native
+      // `open_shift` lane (one transaction: cash_sessions + entity_keys +
+      // sync_outbox). The renderer SQL is only the non-Tauri fallback.
+      const { invokeCommand } = await import('../../platform/invoke');
       try {
-        await sql.execute(INSERT_SESSION_SQL, sessionParams(newSession, devId));
+        await invokeCommand<{ deviceId: string; version: number }>('open_shift', {
+          request: {
+            id: newSession.id,
+            openedAt: newSession.openedAt,
+            openingFloat: newSession.openingFloat,
+            cashierName: newSession.cashierName,
+            openingNote: newSession.openingNote ?? '',
+            terminalName: newSession.terminalName ?? '',
+            jsonPayload: JSON.stringify(newSession),
+          },
+        });
+        openedNatively = true;
       } catch (err) {
         const msg = String((err as Error)?.message ?? err);
-        if (msg.includes('uq_one_live_shift_per_device') || msg.includes('cash_sessions.device_id')) {
+        if (msg.includes('SHIFT_ALREADY_OPEN')) {
           throw codedError(
             SHIFT_ALREADY_OPEN,
-            'Une session est déjà ouverte sur cet appareil (contrainte SQLite)',
+            'Une session est dAcjA� ouverte sur cet appareil (contrainte native)',
           );
         }
-        throw new ShiftSqliteError('SQLITE_OPEN_FAILED', `Échec d'ouverture de session dans SQLite: ${msg}`, err);
+        // Only an absent command falls back; a real native failure must surface.
+        if (/not found|unknown command|open_shift is not/i.test(msg)) {
+          console.warn('[startShift] native open_shift unavailable; renderer fallback', msg);
+        } else {
+          throw new ShiftSqliteError(
+            'SQLITE_OPEN_FAILED',
+            `A%chec d'ouverture de session (natif): ${msg}`,
+            err,
+          );
+        }
       }
 
-      // Read back to verify
-      const rows = await sql.select<{ id: string; status: string }>(
-        'SELECT id, status FROM cash_sessions WHERE id = ?',
-        [newSession.id]
-      );
-      if (!rows[0] || rows[0].status !== 'OPEN') {
-        throw new ShiftSqliteError('SQLITE_OPEN_FAILED', 'Vérification SQLite échouée : session non trouvée en statut OPEN');
+      if (!openedNatively) {
+        const { getLocalDb } = await import('../sqlPluginAdapter');
+        const sql = (await getLocalDb()) as unknown as SqlDb;
+        try {
+          await sql.execute(INSERT_SESSION_SQL, sessionParams(newSession, devId));
+        } catch (err) {
+          const msg = String((err as Error)?.message ?? err);
+          if (msg.includes('uq_one_live_shift_per_device') || msg.includes('cash_sessions.device_id')) {
+            throw codedError(
+              SHIFT_ALREADY_OPEN,
+              'Une session est dAcjA� ouverte sur cet appareil (contrainte SQLite)',
+            );
+          }
+          throw new ShiftSqliteError('SQLITE_OPEN_FAILED', `A%chec d'ouverture de session dans SQLite: ${msg}`, err);
+        }
+
+        const rows = await sql.select<{ id: string; status: string }>(
+          'SELECT id, status FROM cash_sessions WHERE id = ?',
+          [newSession.id],
+        );
+        if (!rows[0] || rows[0].status !== 'OPEN') {
+          throw new ShiftSqliteError('SQLITE_OPEN_FAILED', 'VAcrification SQLite AcchouAce : session non trouvAce en statut OUVERTE');
+        }
       }
     }
 
     await dexieDb.cashSessions.put(newSession);
-    void fireSync('cash_session', newSession.id, newSession);
+    // Native already wrote entity_keys + sync_outbox in the same transaction;
+    // enqueueing again would bump the clock twice for one fiscal event.
+    if (!openedNatively) void fireSync('cash_session', newSession.id, newSession);
     return newSession;
   },
 
