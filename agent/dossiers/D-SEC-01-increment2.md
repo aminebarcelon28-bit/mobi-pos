@@ -273,11 +273,70 @@ refund, restitution, FIFO reconcile, repair COGS, inventory deltas and sync orde
 a read-only pool would refuse those. They are the next lanes, in that order, and
 the plugin default stays opt-in until a full e2e run under the flag is clean.
 
+## Money-path refusals, measured (2026-11-04, E-0198/E-0199)
+
+Two things happened here: the floor was restored honestly, and the biggest
+runtime refusal class was removed.
+
+**Floor restored to 318.** The extra static entry was a real renderer write
+(`shiftAdapter.setShiftCashier`), so it got a native lane instead of a raised
+baseline: `set_shift_cashier` updates the session row, the entity key and the
+outbox in one transaction (two Rust tests: hand-over keeps outbox in step;
+unknown shift writes nothing). The renderer SQL is gone, so the scan is back to
+**318** — the rc-10 floor, not 319.
+
+**Generic sync enqueue is native.** `fireSync` funnels every lane through
+`enqueueGenericSync`, which used to do four renderer writes (entity key insert,
+version bump, outbox upsert, ALTER probe). Measured in one refund spec under
+`POS_SQL_QUERY_ONLY=1`: **94 × 4** of those. `src-tauri/src/sync_lane.rs` now
+does it in one transaction (`enqueue_sync_upsert` / `enqueue_sync_delete`):
+entity name checked against the same closed set as the TS union, payload bounded
+to 64 KiB and required to be a JSON object, version injected natively; four Rust
+tests (monotonic clock, tombstone, unknown entity writes nothing, oversize
+rejected before any write).
+
+**Measured, same spec, same machine** (`30-ref-refunds` under the flag):
+
+| State | Refused renderer writes |
+|---|---|
+| before the enqueue lane | **438** |
+| after | **133** |
+
+What the remaining 133 are (verbatim from the violation log):
+
+```
+x71 UPDATE customers SET sync_status = 'synced' WHERE id = $1 AND version …
+x22 INSERT INTO customers (…)
+x20 UPDATE customers SET json_payload = CASE WHEN json_valid(…) …
+x15 BEGIN IMMEDIATE;
+x2  INSERT INTO customers (…)
+x2  INSERT INTO store_expenses (…)
+x1  INSERT INTO products (…)
+```
+
+That is the ordered work list for the flip:
+
+1. **customer mirror** (`customerAdapter.saveCustomer` + the post-refund loyalty
+   mirror + the pull lane's `sync_status='synced'` stamp) — 115 of the 133;
+2. **void** (`db:void`) — no native lane exists at all;
+3. **store_expenses** insert;
+4. the remaining **`BEGIN IMMEDIATE`** call sites (restitute / FIFO / inventory /
+   sync order) and the test-seed product insert.
+
+Spec 10 (checkout) under the flag is already **green 14/14** with 12 refusals
+(11 `BEGIN IMMEDIATE` probes + 1 seed insert), i.e. the checkout kernel itself is
+native and does not write through the pool.
+
+Normal-mode regression checks: `30-ref-refunds` **12/12**, `40-shf-shifts`
+**12/12** after the cashier lane. `24-syn-sync` shows 3 failing cases
+(SYN-04/26/27), which the baseline COVERAGE already records as FAIL — those are
+unimplemented conflict/HLC/encryption features, not regressions.
+
 ## Next, in order
 
-1. Native lanes for the money write transactions (checkout first, then void/refund),
-   each with a failing→passing test and the refund suites re-run.
-2. Full e2e under `POS_SQL_QUERY_ONLY=1`; rework spec 92's writable controls to a
-   native lane (they deliberately write through the pool today).
-3. Money-path p95 before/after (budget ≤10 %); concurrent same-entity case;
-   REPO/OWNER one-liners; clean-worktree floor and tag.
+1. Customer mirror lane (saveCustomer + refund loyalty mirror + pull sync-status):
+   expect the refund-spec refusals to drop from 133 to ~18.
+2. `void_sale_atomic` (money path with no native lane).
+3. store_expenses, the remaining `BEGIN IMMEDIATE` lanes, then the full suite under
+   the flag; money-path p95 before/after; concurrent same-entity case;
+   clean-worktree floor + tag.

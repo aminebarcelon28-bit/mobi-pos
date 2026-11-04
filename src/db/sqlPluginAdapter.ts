@@ -4140,7 +4140,21 @@ export async function requeuePendingCustomerWrites(db?: Database): Promise<numbe
 export async function enqueueGenericSync(
   entity: GenericEntity, id: string, entityPayload: Record<string, unknown>,
 ): Promise<void> {
-  // Self-serializing (house rule — see markOutbox): callers own retry only.
+  // Native lane (SEC-01): entity key, version clock and outbox row commit in one
+  // transaction on the Rust side, so a read-only renderer pool can still sync.
+  const nativeId = String(id || (entityPayload?.id as string) || newId(entity));
+  if (isTauriEnv()) {
+    const { invokeCommand } = await import('../platform/invoke');
+    await invokeCommand<{ version: number }>('enqueue_sync_upsert', {
+      request: {
+        entity,
+        entityId: nativeId,
+        payloadJson: toBoundedSyncJson({ ...entityPayload }),
+      },
+    });
+    return;
+  }
+  // Non-Tauri host: the SQL lane below is the fallback.
   return withWriteLock(async () => {
     const db = await getLocalDb();
     const now = utcNowIso();
@@ -4164,7 +4178,15 @@ export async function enqueueGenericSync(
 
 /** Tombstone a generic entity (soft-delete converges everywhere). */
 export async function enqueueGenericDelete(entity: GenericEntity, id: string): Promise<void> {
-  // Self-serializing (house rule — see markOutbox): callers own retry only.
+  // Native lane (SEC-01): the tombstone and its clock bump commit together.
+  if (isTauriEnv()) {
+    const { invokeCommand } = await import('../platform/invoke');
+    await invokeCommand<{ version: number }>('enqueue_sync_delete', {
+      request: { entity, entityId: String(id || newId(entity)), payloadJson: '{}' },
+    });
+    return;
+  }
+  // Non-Tauri host: the SQL lane below is the fallback.
   return withWriteLock(async () => {
     const db = await getLocalDb();
     const now = utcNowIso();

@@ -264,3 +264,16 @@ write that needs its own tests and refund-suite re-runs before it can have a lan
     The count is an honest inventory, not a relaxed limit; no new renderer write
     was introduced (the boot-path renderer heal call and the capture hook were
     removed in the same change).
+
+### Generic sync enqueue is native (2026-11-04)
+
+`enqueueGenericSync`/`enqueueGenericDelete` were the largest renderer write
+class once boot and shift moved native (94 × 4 statements in one refund spec).
+They now run as `enqueue_sync_upsert`/`enqueue_sync_delete` in one transaction:
+the entity name is validated against the same closed set as the TS `GenericEntity`
+union, the payload is bounded at 64 KiB and must be a JSON object, and the version
+is injected natively. The renderer keeps its SQL only as a non-Tauri fallback, so
+the static boundary stays at the 318 floor while the runtime surface shrinks
+(438 → 133 refusals on `30-ref-refunds`). `set_shift_cashier` was migrated in the
+same change, which is what restored the static count to 318 after the scanner
+started reaching a previously uncounted pre-existing UPDATE.

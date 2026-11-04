@@ -9,6 +9,10 @@ fiscal receipts and multi-terminal sync.
   Turso is a remote sync transport only (see `AGENTS.md`).
 - **Mobile:** the same WebView UI in a mobile shell (companion mode).
 - **Money:** integer dinars at every boundary; no tax feature by product decision.
+- **Repo status (2026-11-04):** REPO PASS **not claimed** — boot + shift open run at
+  zero refused renderer writes under `POS_SQL_QUERY_ONLY=1`, but the money write
+  lanes, the full-suite flip measurement and the clean-worktree floor are open.
+  Gates and evidence: `docs/c01-evidence.ndjson`, `agent/dossiers/`.
 
 ## Quick start
 

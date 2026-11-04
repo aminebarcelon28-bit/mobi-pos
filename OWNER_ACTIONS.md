@@ -1,5 +1,10 @@
 # OWNER_ACTIONS — what I need from you (and what happens after)
 
+**Status (2026-11-04):** 3 owner blockers open (HAR-002 printer, HAR-003 merchant
+gateway + per-device keys, HAR-004 fiscal layout); everything else is agent-owned.
+The read-only renderer pool is not flipped yet: boot + shift open are at **0**
+refused renderer writes, the money write transactions are still being ported.
+
 Three things only you can provide. Each is written as: what to supply → time →
 the one command to run → which verdicts flip. Nothing else in the queue needs you.
 

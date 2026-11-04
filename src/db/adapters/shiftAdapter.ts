@@ -1012,27 +1012,28 @@ export const shiftAdapter = {
       cashierName: clean,
       updatedAt: new Date().toISOString(),
     };
+    // Fiscal attribution write: native lane keeps the session row, the entity
+    // key and the outbox in one transaction; the renderer enqueues only when the
+    // native command is unavailable (non-Tauri hosts skip both).
+    let handedOverNatively = false;
     if (isTauriEnv()) {
       try {
-        const { getLocalDb } = await import('../sqlPluginAdapter');
-        const sql = (await getLocalDb()) as unknown as SqlDb;
-        await sql.execute(
-          `UPDATE cash_sessions
-           SET cashier_name = ?,
-               json_payload = CASE WHEN json_valid(json_payload)
-                                   THEN json_set(json_payload, '$.cashierName', ?, '$.currentCashier', ?)
-                                   ELSE json_payload END,
-               updated_at = ?,
-               version = version + 1
-           WHERE id = ?`,
-          [clean, clean, clean, updated.updatedAt, open.id]
-        );
+        const { invokeCommand } = await import('../../platform/invoke');
+        await invokeCommand<{ version: number }>('set_shift_cashier', {
+          request: {
+            id: open.id,
+            cashierName: clean,
+            updatedAt: updated.updatedAt,
+            jsonPayload: JSON.stringify(updated),
+          },
+        });
+        handedOverNatively = true;
       } catch (err) {
-        console.warn('[setShiftCashier] SQLite update warning:', err);
+        console.warn('[setShiftCashier] native hand-over failed:', err);
       }
     }
     await dexieDb.cashSessions.put(updated);
-    void fireSync('cash_session', updated.id, updated);
+    if (!handedOverNatively) void fireSync('cash_session', updated.id, updated);
     const movements = await dexieDb.cashMovements.where('sessionId').equals(updated.id).toArray();
     return { ...updated, movements };
   },
