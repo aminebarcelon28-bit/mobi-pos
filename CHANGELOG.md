@@ -4,7 +4,7 @@ All notable changes to MobiPOS. Dates are local. Evidence IDs refer to
 `docs/c01-evidence.ndjson`; tags `c01-rc-N` are cut from a clean worktree whose
 gate table is recorded in the same ledger.
 
-## [Unreleased] — after c01-rc-6
+## [Unreleased] — after c01-rc-11
 
 ### Added
 - **ESC/POS capture sink + decoder oracle** (`scripts/escpos_sink.mjs`,
@@ -42,8 +42,6 @@ gate table is recorded in the same ledger.
 - SHF-05 is clock-independent (two-day backdate, 48-slot sweep); 40-shf 12/12.
 - Zero-tax gate converted to content anchors over all of `src-tauri/src`
   (23/23) — a moved line no longer fails, an edited or new one does.
-
-## [Unreleased] — after c01-rc-11
 
 ### Changed
 - **Native boot maintenance (SEC-01 step 2):** outbox purge/inflight reset, debt
