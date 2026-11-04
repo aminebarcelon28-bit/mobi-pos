@@ -1380,6 +1380,17 @@ export async function checkAndRunScheduledDbMaintenance(db: Database): Promise<v
     }
 
     if (lastMonth !== currentMonth) {
+      try {
+        const { invokeCommand } = await import('../platform/invoke');
+        await invokeCommand<void>('idle_maintenance');
+        await invokeCommand<void>('set_sync_setting', {
+          key: 'sync.maintenance.last_month',
+          valueJson: JSON.stringify(currentMonth),
+        });
+        return;
+      } catch {
+        /* non-Tauri host: renderer maintenance below */
+      }
       await runDbMaintenance(db);
       await db.execute(
         "INSERT INTO app_settings (key, value_json, version, updated_at) VALUES ('sync.maintenance.last_month', ?, 1, ?) ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at;",
@@ -1431,6 +1442,15 @@ export async function getSyncDeviceId(): Promise<string | null> {
 }
 
 async function getOrCreateDeviceId(db: Database): Promise<string> {
+  // Native lane (SEC-01): the identity write no longer goes through the
+  // renderer pool. Read-only fallback stays for web preview.
+  try {
+    const { invokeCommand } = await import('../platform/invoke');
+    const id = await invokeCommand<string>('ensure_device_id');
+    if (id) return id;
+  } catch {
+    /* non-Tauri host: fall through to SQL */
+  }
   const rows = (await db.select('SELECT value_json FROM app_settings WHERE key = \'sync.device_id\'')
     .catch(() => [])) as Array<{ value_json: string }>;
   if (rows?.[0]?.value_json) {
@@ -4866,6 +4886,14 @@ async function dedupeAllocationTwins(
   saleId?: string
 ): Promise<number> {
   try {
+    if (!saleId) {
+      try {
+        const { invokeCommand } = await import('../platform/invoke');
+        return await invokeCommand<number>('purge_orphan_allocations');
+      } catch {
+        /* non-Tauri host */
+      }
+    }
     const keepSubquery = `EXISTS (
       SELECT 1 FROM sale_batch_allocations AS keep
       WHERE keep.sale_id = sale_batch_allocations.sale_id

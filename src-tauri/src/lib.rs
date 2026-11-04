@@ -30,6 +30,7 @@ pub mod trust_core;
 pub mod e2e; pub mod import;
 pub mod sql_ro;
 pub mod boot_maintenance;
+pub mod settings_lane;
 pub mod schema_heal_sql;
 #[cfg(test)] pub mod sql_boundary;
 
@@ -2480,6 +2481,11 @@ pub fn run() {
             boot_maintenance::schema_heal_status,
             boot_maintenance::run_schema_heal_command,
             boot_maintenance::bump_parked_attempts_command,
+            settings_lane::ensure_device_id,
+            settings_lane::set_sync_setting,
+            settings_lane::set_app_setting,
+            settings_lane::idle_maintenance,
+            settings_lane::purge_orphan_allocations,
             emergency_export::emergency_export_ledger,
             sav_attachments::sav_attachment_write,
             sav_attachments::sav_attachment_read,
@@ -2568,6 +2574,11 @@ pub fn run() {
             boot_maintenance::schema_heal_status,
             boot_maintenance::run_schema_heal_command,
             boot_maintenance::bump_parked_attempts_command,
+            settings_lane::ensure_device_id,
+            settings_lane::set_sync_setting,
+            settings_lane::set_app_setting,
+            settings_lane::idle_maintenance,
+            settings_lane::purge_orphan_allocations,
             emergency_export::emergency_export_ledger,
             sav_attachments::sav_attachment_write,
             sav_attachments::sav_attachment_read,

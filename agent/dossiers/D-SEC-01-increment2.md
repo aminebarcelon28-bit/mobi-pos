@@ -189,10 +189,33 @@ have native lanes, the fresh install still needs a writable pool (spec 92 under
 `POS_SQL_QUERY_ONLY=1` fails setup, 13 refusals), while the **managed path is at
 0 refusals** and the normal fresh path passes.
 
+## Settings/maintenance lanes (2026-11-04, E-0195)
+
+Twelve of the thirteen remaining fresh-install writes now have native lanes
+(`src/settings_lane.rs`, all `OperationalWrites`):
+
+| Lane | Covers |
+|---|---|
+| `ensure_device_id` | `sync.device_id` read/mint/upsert |
+| `set_sync_setting` | `sync.*` upserts (allowlisted namespace, 64 KB cap) |
+| `set_app_setting` | the Dexie-mirror settings write; **sensitive keys refused by name** (pin/token/secret/credential/licence/mac/key/password/hash/salt) |
+| `idle_maintenance` | WAL checkpoint + `incremental_vacuum(256)` |
+| `purge_orphan_allocations` | the `alloc-*-item-*` boot cleanup |
+
+Measured on a fresh install under `POS_SQL_QUERY_ONLY=1`: **13 → 1 refusal**.
+The last one is `INSERT INTO cash_sessions …` — the shift-open business write,
+which has no native command yet. Opening a cash session is fiscal state, so it
+needs its own failing→passing test and refund-suite re-runs (money rules), not a
+quiet port.
+
+Until that lane exists the fresh path cannot be 0 and the plugin default stays
+opt-in; the JS heal call and the capture hook stay until the fresh probe reaches
+0, per the ruling.
+
 ## Next, in order
 
-1. Native lanes for the 13 settings/maintenance writes, re-probe fresh to 0, then
-   delete the JS heal call and the capture hook.
-2. Flip criterion: full e2e under `POS_SQL_QUERY_ONLY=1`; money-path p95 budget.
-3. Release gate for the capture path; concurrent same-entity case; REPO/OWNER
-   one-liners; tag after the full floor on the exact commit.
+1. `open_shift` native lane (fiscal state: transaction + audit + outbox parity),
+   with a failing→passing test and the refund suites re-run; re-probe fresh to 0.
+2. Delete the JS heal call + capture hook; full e2e under `POS_SQL_QUERY_ONLY=1`.
+3. Money-path p95 budget; release gate for the capture path; concurrent
+   same-entity case; REPO/OWNER one-liners; tag after the clean-worktree floor.

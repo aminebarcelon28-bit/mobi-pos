@@ -462,6 +462,11 @@ static COMMAND_REGISTRY: &[(&str, Capability)] = &[
     ("boot_maintenance", Capability::OperationalWrites),
     ("run_schema_heal_command", Capability::OperationalWrites),
     ("bump_parked_attempts_command", Capability::OperationalWrites),
+    ("ensure_device_id", Capability::OperationalWrites),
+    ("set_sync_setting", Capability::OperationalWrites),
+    ("set_app_setting", Capability::OperationalWrites),
+    ("idle_maintenance", Capability::OperationalWrites),
+    ("purge_orphan_allocations", Capability::OperationalWrites),
     ("finalize_shift_adoption", Capability::OperationalWrites),
     // SEC-01 increment 2: native read-only query lane (query_only on its own
     // connection; writes are refused by SQLite).
@@ -1145,6 +1150,11 @@ pub static ALL_COMMAND_FNS_IN_TESTS: &[&str] = &[
     "schema_heal_status",
     "run_schema_heal_command",
     "bump_parked_attempts_command",
+    "ensure_device_id",
+    "set_sync_setting",
+    "set_app_setting",
+    "idle_maintenance",
+    "purge_orphan_allocations",
     "emergency_export_ledger",
     "launch_dialer",
     "launch_call",

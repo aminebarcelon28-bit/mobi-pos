@@ -233,3 +233,12 @@ entirely, so it subsumes steps 3–4 of B.
    tables and triggers (reserved names). Those are excluded; tables are compared
    semantically (columns/FKs/uniques) because a legitimate rebuild changes the
    stored text.
+
+### Settings lanes (2026-11-04)
+
+The fresh-install refusal count fell 13 → 1 after moving the device-identity write,
+`sync.*` upserts, the generic non-sensitive settings mirror, idle maintenance
+(checkpoint + incremental vacuum) and the orphan-allocation cleanup to native
+commands. `set_app_setting` explicitly refuses sensitive keys by name. The one
+remaining write is the shift-open insert (`cash_sessions`), a fiscal business
+write that needs its own tests and refund-suite re-runs before it can have a lane.

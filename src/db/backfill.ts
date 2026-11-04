@@ -64,11 +64,19 @@ async function readFlag(db: FlagDb, key: string): Promise<Record<string, unknown
 }
 
 async function writeFlag(db: FlagDb, key: string, value: Record<string, unknown>): Promise<void> {
+  const payload = { ...value, appVersion: APP_VERSION };
+  try {
+    const { invokeCommand } = await import('../platform/invoke');
+    await invokeCommand<void>('set_sync_setting', { key, valueJson: JSON.stringify(payload) });
+    return;
+  } catch {
+    /* non-Tauri host: fall through */
+  }
   const { utcNowIso } = await import('./sqlPluginAdapter');
   const now = utcNowIso();
   await db.execute(
     'INSERT OR REPLACE INTO app_settings (key, value_json, updated_at) VALUES ($1, $2, $3)',
-    [key, JSON.stringify({ ...value, appVersion: APP_VERSION }), now],
+    [key, JSON.stringify(payload), now],
   ).catch(() => {});
 }
 

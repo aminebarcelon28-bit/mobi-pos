@@ -538,22 +538,32 @@ export const operationsAdapter = {
           .catch(() => [])) as Array<{ version: number }>;
         const nextVersion = (verRows?.length ?? 0) > 0 ? Number(verRows[0].version) + 1 : 1;
         try {
-          await db.execute(
-            `INSERT INTO app_settings (key, value_json, updated_at, version)
-             VALUES ($1, $2, $3, $4)
-             ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,
-               updated_at=excluded.updated_at, version=excluded.version`,
-            [key, JSON.stringify(value), utcNowIso(), nextVersion],
-          );
+          // Native settings lane (SEC-01): sensitive keys are refused there by
+          // name, so PIN/token/licence material never travels this path.
+          const { invokeCommand } = await import('../../platform/invoke');
+          await invokeCommand<void>('set_app_setting', {
+            key,
+            valueJson: JSON.stringify(value),
+          });
         } catch {
-          // Fallback if version column does not exist on app_settings
-          await db.execute(
-            `INSERT INTO app_settings (key, value_json, updated_at)
-             VALUES ($1, $2, $3)
-             ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,
-               updated_at=excluded.updated_at`,
-            [key, JSON.stringify(value), utcNowIso()],
-          );
+          try {
+            await db.execute(
+              `INSERT INTO app_settings (key, value_json, updated_at, version)
+               VALUES ($1, $2, $3, $4)
+               ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,
+                 updated_at=excluded.updated_at, version=excluded.version`,
+              [key, JSON.stringify(value), utcNowIso(), nextVersion],
+            );
+          } catch {
+            // Fallback if version column does not exist on app_settings
+            await db.execute(
+              `INSERT INTO app_settings (key, value_json, updated_at)
+               VALUES ($1, $2, $3)
+               ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,
+                 updated_at=excluded.updated_at`,
+              [key, JSON.stringify(value), utcNowIso()],
+            );
+          }
         }
       } catch (err) {
         if (isDeviceLocalSettingKey(key)) {
