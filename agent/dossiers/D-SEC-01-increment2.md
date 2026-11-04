@@ -106,7 +106,8 @@ weakness that produced the half-schema failure. Replaced by construction:
 |---|---|
 | managed boot, `POS_SQL_QUERY_ONLY=1` | **0** refused writes |
 | managed boot + injected 5 s heal delay | **0** refused writes |
-| crash at statement 40 (abort) | session dies; next boot converges, `applied=true`, **0** refused writes, backups stay at 3 |
+| crash at statement 1, 60 and 124 (abort) | session dies each time; every next boot converges, `applied=true`, **0** refused writes |
+| crash at statement 40 (earlier run) | same, backups stay at 3 |
 | schema mismatch (extra table) | rollback + recovery screen; removing the table lets the next boot converge |
 
 Rust tests (10 in `boot_maintenance`): unexpected error rolls back the whole
