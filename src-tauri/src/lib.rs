@@ -33,6 +33,7 @@ pub mod boot_maintenance;
 pub mod settings_lane;
 pub mod shift_lane;
 pub mod sync_lane;
+pub mod customer_lane;
 pub mod schema_heal_sql;
 #[cfg(test)] pub mod sql_boundary;
 
@@ -2492,6 +2493,8 @@ pub fn run() {
             shift_lane::set_shift_cashier,
             sync_lane::enqueue_sync_upsert,
             sync_lane::enqueue_sync_delete,
+            customer_lane::upsert_customer,
+            customer_lane::mark_customer_synced,
             emergency_export::emergency_export_ledger,
             sav_attachments::sav_attachment_write,
             sav_attachments::sav_attachment_read,
@@ -2589,6 +2592,8 @@ pub fn run() {
             shift_lane::set_shift_cashier,
             sync_lane::enqueue_sync_upsert,
             sync_lane::enqueue_sync_delete,
+            customer_lane::upsert_customer,
+            customer_lane::mark_customer_synced,
             emergency_export::emergency_export_ledger,
             sav_attachments::sav_attachment_write,
             sav_attachments::sav_attachment_read,

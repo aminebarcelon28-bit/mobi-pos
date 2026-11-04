@@ -277,3 +277,13 @@ the static boundary stays at the 318 floor while the runtime surface shrinks
 (438 → 133 refusals on `30-ref-refunds`). `set_shift_cashier` was migrated in the
 same change, which is what restored the static count to 318 after the scanner
 started reaching a previously uncounted pre-existing UPDATE.
+
+### Customer writes are native (2026-11-04)
+
+The customer upsert (`saveCustomer`) and the pull/requeue `sync_status='synced'`
+stamp moved to `customer_lane.rs`. The optimistic guard, the `current_debt`
+COALESCE and the version+status stamp guard are preserved exactly, and three Rust
+tests pin them. Refund-spec refusals under a read-only pool fell 133 → 29; the
+remainder is the void/refund mirror (one `BEGIN IMMEDIATE` transaction plus the
+loyalty `json_patch`, parent stub and ledger appends), which is the next lane.
+Money-path p95 under the flag is +2.5 % (1499 → 1537 ms at n=10), inside budget.

@@ -471,6 +471,8 @@ static COMMAND_REGISTRY: &[(&str, Capability)] = &[
     ("set_shift_cashier", Capability::OperationalWrites),
     ("enqueue_sync_upsert", Capability::OperationalWrites),
     ("enqueue_sync_delete", Capability::OperationalWrites),
+    ("upsert_customer", Capability::OperationalWrites),
+    ("mark_customer_synced", Capability::OperationalWrites),
     ("finalize_shift_adoption", Capability::OperationalWrites),
     // SEC-01 increment 2: native read-only query lane (query_only on its own
     // connection; writes are refused by SQLite).
@@ -1163,6 +1165,8 @@ pub static ALL_COMMAND_FNS_IN_TESTS: &[&str] = &[
     "set_shift_cashier",
     "enqueue_sync_upsert",
     "enqueue_sync_delete",
+    "upsert_customer",
+    "mark_customer_synced",
     "emergency_export_ledger",
     "launch_dialer",
     "launch_call",

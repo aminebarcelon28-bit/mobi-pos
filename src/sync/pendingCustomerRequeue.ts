@@ -86,12 +86,22 @@ export async function requeuePendingCustomers(
   for (const item of planPendingCustomerRequeue(rows)) {
     try {
       await enqueue('customer', item.id, item.payload);
-      await db.execute(
-        `UPDATE customers
-            SET sync_status = 'synced'
-          WHERE id = $1 AND version = $2 AND COALESCE(sync_status, '') = 'pending'`,
-        [item.id, item.version],
-      );
+      // Native stamp (SEC-01): same version/status guard, no renderer write.
+      const { isTauriEnv } = await import('../db/adapters/base');
+      if (isTauriEnv()) {
+        const { invokeCommand } = await import('../platform/invoke');
+        await invokeCommand<number>('mark_customer_synced', {
+          id: item.id,
+          version: item.version,
+        });
+      } else {
+        await db.execute(
+          `UPDATE customers
+              SET sync_status = 'synced'
+            WHERE id = $1 AND version = $2 AND COALESCE(sync_status, '') = 'pending'`,
+          [item.id, item.version],
+        );
+      }
       requeued += 1;
     } catch (err) {
       warn(`[sync:recover] pending customer ${item.id} not requeued`, err);

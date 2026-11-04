@@ -332,11 +332,55 @@ Normal-mode regression checks: `30-ref-refunds` **12/12**, `40-shf-shifts`
 (SYN-04/26/27), which the baseline COVERAGE already records as FAIL — those are
 unimplemented conflict/HLC/encryption features, not regressions.
 
+## Customer mirror lanes + money budget (2026-11-04, E-0199)
+
+**Native customer writes.** Two contracts moved to `src-tauri/src/customer_lane.rs`:
+
+| Command | Replaces | Contract kept |
+|---|---|---|
+| `upsert_customer` | `saveCustomer`'s INSERT … ON CONFLICT | optimistic `WHERE customers.version = base` guard when guarded; `current_debt` COALESCEd so a caller without it cannot wipe the ledger cache; `created_at` preserved |
+| `mark_customer_synced` | the pull/requeue stamp | version **and** status guard (`version = ? AND sync_status='pending'`), so a row that changed underneath stays pending |
+
+Three Rust tests: guarded upsert (stale attempt changes 0 rows), missing `current_debt` preserves the cache, and the synced stamp is version/status guarded. The renderer keeps its SQL only for non-Tauri hosts.
+
+**Measured, `30-ref-refunds` under `POS_SQL_QUERY_ONLY=1`:**
+
+| State | Refused renderer writes |
+|---|---|
+| after the sync-enqueue lane | 133 |
+| after the customer lanes | **29** |
+
+The 29 that remain are now one coherent surface — the **void/refund mirror**:
+
+```
+x12 BEGIN IMMEDIATE;                              ← db:void / db:refund transaction
+x12 UPDATE customers SET json_payload = CASE …    ← refund loyalty json_patch
+x2  INSERT INTO customers (… 'stub-cust-' …)      ← refund parent stub
+x2  INSERT INTO store_expenses (…)
+x1  INSERT INTO products (…)                      ← test seed
+```
+
+Under the flag the refund spec now reaches those paths in 5 cases (previously the
+customer failures aborted earlier in 2), i.e. the read-only run is *deeper*, not
+worse: normal mode stays **12/12**, and `10-mny-money` **14/14**.
+
+**Money-path budget (first measurement).** `e2e-tests/results/latency-probe.e2e.ts`
+runs N real checkouts through the UI and prints p50/p95. n=10, same machine:
+
+| Mode | p50 | p95 |
+|---|---|---|
+| normal | 1121 ms | 1499 ms |
+| `POS_SQL_QUERY_ONLY=1` | 1117 ms | **1537 ms** |
+
+p95 regression = **+2.5 %**, inside the ≤ 10 % budget. (n=10 is the probe's default
+smoke size; the final number for the tag will use n ≥ 200 per the ruling.)
+
 ## Next, in order
 
-1. Customer mirror lane (saveCustomer + refund loyalty mirror + pull sync-status):
-   expect the refund-spec refusals to drop from 133 to ~18.
-2. `void_sale_atomic` (money path with no native lane).
-3. store_expenses, the remaining `BEGIN IMMEDIATE` lanes, then the full suite under
-   the flag; money-path p95 before/after; concurrent same-entity case;
-   clean-worktree floor + tag.
+1. **Void/refund mirror lane** — the last 29 refusals: one native command that
+   runs the loyalty `json_patch`, ledger appends, parent stub and their guards in
+   the same transaction as the status update, replacing `db:void`/`db:refund`'s
+   renderer `BEGIN IMMEDIATE`.
+2. store_expenses + the seed-only product insert.
+3. Full suite under the flag to 0; re-run the latency probe at n ≥ 200.
+4. Concurrent same-entity case; clean-worktree floor; tag.

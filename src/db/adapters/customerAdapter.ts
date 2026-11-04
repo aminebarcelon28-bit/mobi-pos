@@ -133,6 +133,31 @@ export const customerAdapter = {
         typeof customer.currentDebt === 'number' && Number.isFinite(customer.currentDebt)
           ? Math.round(customer.currentDebt)
           : null;
+      // Native lane (SEC-01): the upsert (with its optimistic guard) runs on the
+      // Rust side, so a read-only renderer pool can still save customers.
+      if (isTauriEnv()) {
+        const { invokeCommand } = await import('../../platform/invoke');
+        await invokeCommand<{ changes: number }>('upsert_customer', {
+          request: {
+            id: customer.id,
+            name: customer.name,
+            phone: customer.phone,
+            email: customer.email || null,
+            loyaltyPoints: customer.loyaltyPoints || 0,
+            storeCredit: customer.storeCredit || 0,
+            pricingTier: customer.pricingTier || 'Retail',
+            totalSpent: customer.totalSpent || 0,
+            currentDebt: debtArg,
+            jsonPayload: rowJson,
+            updatedAt: now,
+            version,
+            baseVersion,
+            idempotencyKey: idemKey,
+            guarded,
+          },
+        });
+        return;
+      }
       await db.execute(
         `INSERT INTO customers (id, name, phone, email, loyalty_points, store_credit, pricing_tier, total_spent, json_payload, updated_at, deleted, version, idempotency_key, created_at, current_debt)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 0, $11, $12, $10, $14)
@@ -148,8 +173,6 @@ export const customerAdapter = {
           rowJson,
           now,
           version,
-          // UNIQUE index on idempotency_key rejects the '' default twice:
-          // every local row gets its own stable key (updates keep theirs).
           idemKey,
           baseVersion,
           debtArg,
