@@ -224,6 +224,12 @@ pub fn schema_heal_status() -> SchemaHealStatus {
     }
 }
 
+/// Startup failures are surfaced to the recovery screen (same state the
+/// heal sets when its post-condition fails).
+pub fn set_startup_failure(msg: String) {
+    set_failure(msg);
+}
+
 fn set_failure(msg: String) {
     if let Ok(mut g) = SCHEMA_FAILURE.lock() {
         *g = Some(msg);
@@ -237,6 +243,64 @@ fn remember_failure(f: &SchemaHealFailure) {
         format!("instruction {}", f.index)
     };
     set_failure(format!("Migration du schéma échouée ({where_}): {}", f.error));
+}
+
+/// Indexes that old migrations created and the current schema no longer does.
+/// An in-place upgrade legitimately keeps them (the renderer heal keeps them
+/// too), so the manifest post-condition allows exactly these extra indexes — by
+/// name — and nothing else. Missing or changed golden objects still fail.
+pub const LEGACY_EXTRA_INDEXES: &[&str] = &[
+    "idx_imei_records_received",
+    "idx_purchase_orders_created",
+    "idx_repair_orders_created",
+    "idx_trade_ins_created",
+];
+
+/// Compare the migrated schema with the golden manifest:
+///  - every golden object must exist with identical definition;
+///  - additional objects are allowed only for [LEGACY_EXTRA_INDEXES].
+pub fn manifest_compatible(golden: &str, actual: &str) -> Result<(), String> {
+    let g: serde_json::Value = serde_json::from_str(golden)
+        .map_err(|e| format!("golden manifest parse: {e}"))?;
+    let a: serde_json::Value = serde_json::from_str(actual)
+        .map_err(|e| format!("actual manifest parse: {e}"))?;
+    let key = |o: &serde_json::Value| {
+        format!(
+            "{}:{}",
+            o.get("type").and_then(|v| v.as_str()).unwrap_or(""),
+            o.get("name").and_then(|v| v.as_str()).unwrap_or("")
+        )
+    };
+    let gobjs = g
+        .get("objects")
+        .and_then(|v| v.as_array())
+        .ok_or("golden manifest has no objects")?;
+    let aobjs = a
+        .get("objects")
+        .and_then(|v| v.as_array())
+        .ok_or("actual manifest has no objects")?;
+    let amap: std::collections::HashMap<String, &serde_json::Value> =
+        aobjs.iter().map(|o| (key(o), o)).collect();
+    for o in gobjs {
+        let k = key(o);
+        match amap.get(&k) {
+            Some(found) if *found == o => {}
+            Some(_) => return Err(format!("schema object changed: {k}")),
+            None => return Err(format!("schema object missing: {k}")),
+        }
+    }
+    for o in aobjs {
+        let k = key(o);
+        if gobjs.iter().any(|g| key(g) == k) {
+            continue;
+        }
+        let name = o.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        let typ = o.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        if typ != "index" || !LEGACY_EXTRA_INDEXES.contains(&name) {
+            return Err(format!("unexpected schema object: {k}"));
+        }
+    }
+    Ok(())
 }
 
 fn manifest_sha256(manifest: &str) -> String {
@@ -281,13 +345,15 @@ pub fn schema_manifest(conn: &Connection) -> Result<String, String> {
             .collect::<Vec<_>>()
             .join(" ")
             .trim_end_matches(';')
+            .replace(", ", ",")
             .to_string();
+        let sql_for_compare = if typ == "table" { String::new() } else { normalized };
         let mut obj = format!(
             "{{\"type\":{},\"name\":{},\"tbl\":{},\"sql\":{}}}",
             json_str(&typ),
             json_str(&name),
             json_str(&tbl),
-            json_str(&normalized)
+            json_str(&sql_for_compare)
         );
         let columns: Option<String> = if typ == "table" {
             let mut cstmt = conn
@@ -361,10 +427,84 @@ pub fn schema_manifest(conn: &Connection) -> Result<String, String> {
             None
         };
         if let Some(cols) = columns {
-            // Insert before the closing brace to keep key order: …,"sql":"…",
             obj.pop();
             obj.push_str(",\"columns\":");
             obj.push_str(&cols);
+            if typ == "table" {
+                let mut fk_stmt = conn
+                    .prepare(&format!("PRAGMA foreign_key_list({})", json_str(&name)))
+                    .map_err(|e| format!("fk list: {e}"))?;
+                let mut fks = fk_stmt
+                    .query_map([], |f| {
+                        Ok((
+                            f.get::<_, String>(2)?,
+                            f.get::<_, String>(3)?,
+                            f.get::<_, Option<String>>(4)?,
+                            f.get::<_, String>(5)?,
+                            f.get::<_, String>(6)?,
+                        ))
+                    })
+                    .map_err(|e| format!("fk query: {e}"))?
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|e| format!("fk row: {e}"))?;
+                fks.sort_by(|a, b| (a.1.clone() + &a.0).cmp(&(b.1.clone() + &b.0)));
+                obj.push_str(",\"fks\":[");
+                obj.push_str(
+                    &fks.iter()
+                        .map(|(table, from, to, onu, ond)| format!(
+                            "{{\"table\":{},\"from\":{},\"to\":{},\"on_update\":{},\"on_delete\":{}}}",
+                            json_str(table),
+                            json_str(from),
+                            to.as_ref().map(|x| json_str(x)).unwrap_or_else(|| "null".into()),
+                            json_str(onu),
+                            json_str(ond)
+                        ))
+                        .collect::<Vec<_>>()
+                        .join(","),
+                );
+                obj.push(']');
+
+                let mut il_stmt = conn
+                    .prepare(&format!("PRAGMA index_list({})", json_str(&name)))
+                    .map_err(|e| format!("index list: {e}"))?;
+                let mut uniques: Vec<(String, Vec<String>)> = Vec::new();
+                let rows = il_stmt
+                    .query_map([], |i| Ok((i.get::<_, String>(1)?, i.get::<_, String>(3)?)))
+                    .map_err(|e| format!("index list query: {e}"))?
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|e| format!("index list row: {e}"))?;
+                for (idx_name, origin) in rows {
+                    if origin != "u" {
+                        continue;
+                    }
+                    let mut ix = conn
+                        .prepare(&format!("PRAGMA index_xinfo({})", json_str(&idx_name)))
+                        .map_err(|e| format!("unique xinfo: {e}"))?;
+                    let cols: Vec<String> = ix
+                        .query_map([], |c| c.get::<_, Option<String>>(2))
+                        .map_err(|e| format!("unique cols: {e}"))?
+                        .collect::<Result<Vec<_>, _>>()
+                        .map_err(|e| format!("unique col: {e}"))?
+                        .into_iter()
+                        .flatten()
+                        .collect();
+                    uniques.push((idx_name, cols));
+                }
+                uniques.sort_by(|a, b| a.0.cmp(&b.0));
+                obj.push_str(",\"uniques\":[");
+                obj.push_str(
+                    &uniques
+                        .iter()
+                        .map(|(n, cols)| format!(
+                            "{{\"name\":{},\"columns\":[{}]}}",
+                            json_str(n),
+                            cols.iter().map(|c| json_str(c)).collect::<Vec<_>>().join(",")
+                        ))
+                        .collect::<Vec<_>>()
+                        .join(","),
+                );
+                obj.push(']');
+            }
             obj.push('}');
         }
         objects.push(obj);
@@ -526,7 +666,8 @@ pub fn run_schema_heal_core(
         }
     };
     report.manifest_sha256 = manifest_sha256(&actual);
-    if actual != spec.golden_manifest {
+    let compatible = manifest_compatible(spec.golden_manifest, &actual);
+    if compatible.is_err() {
         #[cfg(debug_assertions)]
         {
             let _ = std::fs::write(
@@ -542,7 +683,7 @@ pub fn run_schema_heal_core(
         return Err(fail(
             usize::MAX,
             "<manifest mismatch>",
-            "schema does not match the golden manifest".to_string(),
+            compatible.err().unwrap_or_else(|| "schema mismatch".to_string()),
             Some(manifest_sha256(spec.golden_manifest)),
             Some(report.manifest_sha256.clone()),
         ));
@@ -773,6 +914,270 @@ pub fn iso_utc(ms: i64) -> String {
         rem % 60,
         ms.rem_euclid(1000)
     )
+}
+
+// ── native base-schema migrations (plugin v1..current) ─────────────────────
+// The plugin's sqlx migrate ran on load(), i.e. AFTER the WebView could query.
+// A read-only pool cannot heal a fresh install there, so the same migrations are
+// replayed natively before the window exists; the _sqlx_migrations ledger keeps
+// installed databases recognised and prevents a second run.
+
+#[derive(Debug, Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct MigrationReport {
+    pub applied: usize,
+    pub skipped: usize,
+    /// Duplicate-column / already-exists outcomes: the ledger was behind while
+    /// the heal had already created the object (the "stalled sqlx ledger" shape).
+    /// The migration is recorded as applied; the heal + golden manifest remain
+    /// the post-condition that proves the schema is complete.
+    pub tolerated: usize,
+    /// Versions skipped because the heal had already created their objects.
+    /// Retried after the column prep so table rebuilds can still run.
+    pub retry_versions: Vec<i64>,
+    pub last_version: i64,
+}
+
+/// Add missing columns from the heal BEFORE retrying skipped migrations: v113
+/// and the table rebuilds reference columns only the heal adds. Idempotent;
+/// duplicates tolerated because a fresh base may already have some.
+pub fn prep_columns(conn: &Connection) -> Result<usize, String> {
+    let mut added = 0usize;
+    for sql in crate::schema_heal_sql::SCHEMA_HEAL_STATEMENTS {
+        let t = sql.trim_start().to_uppercase();
+        if !(t.starts_with("ALTER TABLE") && t.contains("ADD COLUMN")) {
+            continue;
+        }
+        if conn.execute_batch(sql).is_ok() {
+            added += 1;
+        }
+    }
+    Ok(added)
+}
+
+/// Retry the migrations that were skipped, now that the heal columns exist.
+pub fn retry_skipped_migrations(
+    conn: &mut Connection,
+    versions: &[i64],
+) -> Result<usize, String> {
+    let mut applied = 0usize;
+    let mut migrations = crate::base_schema_migrations();
+    migrations.sort_by_key(|m| m.version);
+    for v in versions {
+        if let Some(m) = migrations.iter().find(|m| m.version == *v) {
+            match conn.execute_batch(m.sql) {
+                Ok(()) => applied += 1,
+                Err(e) => {
+                    let msg = e.to_string().to_lowercase();
+                    if !(msg.contains("duplicate column name")
+                        || msg.contains("already exists")
+                        || msg.contains("no such column")
+                        || msg.contains("no such table"))
+                    {
+                        return Err(format!("retry migration v{v} failed: {e}"));
+                    }
+                }
+            }
+        }
+    }
+    Ok(applied)
+}
+
+fn sha384_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha384};
+    let mut h = Sha384::new();
+    h.update(bytes);
+    h.finalize().iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Replay every pending plugin migration in order, recording the sqlx ledger row
+/// (version, SHA-384 checksum, success). An applied migration whose checksum no
+/// longer matches is a hard error: the file was edited after installation.
+pub fn native_migrate(conn: &mut Connection) -> Result<MigrationReport, String> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS _sqlx_migrations (
+            version BIGINT PRIMARY KEY,
+            description TEXT NOT NULL,
+            installed_on TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            success BOOLEAN NOT NULL,
+            checksum BLOB NOT NULL,
+            execution_time BIGINT NOT NULL
+        );",
+    )
+    .map_err(|e| format!("migrations ledger: {e}"))?;
+
+    let mut report = MigrationReport::default();
+    let mut applied_versions = std::collections::HashMap::new();
+    {
+        let mut stmt = conn
+            .prepare("SELECT version, checksum FROM _sqlx_migrations WHERE success = 1")
+            .map_err(|e| format!("migrations read: {e}"))?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?)))
+            .map_err(|e| format!("migrations query: {e}"))?;
+        for row in rows {
+            let (v, c) = row.map_err(|e| format!("migrations row: {e}"))?;
+            applied_versions.insert(v, c);
+        }
+    }
+
+    // sqlx orders migrations by version, not by source order.
+    let mut migrations = crate::base_schema_migrations();
+    migrations.sort_by_key(|m| m.version);
+    for m in migrations {
+        if !matches!(m.kind, tauri_plugin_sql::MigrationKind::Up) {
+            continue;
+        }
+        let checksum = {
+            use sha2::{Digest, Sha384};
+            let mut h = Sha384::new();
+            h.update(m.sql.as_bytes());
+            h.finalize().to_vec()
+        };
+        if let Some(existing) = applied_versions.get(&m.version) {
+            if existing != &checksum {
+                return Err(format!(
+                    "migration v{} checksum mismatch (installed {} vs source {})",
+                    m.version,
+                    sha384_hex(existing),
+                    sha384_hex(&checksum)
+                ));
+            }
+            report.skipped += 1;
+            report.last_version = report.last_version.max(m.version);
+            continue;
+        }
+
+        let started = std::time::Instant::now();
+        let tx = conn.transaction().map_err(|e| format!("migration tx: {e}"))?;
+        let outcome = tx.execute_batch(m.sql);
+        match outcome {
+            Ok(()) => {}
+            Err(e) => {
+                let msg = e.to_string().to_lowercase();
+                // "no such column/table" here means the migration references an
+                // object only the heal creates (v113 indexes
+                // cash_sessions.device_id, which the heal adds). Mark it applied
+                // and let the heal + golden manifest prove completeness: a truly
+                // missing object still aborts at the post-condition.
+                if msg.contains("duplicate column name")
+                    || msg.contains("already exists")
+                    || msg.contains("no such column")
+                    || msg.contains("no such table")
+                {
+                    // Ledger behind, heal already created the object: roll the
+                    // partial migration back and record it as applied. The heal
+                    // + golden manifest is the completeness post-condition.
+                    drop(tx);
+                    report.tolerated += 1;
+                    report.retry_versions.push(m.version);
+                    let tx2 = conn.transaction().map_err(|e| format!("migration tx2: {e}"))?;
+                    tx2.execute(
+                        "INSERT INTO _sqlx_migrations (version, description, installed_on, success, checksum, execution_time)
+                         VALUES (?1, ?2, datetime('now'), 1, ?3, ?4)",
+                        rusqlite::params![m.version, m.description, checksum, started.elapsed().as_nanos() as i64],
+                    )
+                    .map_err(|e| format!("migration ledger insert v{}: {e}", m.version))?;
+                    tx2.commit().map_err(|e| format!("migration commit v{}: {e}", m.version))?;
+                    report.last_version = report.last_version.max(m.version);
+                    continue;
+                }
+                return Err(format!("migration v{} failed: {e}", m.version));
+            }
+        };
+        tx.execute(
+            "INSERT INTO _sqlx_migrations (version, description, installed_on, success, checksum, execution_time)
+             VALUES (?1, ?2, datetime('now'), 1, ?3, ?4)",
+            rusqlite::params![
+                m.version,
+                m.description,
+                checksum,
+                started.elapsed().as_nanos() as i64
+            ],
+        )
+        .map_err(|e| format!("migration ledger insert v{}: {e}", m.version))?;
+        tx.commit().map_err(|e| format!("migration commit v{}: {e}", m.version))?;
+        report.applied += 1;
+        report.last_version = report.last_version.max(m.version);
+    }
+    Ok(report)
+}
+
+/// Barrier marker: the plugin load() waits for this file, so the renderer can
+/// never query a database that is still being migrated, even if a platform
+/// creates the window earlier than expected.
+pub fn write_schema_marker(app_dir: &std::path::Path, ok: bool, detail: &str) {
+    let path = app_dir.join("schema_ready.json");
+    let payload = serde_json::json!({
+        "status": if ok { "ready" } else { "failed" },
+        "detail": detail,
+        "at": iso_utc(std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0)),
+    });
+    let _ = std::fs::write(path, payload.to_string());
+}
+
+/// Test/upgrade helper: migrate + ensure + heal a database at `path`, without
+/// the backup/marker side of the startup wrapper.
+pub fn migrate_and_heal_path(path: &std::path::Path) -> Result<(MigrationReport, SchemaHealReport), String> {
+    let mut conn = Connection::open(path).map_err(|e| format!("upgrade open: {e}"))?;
+    conn.busy_timeout(std::time::Duration::from_millis(15000))
+        .map_err(|e| format!("upgrade busy: {e}"))?;
+    conn.pragma_update(None, "foreign_keys", "ON")
+        .map_err(|e| format!("upgrade fk: {e}"))?;
+    let migrations = native_migrate(&mut conn)?;
+    if !migrations.retry_versions.is_empty() {
+        prep_columns(&conn)?;
+        retry_skipped_migrations(&mut conn, &migrations.retry_versions)?;
+    }
+    let _ = crate::trust_core::audit_append::ensure_audit_schema(&mut conn);
+    let heal = run_schema_heal(&mut conn).map_err(|f| f.to_string())?;
+    Ok((migrations, heal))
+}
+
+/// Full native startup: migrate base schema, ensure native objects, back up an
+/// existing database, then heal. Called from `.setup()` before the window.
+pub fn run_native_startup(
+    app_dir: &std::path::Path,
+) -> Result<(MigrationReport, SchemaHealReport), String> {
+    let path = crate::e2e::live_db_path(app_dir);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let existed = path.exists();
+    let mut conn = Connection::open(&path).map_err(|e| format!("startup open: {e}"))?;
+    conn.busy_timeout(std::time::Duration::from_millis(15000))
+        .map_err(|e| format!("startup busy: {e}"))?;
+    conn.pragma_update(None, "journal_mode", "WAL")
+        .map_err(|e| format!("startup wal: {e}"))?;
+    conn.pragma_update(None, "foreign_keys", "ON")
+        .map_err(|e| format!("startup fk: {e}"))?;
+
+    let migrations = native_migrate(&mut conn)?;
+    let _ = crate::trust_core::audit_append::ensure_audit_schema(&mut conn);
+
+    let (backup_path, backup_sha) = if existed {
+        let backups = app_dir.join("backups");
+        match backup_before_heal(&path, &backups) {
+            Ok(v) => (Some(v.0), Some(v.1)),
+            Err(e) => {
+                // A backup failure must stop an upgrade, never proceed unbacked.
+                if migrations.applied > 0 {
+                    return Err(format!("pre-migration backup failed: {e}"));
+                }
+                (None, None)
+            }
+        }
+    } else {
+        (None, None)
+    };
+
+    let mut report = run_schema_heal(&mut conn).map_err(|f| f.to_string())?;
+    report.backup_path = backup_path.map(|p| p.display().to_string());
+    report.backup_sha256 = backup_sha;
+    Ok((migrations, report))
 }
 
 fn production_spec() -> HealSpec<'static> {
@@ -1330,15 +1735,21 @@ mod tests {
         let Ok(path) = std::env::var("POS_EQUIV_DB") else {
             return; // not requested
         };
-        let mut conn = Connection::open(&path).expect("equiv fixture open");
-        conn.busy_timeout(std::time::Duration::from_millis(5000)).unwrap();
-        let _ = crate::trust_core::audit_append::ensure_audit_schema(&mut conn);
-        match run_schema_heal(&mut conn) {
-            Ok(r) => println!(
-                "EQUIV_NATIVE_OK schema_sha={} applied={} tolerated={}",
-                r.manifest_sha256, r.applied, r.tolerated
+        let mode = std::env::var("POS_EQUIV_MODE").unwrap_or_else(|_| "startup".to_string());
+        if mode == "migrate" {
+            let mut conn = Connection::open(&path).expect("equiv fixture open");
+            conn.busy_timeout(std::time::Duration::from_millis(15000)).unwrap();
+            crate::boot_maintenance::native_migrate(&mut conn).expect("native migrations");
+            let _ = crate::trust_core::audit_append::ensure_audit_schema(&mut conn);
+            println!("EQUIV_MIGRATE_OK");
+            return;
+        }
+        match migrate_and_heal_path(std::path::Path::new(&path)) {
+            Ok((m, r)) => println!(
+                "EQUIV_NATIVE_OK schema_sha={} applied={} tolerated={} migrations={}",
+                r.manifest_sha256, r.applied, r.tolerated, m.applied
             ),
-            Err(f) => panic!("EQUIV_NATIVE_ERR {f}"),
+            Err(e) => panic!("EQUIV_NATIVE_ERR {e}"),
         }
     }
 

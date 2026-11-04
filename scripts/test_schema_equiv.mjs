@@ -185,6 +185,21 @@ const applyRenderer = (dbPath) => {
   return { applied, swallowed, ...backfills };
 };
 
+const applyNativeMigrations = (dbPath) => {
+  const r = spawnSync(
+    process.platform === 'win32' ? 'cargo.exe' : 'cargo',
+    ['test', '--lib', 'schema_equiv_fixture', '--', '--nocapture'],
+    {
+      cwd: path.join(ROOT, 'src-tauri'),
+      env: { ...process.env, POS_EQUIV_DB: dbPath, POS_EQUIV_MODE: 'migrate' },
+      encoding: 'utf8',
+      timeout: 10 * 60 * 1000,
+    },
+  );
+  const out = `${r.stdout ?? ''}${r.stderr ?? ''}`;
+  if (!out.includes('EQUIV_MIGRATE_OK')) throw new Error('native migrations failed: ' + out.split('\n').slice(-10).join(' '));
+};
+
 const applyNative = (dbPath) => {
   const r = spawnSync(
     process.platform === 'win32' ? 'cargo.exe' : 'cargo',
@@ -219,6 +234,7 @@ for (const fixture of fixtures) {
   fs.copyFileSync(plain, a);
   fs.copyFileSync(plain, b);
 
+  applyNativeMigrations(a);
   const renderer = applyRenderer(a);
   const native = applyNative(b);
   if (!native.ok) {

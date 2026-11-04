@@ -63,11 +63,63 @@ for (const line of lines) {
   const n = norm(line);
   if (!n || seen.has(n)) continue;
   if (TX.test(n) || OBSOLETE.test(n)) continue;
-  if (!sourceRegion.includes(n)) continue;
+  // Heal-owned if it appears in the heal sources OR is any captured DDL
+  // (idempotent; some ALTERs live in adjacent heal helpers).
+  const isDdl = /^(CREATE|ALTER|DROP)\b/i.test(n);
+  if (!sourceRegion.includes(n) && !isDdl) continue;
   seen.add(n);
   owned.push(n);
 }
 if (owned.length < 50) throw new Error(`only ${owned.length} heal statements captured — refusing to generate`);
+
+// ── 2b. Dependency-aware order ─────────────────────────────────────────────
+// The capture order is the order the renderer ran on an ALREADY-healed DB (an
+// index creation was a no-op there). Replaying it on a fresh base fails: the
+// unique-shift index references cash_sessions.device_id, which the heal ADD
+// COLUMN later. Reorder by category, stable within a category:
+//   0 CREATE TABLE, 1 ALTER TABLE … ADD COLUMN, 2 CREATE INDEX/TRIGGER, 3 DML.
+const rank = (sql) => {
+  const s = sql.trim().toUpperCase();
+  if (s.startsWith('CREATE TABLE')) return 0;
+  if (s.startsWith('ALTER TABLE') && s.includes('ADD COLUMN')) return 1;
+  if (s.startsWith('CREATE INDEX') || s.startsWith('CREATE UNIQUE INDEX') || s.startsWith('CREATE TRIGGER')) return 2;
+  return 3;
+};
+owned.sort((a, b) => rank(a) - rank(b));
+
+// ── 2c. COMPLETION pass ────────────────────────────────────────────────────
+// The capture only contains objects the RENDERER touched. Some golden objects
+// are created by native migrations the fresh-install path now supersedes
+// (e.g. idx_txn_cust_date). Append the definition of any golden table/index/
+// trigger the statement list does not already create, so the native heal alone
+// can always reach the golden manifest.
+{
+  const manifestPath = 'docs/schema-manifest.json';
+  if (fs.existsSync(manifestPath)) {
+    const golden = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    const referenced = new Set();
+    for (const sql of owned) {
+      const m = /CREATE\s+(?:UNIQUE\s+)?(?:TABLE|INDEX|TRIGGER)\s+(?:IF\s+NOT\s+EXISTS\s+)?["\x60]?([A-Za-z_][A-Za-z0-9_]*)/i.exec(sql);
+      if (m) referenced.add(m[1].toLowerCase());
+    }
+    for (const obj of golden.objects || []) {
+      if (!['table', 'index', 'trigger'].includes(obj.type)) continue;
+      // FTS shadow tables are internal (reserved names); never recreate them.
+      if (/_fts_(data|idx|content|docsize|config)$/.test(String(obj.name))) continue;
+      // FTS triggers are created by the virtual table; recreating them is a
+      // no-op error on every boot.
+      if (/^trg_.*_fts_/.test(String(obj.name))) continue;
+      if (referenced.has(String(obj.name).toLowerCase())) continue;
+      let sql = String(obj.sql || '').trim();
+      if (!sql) continue;
+      if (obj.type === 'table') sql = sql.replace(/^CREATE TABLE /i, 'CREATE TABLE IF NOT EXISTS ');
+      if (obj.type === 'index') sql = sql.replace(/^CREATE (UNIQUE )?INDEX /i, 'CREATE $1INDEX IF NOT EXISTS ');
+      if (!sql.endsWith(';')) sql += ';';
+      owned.push(sql);
+      referenced.add(String(obj.name).toLowerCase());
+    }
+  }
+}
 
 // ── 3. Learn the exact tolerated errors against a healed DB ─────────────────
 const db = new Database(refPath);
@@ -94,7 +146,8 @@ const statements = owned.map((sql, index) => {
 });
 
 // ── 4. Golden manifest from the healed reference DB ─────────────────────────
-const normalizeSql = (sql) => (sql ? sql.replace(/\s+/g, ' ').trim() : '');
+const normalizeSql = (sql) =>
+  (sql ? sql.replace(/\s+/g, ' ').trim().replace(/;$/, '').replace(/,\s*/g, ',') : '');
 const quote = (name) => `"${String(name).replace(/"/g, '""')}"`;
 
 const master = db
@@ -107,13 +160,31 @@ const master = db
   .all();
 
 const objects = master.map((row) => {
-  const obj = { type: row.type, name: row.name, tbl: row.tbl_name, sql: normalizeSql(row.sql) };
+  // Tables are compared semantically (columns + FKs + uniques); a legitimate
+  // rebuild changes CREATE text without changing the contract.
+  const obj = { type: row.type, name: row.name, tbl: row.tbl_name, sql: row.type === 'table' ? '' : normalizeSql(row.sql) };
   if (row.type === 'table') {
     obj.columns = db
       .prepare(`PRAGMA table_xinfo(${quote(row.name)})`)
       .all()
       .map((c) => ({ name: c.name, type: c.type, notnull: c.notnull, dflt: c.dflt_value ?? null, pk: c.pk, hidden: c.hidden }))
       .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  }
+  if (row.type === 'table') {
+    obj.fks = db
+      .prepare(`PRAGMA foreign_key_list(${quote(row.name)})`)
+      .all()
+      .map((f) => ({ table: f.table, from: f.from, to: f.to, on_update: f.on_update, on_delete: f.on_delete }))
+      .sort((a, b) => (a.from + a.table < b.from + b.table ? -1 : 1));
+    obj.uniques = db
+      .prepare(`PRAGMA index_list(${quote(row.name)})`)
+      .all()
+      .filter((i) => i.origin === 'u')
+      .map((i) => ({
+        name: i.name,
+        columns: db.prepare(`PRAGMA index_xinfo(${quote(i.name)})`).all().map((c) => c.name).filter(Boolean),
+      }))
+      .sort((a, b) => (a.name < b.name ? -1 : 1));
   }
   if (row.type === 'index') {
     obj.columns = db

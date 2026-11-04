@@ -173,7 +173,7 @@
       "type": "index",
       "name": "idx_cct_due",
       "tbl": "cycle_count_tasks",
-      "sql": "CREATE INDEX idx_cct_due ON cycle_count_tasks(counted_at, due_at)",
+      "sql": "CREATE INDEX idx_cct_due ON cycle_count_tasks(counted_at,due_at)",
       "columns": [
         {
           "seqno": 0,
@@ -229,7 +229,7 @@
       "type": "index",
       "name": "idx_cct_product_counted",
       "tbl": "cycle_count_tasks",
-      "sql": "CREATE INDEX idx_cct_product_counted ON cycle_count_tasks(product_id, counted_at)",
+      "sql": "CREATE INDEX idx_cct_product_counted ON cycle_count_tasks(product_id,counted_at)",
       "columns": [
         {
           "seqno": 0,
@@ -261,7 +261,7 @@
       "type": "index",
       "name": "idx_commission_rules_technician",
       "tbl": "commission_rules",
-      "sql": "CREATE INDEX idx_commission_rules_technician ON commission_rules(technician_id, active)",
+      "sql": "CREATE INDEX idx_commission_rules_technician ON commission_rules(technician_id,active)",
       "columns": [
         {
           "seqno": 0,
@@ -509,7 +509,7 @@
       "type": "index",
       "name": "idx_customers_sync",
       "tbl": "customers",
-      "sql": "CREATE INDEX idx_customers_sync ON customers(sync_status, updated_at)",
+      "sql": "CREATE INDEX idx_customers_sync ON customers(sync_status,updated_at)",
       "columns": [
         {
           "seqno": 0,
@@ -541,7 +541,7 @@
       "type": "index",
       "name": "idx_customers_updated",
       "tbl": "customers",
-      "sql": "CREATE INDEX idx_customers_updated ON customers(updated_at, id)",
+      "sql": "CREATE INDEX idx_customers_updated ON customers(updated_at,id)",
       "columns": [
         {
           "seqno": 0,
@@ -573,7 +573,7 @@
       "type": "index",
       "name": "idx_debt_plans_cust",
       "tbl": "debt_plans",
-      "sql": "CREATE INDEX idx_debt_plans_cust ON debt_plans(customer_id, status, created_at)",
+      "sql": "CREATE INDEX idx_debt_plans_cust ON debt_plans(customer_id,status,created_at)",
       "columns": [
         {
           "seqno": 0,
@@ -661,7 +661,7 @@
       "type": "index",
       "name": "idx_dpe_plan_seq",
       "tbl": "debt_plan_entries",
-      "sql": "CREATE UNIQUE INDEX idx_dpe_plan_seq ON debt_plan_entries(plan_id, seq)",
+      "sql": "CREATE UNIQUE INDEX idx_dpe_plan_seq ON debt_plan_entries(plan_id,seq)",
       "columns": [
         {
           "seqno": 0,
@@ -693,7 +693,7 @@
       "type": "index",
       "name": "idx_dunning_cust_stage",
       "tbl": "dunning_queue",
-      "sql": "CREATE UNIQUE INDEX idx_dunning_cust_stage ON dunning_queue(customer_id, stage)",
+      "sql": "CREATE UNIQUE INDEX idx_dunning_cust_stage ON dunning_queue(customer_id,stage)",
       "columns": [
         {
           "seqno": 0,
@@ -725,7 +725,7 @@
       "type": "index",
       "name": "idx_dunning_status",
       "tbl": "dunning_queue",
-      "sql": "CREATE INDEX idx_dunning_status ON dunning_queue(status, scheduled_at)",
+      "sql": "CREATE INDEX idx_dunning_status ON dunning_queue(status,scheduled_at)",
       "columns": [
         {
           "seqno": 0,
@@ -805,7 +805,7 @@
       "type": "index",
       "name": "idx_imei_events_imei",
       "tbl": "imei_events",
-      "sql": "CREATE INDEX idx_imei_events_imei ON imei_events(imei, at DESC)",
+      "sql": "CREATE INDEX idx_imei_events_imei ON imei_events(imei,at DESC)",
       "columns": [
         {
           "seqno": 0,
@@ -933,7 +933,7 @@
       "type": "index",
       "name": "idx_import_source_identity_target",
       "tbl": "import_source_identity",
-      "sql": "CREATE INDEX idx_import_source_identity_target ON import_source_identity(destination, target_id)",
+      "sql": "CREATE INDEX idx_import_source_identity_target ON import_source_identity(destination,target_id)",
       "columns": [
         {
           "seqno": 0,
@@ -965,7 +965,7 @@
       "type": "index",
       "name": "idx_ledger_product",
       "tbl": "inventory_ledger",
-      "sql": "CREATE INDEX idx_ledger_product ON inventory_ledger(product_id, created_at)",
+      "sql": "CREATE INDEX idx_ledger_product ON inventory_ledger(product_id,created_at)",
       "columns": [
         {
           "seqno": 0,
@@ -997,7 +997,7 @@
       "type": "index",
       "name": "idx_ledger_ref",
       "tbl": "inventory_ledger",
-      "sql": "CREATE INDEX idx_ledger_ref ON inventory_ledger(ref_type, ref_id)",
+      "sql": "CREATE INDEX idx_ledger_ref ON inventory_ledger(ref_type,ref_id)",
       "columns": [
         {
           "seqno": 0,
@@ -1029,7 +1029,7 @@
       "type": "index",
       "name": "idx_ledger_stock_calc",
       "tbl": "inventory_ledger",
-      "sql": "CREATE INDEX idx_ledger_stock_calc ON inventory_ledger(product_id, deleted, delta)",
+      "sql": "CREATE INDEX idx_ledger_stock_calc ON inventory_ledger(product_id,deleted,delta)",
       "columns": [
         {
           "seqno": 0,
@@ -1069,7 +1069,7 @@
       "type": "index",
       "name": "idx_ledger_sync",
       "tbl": "inventory_ledger",
-      "sql": "CREATE INDEX idx_ledger_sync ON inventory_ledger(sync_status, updated_at)",
+      "sql": "CREATE INDEX idx_ledger_sync ON inventory_ledger(sync_status,updated_at)",
       "columns": [
         {
           "seqno": 0,
@@ -1101,7 +1101,7 @@
       "type": "index",
       "name": "idx_ledger_updated",
       "tbl": "inventory_ledger",
-      "sql": "CREATE INDEX idx_ledger_updated ON inventory_ledger(updated_at, id)",
+      "sql": "CREATE INDEX idx_ledger_updated ON inventory_ledger(updated_at,id)",
       "columns": [
         {
           "seqno": 0,
@@ -1205,7 +1205,7 @@
       "type": "index",
       "name": "idx_outbox_entity",
       "tbl": "sync_outbox",
-      "sql": "CREATE INDEX idx_outbox_entity ON sync_outbox(entity_type, entity_id)",
+      "sql": "CREATE INDEX idx_outbox_entity ON sync_outbox(entity_type,entity_id)",
       "columns": [
         {
           "seqno": 0,
@@ -1237,7 +1237,7 @@
       "type": "index",
       "name": "idx_outbox_signed_drain",
       "tbl": "sync_outbox",
-      "sql": "CREATE INDEX idx_outbox_signed_drain ON sync_outbox(status, device_id, seq_no) WHERE seq_no IS NOT NULL",
+      "sql": "CREATE INDEX idx_outbox_signed_drain ON sync_outbox(status,device_id,seq_no) WHERE seq_no IS NOT NULL",
       "columns": [
         {
           "seqno": 0,
@@ -1277,7 +1277,7 @@
       "type": "index",
       "name": "idx_outbox_status",
       "tbl": "sync_outbox",
-      "sql": "CREATE INDEX idx_outbox_status ON sync_outbox(status, next_retry_at, rowid)",
+      "sql": "CREATE INDEX idx_outbox_status ON sync_outbox(status,next_retry_at,rowid)",
       "columns": [
         {
           "seqno": 0,
@@ -1485,7 +1485,7 @@
       "type": "index",
       "name": "idx_po_status",
       "tbl": "purchase_orders",
-      "sql": "CREATE INDEX idx_po_status ON purchase_orders(status, created_at)",
+      "sql": "CREATE INDEX idx_po_status ON purchase_orders(status,created_at)",
       "columns": [
         {
           "seqno": 0,
@@ -1517,7 +1517,7 @@
       "type": "index",
       "name": "idx_price_book_items_book",
       "tbl": "price_book_items",
-      "sql": "CREATE INDEX idx_price_book_items_book ON price_book_items(book_id, product_id)",
+      "sql": "CREATE INDEX idx_price_book_items_book ON price_book_items(book_id,product_id)",
       "columns": [
         {
           "seqno": 0,
@@ -1573,7 +1573,7 @@
       "type": "index",
       "name": "idx_price_books_customer",
       "tbl": "price_books",
-      "sql": "CREATE INDEX idx_price_books_customer ON price_books(customer_id, status)",
+      "sql": "CREATE INDEX idx_price_books_customer ON price_books(customer_id,status)",
       "columns": [
         {
           "seqno": 0,
@@ -1605,7 +1605,7 @@
       "type": "index",
       "name": "idx_prod_stock_alert",
       "tbl": "products",
-      "sql": "CREATE INDEX idx_prod_stock_alert ON products(category, stock, reorder_point) WHERE deleted = 0",
+      "sql": "CREATE INDEX idx_prod_stock_alert ON products(category,stock,reorder_point) WHERE deleted = 0",
       "columns": [
         {
           "seqno": 0,
@@ -1789,7 +1789,7 @@
       "type": "index",
       "name": "idx_products_sync",
       "tbl": "products",
-      "sql": "CREATE INDEX idx_products_sync ON products(sync_status, updated_at)",
+      "sql": "CREATE INDEX idx_products_sync ON products(sync_status,updated_at)",
       "columns": [
         {
           "seqno": 0,
@@ -1821,7 +1821,7 @@
       "type": "index",
       "name": "idx_products_updated",
       "tbl": "products",
-      "sql": "CREATE INDEX idx_products_updated ON products(updated_at, id)",
+      "sql": "CREATE INDEX idx_products_updated ON products(updated_at,id)",
       "columns": [
         {
           "seqno": 0,
@@ -1925,7 +1925,7 @@
       "type": "index",
       "name": "idx_repair_status",
       "tbl": "repair_orders",
-      "sql": "CREATE INDEX idx_repair_status ON repair_orders(status, created_at)",
+      "sql": "CREATE INDEX idx_repair_status ON repair_orders(status,created_at)",
       "columns": [
         {
           "seqno": 0,
@@ -2053,7 +2053,7 @@
       "type": "index",
       "name": "idx_stock_batches_fifo",
       "tbl": "stock_batches",
-      "sql": "CREATE INDEX idx_stock_batches_fifo ON stock_batches(product_id, received_at) WHERE quantity_remaining > 0 AND deleted = 0",
+      "sql": "CREATE INDEX idx_stock_batches_fifo ON stock_batches(product_id,received_at) WHERE quantity_remaining > 0 AND deleted = 0",
       "columns": [
         {
           "seqno": 0,
@@ -2109,7 +2109,7 @@
       "type": "index",
       "name": "idx_stock_batches_updated",
       "tbl": "stock_batches",
-      "sql": "CREATE INDEX idx_stock_batches_updated ON stock_batches(updated_at, batch_id)",
+      "sql": "CREATE INDEX idx_stock_batches_updated ON stock_batches(updated_at,batch_id)",
       "columns": [
         {
           "seqno": 0,
@@ -2189,7 +2189,7 @@
       "type": "index",
       "name": "idx_supplier_price_product",
       "tbl": "supplier_price_history",
-      "sql": "CREATE INDEX idx_supplier_price_product ON supplier_price_history(product_id, received_at DESC)",
+      "sql": "CREATE INDEX idx_supplier_price_product ON supplier_price_history(product_id,received_at DESC)",
       "columns": [
         {
           "seqno": 0,
@@ -2221,7 +2221,7 @@
       "type": "index",
       "name": "idx_supplier_price_supplier",
       "tbl": "supplier_price_history",
-      "sql": "CREATE INDEX idx_supplier_price_supplier ON supplier_price_history(supplier, received_at DESC)",
+      "sql": "CREATE INDEX idx_supplier_price_supplier ON supplier_price_history(supplier,received_at DESC)",
       "columns": [
         {
           "seqno": 0,
@@ -2277,7 +2277,7 @@
       "type": "index",
       "name": "idx_technician_time_log_repair",
       "tbl": "technician_time_log",
-      "sql": "CREATE INDEX idx_technician_time_log_repair ON technician_time_log(repair_id, started_at DESC)",
+      "sql": "CREATE INDEX idx_technician_time_log_repair ON technician_time_log(repair_id,started_at DESC)",
       "columns": [
         {
           "seqno": 0,
@@ -2309,7 +2309,7 @@
       "type": "index",
       "name": "idx_technician_time_log_technician",
       "tbl": "technician_time_log",
-      "sql": "CREATE INDEX idx_technician_time_log_technician ON technician_time_log(technician_id, started_at DESC)",
+      "sql": "CREATE INDEX idx_technician_time_log_technician ON technician_time_log(technician_id,started_at DESC)",
       "columns": [
         {
           "seqno": 0,
@@ -2437,7 +2437,7 @@
       "type": "index",
       "name": "idx_transactions_deleted",
       "tbl": "transactions",
-      "sql": "CREATE INDEX idx_transactions_deleted ON transactions(deleted, id)",
+      "sql": "CREATE INDEX idx_transactions_deleted ON transactions(deleted,id)",
       "columns": [
         {
           "seqno": 0,
@@ -2517,7 +2517,7 @@
       "type": "index",
       "name": "idx_transactions_sync",
       "tbl": "transactions",
-      "sql": "CREATE INDEX idx_transactions_sync ON transactions(sync_status, updated_at)",
+      "sql": "CREATE INDEX idx_transactions_sync ON transactions(sync_status,updated_at)",
       "columns": [
         {
           "seqno": 0,
@@ -2549,7 +2549,7 @@
       "type": "index",
       "name": "idx_transactions_updated",
       "tbl": "transactions",
-      "sql": "CREATE INDEX idx_transactions_updated ON transactions(updated_at, id)",
+      "sql": "CREATE INDEX idx_transactions_updated ON transactions(updated_at,id)",
       "columns": [
         {
           "seqno": 0,
@@ -2581,7 +2581,7 @@
       "type": "index",
       "name": "idx_txn_cust_date",
       "tbl": "transactions",
-      "sql": "CREATE INDEX idx_txn_cust_date ON transactions(customer_id, created_at DESC) WHERE customer_id IS NOT NULL AND status != 'VOIDED'",
+      "sql": "CREATE INDEX idx_txn_cust_date ON transactions(customer_id,created_at DESC) WHERE customer_id IS NOT NULL AND status != 'VOIDED'",
       "columns": [
         {
           "seqno": 0,
@@ -2661,7 +2661,7 @@
       "type": "index",
       "name": "idx_txn_items_sync",
       "tbl": "transaction_items",
-      "sql": "CREATE INDEX idx_txn_items_sync ON transaction_items(sync_status, updated_at)",
+      "sql": "CREATE INDEX idx_txn_items_sync ON transaction_items(sync_status,updated_at)",
       "columns": [
         {
           "seqno": 0,
@@ -2717,7 +2717,7 @@
       "type": "index",
       "name": "idx_txn_items_updated",
       "tbl": "transaction_items",
-      "sql": "CREATE INDEX idx_txn_items_updated ON transaction_items(updated_at, id)",
+      "sql": "CREATE INDEX idx_txn_items_updated ON transaction_items(updated_at,id)",
       "columns": [
         {
           "seqno": 0,
@@ -2773,7 +2773,7 @@
       "type": "index",
       "name": "idx_txn_shift_status",
       "tbl": "transactions",
-      "sql": "CREATE INDEX idx_txn_shift_status ON transactions(shift_id, status) WHERE shift_id IS NOT NULL",
+      "sql": "CREATE INDEX idx_txn_shift_status ON transactions(shift_id,status) WHERE shift_id IS NOT NULL",
       "columns": [
         {
           "seqno": 0,
@@ -2805,7 +2805,7 @@
       "type": "index",
       "name": "idx_vendor_alias_lookup",
       "tbl": "vendor_aliases",
-      "sql": "CREATE INDEX idx_vendor_alias_lookup ON vendor_aliases(supplier_name, raw_vendor_name)",
+      "sql": "CREATE INDEX idx_vendor_alias_lookup ON vendor_aliases(supplier_name,raw_vendor_name)",
       "columns": [
         {
           "seqno": 0,
@@ -2981,7 +2981,7 @@
       "type": "index",
       "name": "idx_whatsapp_cust",
       "tbl": "whatsapp_launches",
-      "sql": "CREATE INDEX idx_whatsapp_cust ON whatsapp_launches(customer_id, launched_at)",
+      "sql": "CREATE INDEX idx_whatsapp_cust ON whatsapp_launches(customer_id,launched_at)",
       "columns": [
         {
           "seqno": 0,
@@ -3013,7 +3013,7 @@
       "type": "index",
       "name": "ix_log_agg",
       "tbl": "event_log",
-      "sql": "CREATE INDEX ix_log_agg ON event_log(aggregate, hlc)",
+      "sql": "CREATE INDEX ix_log_agg ON event_log(aggregate,hlc)",
       "columns": [
         {
           "seqno": 0,
@@ -3093,7 +3093,7 @@
       "type": "index",
       "name": "ix_p_stock",
       "tbl": "p_products",
-      "sql": "CREATE INDEX ix_p_stock ON p_products(deleted, stock)",
+      "sql": "CREATE INDEX ix_p_stock ON p_products(deleted,stock)",
       "columns": [
         {
           "seqno": 0,
@@ -3245,7 +3245,7 @@
       "type": "table",
       "name": "app_settings",
       "tbl": "app_settings",
-      "sql": "CREATE TABLE app_settings (key TEXT PRIMARY KEY, value_json TEXT NOT NULL, updated_at TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1)",
+      "sql": "",
       "columns": [
         {
           "name": "key",
@@ -3279,13 +3279,15 @@
           "pk": 0,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [],
+      "uniques": []
     },
     {
       "type": "table",
       "name": "audit_chain",
       "tbl": "audit_chain",
-      "sql": "CREATE TABLE audit_chain ( event_id TEXT PRIMARY KEY, prev_hash TEXT NOT NULL, entry_hash TEXT NOT NULL )",
+      "sql": "",
       "columns": [
         {
           "name": "entry_hash",
@@ -3311,13 +3313,15 @@
           "pk": 0,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [],
+      "uniques": []
     },
     {
       "type": "table",
       "name": "blocked_imeis",
       "tbl": "blocked_imeis",
-      "sql": "CREATE TABLE blocked_imeis ( imei TEXT PRIMARY KEY NOT NULL, reason TEXT NOT NULL DEFAULT '', source TEXT NOT NULL DEFAULT '', added_at TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1 )",
+      "sql": "",
       "columns": [
         {
           "name": "active",
@@ -3359,13 +3363,15 @@
           "pk": 0,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [],
+      "uniques": []
     },
     {
       "type": "table",
       "name": "cash_drops",
       "tbl": "cash_drops",
-      "sql": "CREATE TABLE cash_drops ( id TEXT PRIMARY KEY, timestamp TEXT NOT NULL, amount REAL NOT NULL, reason TEXT NOT NULL, user TEXT NOT NULL, is_payout INTEGER DEFAULT 0 , version INTEGER NOT NULL DEFAULT 1)",
+      "sql": "",
       "columns": [
         {
           "name": "amount",
@@ -3423,13 +3429,15 @@
           "pk": 0,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [],
+      "uniques": []
     },
     {
       "type": "table",
       "name": "cash_movements",
       "tbl": "cash_movements",
-      "sql": "CREATE TABLE cash_movements ( id TEXT PRIMARY KEY, session_id TEXT NOT NULL, type TEXT NOT NULL, amount INTEGER NOT NULL, reason TEXT NOT NULL, cashier_name TEXT, created_at TEXT NOT NULL, json_payload TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1, FOREIGN KEY (session_id) REFERENCES cash_sessions(id) ON DELETE CASCADE )",
+      "sql": "",
       "columns": [
         {
           "name": "amount",
@@ -3503,13 +3511,23 @@
           "pk": 0,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [
+        {
+          "table": "cash_sessions",
+          "from": "session_id",
+          "to": "id",
+          "on_update": "NO ACTION",
+          "on_delete": "CASCADE"
+        }
+      ],
+      "uniques": []
     },
     {
       "type": "table",
       "name": "cash_sessions",
       "tbl": "cash_sessions",
-      "sql": "CREATE TABLE cash_sessions ( id TEXT PRIMARY KEY, opened_at TEXT NOT NULL, closed_at TEXT, opening_float INTEGER NOT NULL, expected_cash INTEGER, actual_cash INTEGER, status TEXT NOT NULL DEFAULT 'OPEN', cashier_name TEXT, opening_note TEXT, closing_note TEXT, discrepancy INTEGER, json_payload TEXT NOT NULL, updated_at TEXT NOT NULL , version INTEGER NOT NULL DEFAULT 1, device_id TEXT, terminal_name TEXT)",
+      "sql": "",
       "columns": [
         {
           "name": "actual_cash",
@@ -3639,13 +3657,15 @@
           "pk": 0,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [],
+      "uniques": []
     },
     {
       "type": "table",
       "name": "commission_rules",
       "tbl": "commission_rules",
-      "sql": "CREATE TABLE commission_rules ( id TEXT PRIMARY KEY, technician_id TEXT, basis TEXT NOT NULL DEFAULT 'labor', rate_percent REAL NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT (datetime('now','utc')), updated_at TEXT NOT NULL DEFAULT (datetime('now','utc')) )",
+      "sql": "",
       "columns": [
         {
           "name": "active",
@@ -3703,13 +3723,15 @@
           "pk": 0,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [],
+      "uniques": []
     },
     {
       "type": "table",
       "name": "credit_vouchers",
       "tbl": "credit_vouchers",
-      "sql": "CREATE TABLE credit_vouchers ( id TEXT PRIMARY KEY, code TEXT NOT NULL UNIQUE, initial_amount REAL NOT NULL CHECK (initial_amount >= 0), remaining_amount REAL NOT NULL CHECK (remaining_amount >= 0), status TEXT NOT NULL DEFAULT 'ACTIVE', customer_name TEXT, customer_phone TEXT, notes TEXT, device_id TEXT NOT NULL DEFAULT 'local', idempotency_key TEXT NOT NULL UNIQUE, sync_status TEXT NOT NULL DEFAULT 'pending', version INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')), updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')), expires_at TEXT, deleted INTEGER NOT NULL DEFAULT 0 )",
+      "sql": "",
       "columns": [
         {
           "name": "code",
@@ -3839,13 +3861,28 @@
           "pk": 0,
           "hidden": 0
         }
+      ],
+      "fks": [],
+      "uniques": [
+        {
+          "name": "sqlite_autoindex_credit_vouchers_2",
+          "columns": [
+            "code"
+          ]
+        },
+        {
+          "name": "sqlite_autoindex_credit_vouchers_3",
+          "columns": [
+            "idempotency_key"
+          ]
+        }
       ]
     },
     {
       "type": "table",
       "name": "customer_debts",
       "tbl": "customer_debts",
-      "sql": "CREATE TABLE customer_debts ( id TEXT PRIMARY KEY, customer_id TEXT NOT NULL, customer_name TEXT NOT NULL, type TEXT NOT NULL, amount REAL NOT NULL, balance_after REAL NOT NULL, receipt_number TEXT, payment_method TEXT, notes TEXT, recorded_by TEXT, created_at TEXT NOT NULL, json_payload TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1, deleted INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL DEFAULT '', device_id TEXT NOT NULL DEFAULT 'legacy', due_date TEXT, kind TEXT NOT NULL DEFAULT '', origin TEXT NOT NULL DEFAULT 'operational' CHECK (origin IN ('operational', 'imported_history')), FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE )",
+      "sql": "",
       "columns": [
         {
           "name": "amount",
@@ -3999,13 +4036,23 @@
           "pk": 0,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [
+        {
+          "table": "customers",
+          "from": "customer_id",
+          "to": "id",
+          "on_update": "NO ACTION",
+          "on_delete": "CASCADE"
+        }
+      ],
+      "uniques": []
     },
     {
       "type": "table",
       "name": "customers",
       "tbl": "customers",
-      "sql": "CREATE TABLE customers ( id TEXT PRIMARY KEY, name TEXT NOT NULL, phone TEXT NOT NULL, email TEXT, registered_device TEXT, loyalty_points INTEGER DEFAULT 0, store_credit REAL DEFAULT 0, pricing_tier TEXT DEFAULT 'Retail', loyalty_tier TEXT DEFAULT 'Bronze', total_spent REAL DEFAULT 0, loyalty_card_code TEXT, barcode TEXT, json_payload TEXT NOT NULL, updated_at TEXT NOT NULL , device_id TEXT DEFAULT 'legacy', idempotency_key TEXT DEFAULT '', sync_status TEXT DEFAULT 'pending', created_at TEXT DEFAULT '', deleted INTEGER DEFAULT 0, version INTEGER NOT NULL DEFAULT 1, current_debt INTEGER, whatsapp_opt_in INTEGER NOT NULL DEFAULT 0, credit_score INTEGER, credit_score_at TEXT)",
+      "sql": "",
       "columns": [
         {
           "name": "barcode",
@@ -4199,13 +4246,15 @@
           "pk": 0,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [],
+      "uniques": []
     },
     {
       "type": "table",
       "name": "cycle_count_tasks",
       "tbl": "cycle_count_tasks",
-      "sql": "CREATE TABLE cycle_count_tasks ( id TEXT PRIMARY KEY, product_id TEXT NOT NULL, abc_class TEXT NOT NULL CHECK (abc_class IN ('A','B','C')), due_at TEXT NOT NULL, opened_at TEXT NOT NULL, opened_ledger_max_id INTEGER NOT NULL DEFAULT 0, snapshot_qty INTEGER NOT NULL DEFAULT 0, counted_qty INTEGER, expected_qty INTEGER, counted_at TEXT, operator TEXT, created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')), updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')), deleted INTEGER NOT NULL DEFAULT 0 )",
+      "sql": "",
       "columns": [
         {
           "name": "abc_class",
@@ -4319,13 +4368,15 @@
           "pk": 0,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [],
+      "uniques": []
     },
     {
       "type": "table",
       "name": "debt_plan_entries",
       "tbl": "debt_plan_entries",
-      "sql": "CREATE TABLE debt_plan_entries ( id TEXT PRIMARY KEY, plan_id TEXT NOT NULL, seq INTEGER NOT NULL, due_date TEXT NOT NULL, amount INTEGER NOT NULL CHECK (amount >= 0), paid_amount INTEGER NOT NULL DEFAULT 0, paid_at TEXT, deleted INTEGER NOT NULL DEFAULT 0 )",
+      "sql": "",
       "columns": [
         {
           "name": "amount",
@@ -4391,13 +4442,15 @@
           "pk": 0,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [],
+      "uniques": []
     },
     {
       "type": "table",
       "name": "debt_plans",
       "tbl": "debt_plans",
-      "sql": "CREATE TABLE debt_plans ( id TEXT PRIMARY KEY, customer_id TEXT NOT NULL, total_amount INTEGER NOT NULL CHECK (total_amount >= 0), installments INTEGER NOT NULL CHECK (installments >= 1), interval_days INTEGER NOT NULL CHECK (interval_days >= 1), start_date TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'ACTIF' CHECK (status IN ('ACTIF','SOLDE','ANNULE')), notes TEXT, created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')), updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')), deleted INTEGER NOT NULL DEFAULT 0 )",
+      "sql": "",
       "columns": [
         {
           "name": "created_at",
@@ -4487,13 +4540,15 @@
           "pk": 0,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [],
+      "uniques": []
     },
     {
       "type": "table",
       "name": "defective_returns",
       "tbl": "defective_returns",
-      "sql": "CREATE TABLE defective_returns ( id TEXT PRIMARY KEY, product_id TEXT NOT NULL, product_name TEXT, imei TEXT, quantity REAL NOT NULL, unit_cost REAL, reason TEXT, sale_id TEXT, refund_id TEXT, device_id TEXT NOT NULL DEFAULT 'local', idempotency_key TEXT UNIQUE, sync_status TEXT DEFAULT 'pending', version INTEGER DEFAULT 1, created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')), updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')), deleted INTEGER NOT NULL DEFAULT 0 )",
+      "sql": "",
       "columns": [
         {
           "name": "created_at",
@@ -4623,13 +4678,22 @@
           "pk": 0,
           "hidden": 0
         }
+      ],
+      "fks": [],
+      "uniques": [
+        {
+          "name": "sqlite_autoindex_defective_returns_2",
+          "columns": [
+            "idempotency_key"
+          ]
+        }
       ]
     },
     {
       "type": "table",
       "name": "device_identity",
       "tbl": "device_identity",
-      "sql": "CREATE TABLE device_identity ( device_id TEXT PRIMARY KEY, public_key_hex TEXT NOT NULL, private_key_enc BLOB NOT NULL, enrolled_at TEXT NOT NULL, status TEXT NOT NULL, last_outbox_seq INTEGER NOT NULL DEFAULT 0 )",
+      "sql": "",
       "columns": [
         {
           "name": "device_id",
@@ -4679,13 +4743,15 @@
           "pk": 0,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [],
+      "uniques": []
     },
     {
       "type": "table",
       "name": "dunning_queue",
       "tbl": "dunning_queue",
-      "sql": "CREATE TABLE dunning_queue ( id TEXT PRIMARY KEY, customer_id TEXT NOT NULL, stage TEXT NOT NULL CHECK (stage IN ('R1','R2','R3')), scheduled_at TEXT NOT NULL, launched_at TEXT, status TEXT NOT NULL DEFAULT 'PLANIFIEE' CHECK (status IN ('PLANIFIEE','LANCEE','ANNULEE')), message_hash TEXT, created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')), deleted INTEGER NOT NULL DEFAULT 0 )",
+      "sql": "",
       "columns": [
         {
           "name": "created_at",
@@ -4759,13 +4825,15 @@
           "pk": 0,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [],
+      "uniques": []
     },
     {
       "type": "table",
       "name": "entity_keys",
       "tbl": "entity_keys",
-      "sql": "CREATE TABLE entity_keys ( entity_type TEXT NOT NULL, entity_id TEXT NOT NULL, idempotency_key TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1, PRIMARY KEY (entity_type, entity_id) )",
+      "sql": "",
       "columns": [
         {
           "name": "entity_id",
@@ -4799,13 +4867,15 @@
           "pk": 0,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [],
+      "uniques": []
     },
     {
       "type": "table",
       "name": "event_log",
       "tbl": "event_log",
-      "sql": "CREATE TABLE event_log ( event_id TEXT PRIMARY KEY, seq INTEGER, aggregate TEXT NOT NULL, hlc TEXT NOT NULL, device_id TEXT NOT NULL, schema_v INTEGER NOT NULL DEFAULT 1, event TEXT NOT NULL, ts TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')), origin TEXT NOT NULL DEFAULT 'local' )",
+      "sql": "",
       "columns": [
         {
           "name": "aggregate",
@@ -4879,13 +4949,15 @@
           "pk": 0,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [],
+      "uniques": []
     },
     {
       "type": "table",
       "name": "held_orders",
       "tbl": "held_orders",
-      "sql": "CREATE TABLE held_orders ( id TEXT PRIMARY KEY, customer_id TEXT, customer_name TEXT, items_count INTEGER NOT NULL DEFAULT 0, total_amount REAL NOT NULL DEFAULT 0, json_payload TEXT NOT NULL, device_id TEXT NOT NULL DEFAULT 'local', idempotency_key TEXT UNIQUE, sync_status TEXT DEFAULT 'pending', version INTEGER DEFAULT 1, created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')), updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')), deleted INTEGER NOT NULL DEFAULT 0 )",
+      "sql": "",
       "columns": [
         {
           "name": "created_at",
@@ -4991,13 +5063,22 @@
           "pk": 0,
           "hidden": 0
         }
+      ],
+      "fks": [],
+      "uniques": [
+        {
+          "name": "sqlite_autoindex_held_orders_2",
+          "columns": [
+            "idempotency_key"
+          ]
+        }
       ]
     },
     {
       "type": "table",
       "name": "imei_events",
       "tbl": "imei_events",
-      "sql": "CREATE TABLE imei_events ( id TEXT PRIMARY KEY NOT NULL, imei TEXT NOT NULL, kind TEXT NOT NULL, ref_type TEXT NOT NULL DEFAULT '', ref_id TEXT NOT NULL DEFAULT '', at TEXT NOT NULL, actor TEXT NOT NULL DEFAULT '', note TEXT NOT NULL DEFAULT '' )",
+      "sql": "",
       "columns": [
         {
           "name": "actor",
@@ -5063,13 +5144,15 @@
           "pk": 0,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [],
+      "uniques": []
     },
     {
       "type": "table",
       "name": "imei_records",
       "tbl": "imei_records",
-      "sql": "CREATE TABLE imei_records ( imei TEXT PRIMARY KEY, product_id TEXT NOT NULL, purchase_order_id TEXT, sale_transaction_id TEXT, warranty_expires_at TEXT, received_at TEXT NOT NULL, sold_at TEXT , version INTEGER NOT NULL DEFAULT 1, warranty_months INTEGER, status TEXT)",
+      "sql": "",
       "columns": [
         {
           "name": "imei",
@@ -5151,13 +5234,15 @@
           "pk": 0,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [],
+      "uniques": []
     },
     {
       "type": "table",
       "name": "import_source_identity",
       "tbl": "import_source_identity",
-      "sql": "CREATE TABLE import_source_identity ( destination TEXT NOT NULL, source_namespace TEXT NOT NULL, source_record_id TEXT NOT NULL, target_id TEXT NOT NULL, payload_hash TEXT NOT NULL, source_file_hash TEXT NOT NULL, sheet_index INTEGER, row_index INTEGER, created_at TEXT NOT NULL, PRIMARY KEY (destination, source_namespace, source_record_id) )",
+      "sql": "",
       "columns": [
         {
           "name": "created_at",
@@ -5231,13 +5316,15 @@
           "pk": 0,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [],
+      "uniques": []
     },
     {
       "type": "table",
       "name": "inventory_ledger",
       "tbl": "inventory_ledger",
-      "sql": "CREATE TABLE inventory_ledger ( id TEXT PRIMARY KEY, product_id TEXT NOT NULL REFERENCES products(id), delta INTEGER NOT NULL, reason TEXT NOT NULL CHECK (reason IN ('SALE','VOID','REFUND','RECEIVE','ADJUST','SEED')), ref_type TEXT, ref_id TEXT, device_id TEXT NOT NULL, idempotency_key TEXT NOT NULL UNIQUE, sync_status TEXT NOT NULL DEFAULT 'pending' CHECK (sync_status IN ('pending','inflight','synced','failed')), created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')), updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')), deleted INTEGER NOT NULL DEFAULT 0 , version INTEGER NOT NULL DEFAULT 1)",
+      "sql": "",
       "columns": [
         {
           "name": "created_at",
@@ -5343,13 +5430,30 @@
           "pk": 0,
           "hidden": 0
         }
+      ],
+      "fks": [
+        {
+          "table": "products",
+          "from": "product_id",
+          "to": "id",
+          "on_update": "NO ACTION",
+          "on_delete": "NO ACTION"
+        }
+      ],
+      "uniques": [
+        {
+          "name": "sqlite_autoindex_inventory_ledger_2",
+          "columns": [
+            "idempotency_key"
+          ]
+        }
       ]
     },
     {
       "type": "table",
       "name": "loyalty_ledger",
       "tbl": "loyalty_ledger",
-      "sql": "CREATE TABLE loyalty_ledger ( id TEXT PRIMARY KEY, customer_id TEXT NOT NULL, timestamp TEXT NOT NULL, entry_type TEXT NOT NULL, points INTEGER NOT NULL, balance_after INTEGER NOT NULL, description TEXT NOT NULL, reference_id TEXT, FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE )",
+      "sql": "",
       "columns": [
         {
           "name": "balance_after",
@@ -5415,13 +5519,23 @@
           "pk": 0,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [
+        {
+          "table": "customers",
+          "from": "customer_id",
+          "to": "id",
+          "on_update": "NO ACTION",
+          "on_delete": "CASCADE"
+        }
+      ],
+      "uniques": []
     },
     {
       "type": "table",
       "name": "p_products",
       "tbl": "p_products",
-      "sql": "CREATE TABLE p_products ( id TEXT PRIMARY KEY, name TEXT NOT NULL, price_cents INTEGER NOT NULL, sku TEXT, stock INTEGER NOT NULL DEFAULT 0, deleted INTEGER NOT NULL DEFAULT 0, row_hlc TEXT NOT NULL )",
+      "sql": "",
       "columns": [
         {
           "name": "deleted",
@@ -5479,13 +5593,15 @@
           "pk": 0,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [],
+      "uniques": []
     },
     {
       "type": "table",
       "name": "p_transaction_items",
       "tbl": "p_transaction_items",
-      "sql": "CREATE TABLE p_transaction_items ( tx_id TEXT NOT NULL, product_id TEXT NOT NULL, qty INTEGER NOT NULL, unit_cents INTEGER NOT NULL, PRIMARY KEY (tx_id, product_id) )",
+      "sql": "",
       "columns": [
         {
           "name": "product_id",
@@ -5519,13 +5635,15 @@
           "pk": 0,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [],
+      "uniques": []
     },
     {
       "type": "table",
       "name": "p_transactions",
       "tbl": "p_transactions",
-      "sql": "CREATE TABLE p_transactions ( id TEXT PRIMARY KEY, total_cents INTEGER NOT NULL, ts TEXT NOT NULL, row_hlc TEXT NOT NULL, device_id TEXT NOT NULL )",
+      "sql": "",
       "columns": [
         {
           "name": "device_id",
@@ -5567,13 +5685,15 @@
           "pk": 0,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [],
+      "uniques": []
     },
     {
       "type": "table",
       "name": "part_rma_lines",
       "tbl": "part_rma_lines",
-      "sql": "CREATE TABLE part_rma_lines ( id TEXT PRIMARY KEY, rma_id TEXT NOT NULL, defective_return_id TEXT, product_id TEXT NOT NULL, product_name TEXT, imei TEXT, quantity REAL NOT NULL DEFAULT 1, unit_cost REAL NOT NULL DEFAULT 0, reason TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now','utc')) )",
+      "sql": "",
       "columns": [
         {
           "name": "created_at",
@@ -5655,13 +5775,15 @@
           "pk": 0,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [],
+      "uniques": []
     },
     {
       "type": "table",
       "name": "part_rmas",
       "tbl": "part_rmas",
-      "sql": "CREATE TABLE part_rmas ( id TEXT PRIMARY KEY, supplier_name TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'draft', vendor_dispute_id TEXT, credit_amount REAL NOT NULL DEFAULT 0, ap_reference TEXT, notes TEXT, opened_at TEXT NOT NULL, sent_at TEXT, closed_at TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now','utc')), updated_at TEXT NOT NULL DEFAULT (datetime('now','utc')) )",
+      "sql": "",
       "columns": [
         {
           "name": "ap_reference",
@@ -5759,13 +5881,15 @@
           "pk": 0,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [],
+      "uniques": []
     },
     {
       "type": "table",
       "name": "po_freight",
       "tbl": "po_freight",
-      "sql": "CREATE TABLE po_freight ( id TEXT PRIMARY KEY, po_id TEXT NOT NULL, amount REAL NOT NULL DEFAULT 0, method TEXT NOT NULL DEFAULT 'VALUE', allocated_json TEXT NOT NULL DEFAULT '[]', device_id TEXT NOT NULL DEFAULT 'local', created_at TEXT NOT NULL DEFAULT (datetime('now','utc')) )",
+      "sql": "",
       "columns": [
         {
           "name": "allocated_json",
@@ -5823,13 +5947,15 @@
           "pk": 0,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [],
+      "uniques": []
     },
     {
       "type": "table",
       "name": "price_book_items",
       "tbl": "price_book_items",
-      "sql": "CREATE TABLE price_book_items ( id TEXT PRIMARY KEY, book_id TEXT NOT NULL, product_id TEXT NOT NULL, unit_price REAL NOT NULL, min_qty REAL NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT (datetime('now','utc')), updated_at TEXT NOT NULL DEFAULT (datetime('now','utc')) )",
+      "sql": "",
       "columns": [
         {
           "name": "book_id",
@@ -5887,13 +6013,15 @@
           "pk": 0,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [],
+      "uniques": []
     },
     {
       "type": "table",
       "name": "price_books",
       "tbl": "price_books",
-      "sql": "CREATE TABLE price_books ( id TEXT PRIMARY KEY, name TEXT NOT NULL, customer_id TEXT, valid_from TEXT, valid_to TEXT, priority INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'active', notes TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now','utc')), updated_at TEXT NOT NULL DEFAULT (datetime('now','utc')) )",
+      "sql": "",
       "columns": [
         {
           "name": "created_at",
@@ -5975,13 +6103,15 @@
           "pk": 0,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [],
+      "uniques": []
     },
     {
       "type": "table",
       "name": "product_bundles",
       "tbl": "product_bundles",
-      "sql": "CREATE TABLE product_bundles ( id TEXT PRIMARY KEY, bundle_title TEXT NOT NULL, barcode TEXT NOT NULL, bundle_price REAL NOT NULL, child_skus_json TEXT NOT NULL, json_payload TEXT NOT NULL , version INTEGER NOT NULL DEFAULT 1)",
+      "sql": "",
       "columns": [
         {
           "name": "barcode",
@@ -6039,13 +6169,15 @@
           "pk": 0,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [],
+      "uniques": []
     },
     {
       "type": "table",
       "name": "products",
       "tbl": "products",
-      "sql": "CREATE TABLE products ( id TEXT PRIMARY KEY, sku TEXT NOT NULL, barcode TEXT NOT NULL, title TEXT NOT NULL, brand TEXT NOT NULL, compatible_model TEXT, category TEXT NOT NULL, price REAL NOT NULL, wholesale_price REAL DEFAULT 0, cost_price REAL DEFAULT 0, stock INTEGER NOT NULL DEFAULT 0, image_url TEXT, is_serialized INTEGER DEFAULT 0, imei_number TEXT, vendor_name TEXT, lead_time_days INTEGER DEFAULT 0, daily_sales_velocity REAL DEFAULT 0, reorder_point INTEGER DEFAULT 0, json_payload TEXT NOT NULL, updated_at TEXT NOT NULL , device_id TEXT DEFAULT 'legacy', idempotency_key TEXT DEFAULT '', sync_status TEXT DEFAULT 'pending', created_at TEXT DEFAULT '', deleted INTEGER DEFAULT 0, version INTEGER NOT NULL DEFAULT 1)",
+      "sql": "",
       "columns": [
         {
           "name": "barcode",
@@ -6255,13 +6387,15 @@
           "pk": 0,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [],
+      "uniques": []
     },
     {
       "type": "table",
       "name": "products_fts_config",
       "tbl": "products_fts_config",
-      "sql": "CREATE TABLE 'products_fts_config'(k PRIMARY KEY, v) WITHOUT ROWID",
+      "sql": "",
       "columns": [
         {
           "name": "k",
@@ -6279,13 +6413,15 @@
           "pk": 0,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [],
+      "uniques": []
     },
     {
       "type": "table",
       "name": "products_fts_content",
       "tbl": "products_fts_content",
-      "sql": "CREATE TABLE 'products_fts_content'(id INTEGER PRIMARY KEY, c0, c1, c2, c3, c4, c5)",
+      "sql": "",
       "columns": [
         {
           "name": "c0",
@@ -6343,13 +6479,15 @@
           "pk": 1,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [],
+      "uniques": []
     },
     {
       "type": "table",
       "name": "products_fts_data",
       "tbl": "products_fts_data",
-      "sql": "CREATE TABLE 'products_fts_data'(id INTEGER PRIMARY KEY, block BLOB)",
+      "sql": "",
       "columns": [
         {
           "name": "block",
@@ -6367,13 +6505,15 @@
           "pk": 1,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [],
+      "uniques": []
     },
     {
       "type": "table",
       "name": "products_fts_docsize",
       "tbl": "products_fts_docsize",
-      "sql": "CREATE TABLE 'products_fts_docsize'(id INTEGER PRIMARY KEY, sz BLOB)",
+      "sql": "",
       "columns": [
         {
           "name": "id",
@@ -6391,13 +6531,15 @@
           "pk": 0,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [],
+      "uniques": []
     },
     {
       "type": "table",
       "name": "products_fts_idx",
       "tbl": "products_fts_idx",
-      "sql": "CREATE TABLE 'products_fts_idx'(segid, term, pgno, PRIMARY KEY(segid, term)) WITHOUT ROWID",
+      "sql": "",
       "columns": [
         {
           "name": "pgno",
@@ -6423,13 +6565,15 @@
           "pk": 2,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [],
+      "uniques": []
     },
     {
       "type": "table",
       "name": "projection_cursor",
       "tbl": "projection_cursor",
-      "sql": "CREATE TABLE projection_cursor ( projection TEXT PRIMARY KEY, last_hlc TEXT NOT NULL )",
+      "sql": "",
       "columns": [
         {
           "name": "last_hlc",
@@ -6447,13 +6591,15 @@
           "pk": 1,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [],
+      "uniques": []
     },
     {
       "type": "table",
       "name": "purchase_orders",
       "tbl": "purchase_orders",
-      "sql": "CREATE TABLE purchase_orders ( id TEXT PRIMARY KEY, po_number TEXT NOT NULL, vendor_name TEXT NOT NULL, total_amount REAL NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, json_payload TEXT NOT NULL , version INTEGER NOT NULL DEFAULT 1)",
+      "sql": "",
       "columns": [
         {
           "name": "created_at",
@@ -6519,13 +6665,15 @@
           "pk": 0,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [],
+      "uniques": []
     },
     {
       "type": "table",
       "name": "refund_dedup",
       "tbl": "refund_dedup",
-      "sql": "CREATE TABLE refund_dedup ( ticket_id TEXT NOT NULL, items_hash TEXT NOT NULL, refund_id TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')), PRIMARY KEY (ticket_id, items_hash) )",
+      "sql": "",
       "columns": [
         {
           "name": "created_at",
@@ -6559,13 +6707,15 @@
           "pk": 1,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [],
+      "uniques": []
     },
     {
       "type": "table",
       "name": "repair_orders",
       "tbl": "repair_orders",
-      "sql": "CREATE TABLE repair_orders ( id TEXT PRIMARY KEY, ticket_number TEXT NOT NULL, customer_name TEXT NOT NULL, customer_phone TEXT NOT NULL, device_model TEXT NOT NULL, imei TEXT, status TEXT NOT NULL, labor_cost REAL DEFAULT 0, parts_cost REAL DEFAULT 0, total_cost REAL DEFAULT 0, deposit_amount REAL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT, json_payload TEXT NOT NULL , version INTEGER NOT NULL DEFAULT 1, customer_id TEXT, parts_cost_basis REAL, costing_model TEXT, rework_of_repair_id TEXT)",
+      "sql": "",
       "columns": [
         {
           "name": "costing_model",
@@ -6719,13 +6869,15 @@
           "pk": 0,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [],
+      "uniques": []
     },
     {
       "type": "table",
       "name": "sale_batch_allocations",
       "tbl": "sale_batch_allocations",
-      "sql": "CREATE TABLE sale_batch_allocations ( id TEXT PRIMARY KEY NOT NULL, sale_id TEXT NOT NULL, batch_id TEXT NOT NULL, qty_consumed INTEGER NOT NULL CHECK (qty_consumed > 0), unit_cost_at_sale REAL NOT NULL CHECK (unit_cost_at_sale >= 0), created_at DATETIME DEFAULT CURRENT_TIMESTAMP, product_id TEXT, sale_item_id TEXT, device_id TEXT NOT NULL DEFAULT 'local', idempotency_key TEXT NOT NULL UNIQUE, sync_status TEXT NOT NULL DEFAULT 'pending', version INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')), deleted INTEGER NOT NULL DEFAULT 0, FOREIGN KEY(batch_id) REFERENCES stock_batches(batch_id) )",
+      "sql": "",
       "columns": [
         {
           "name": "batch_id",
@@ -6839,13 +6991,30 @@
           "pk": 0,
           "hidden": 0
         }
+      ],
+      "fks": [
+        {
+          "table": "stock_batches",
+          "from": "batch_id",
+          "to": "batch_id",
+          "on_update": "NO ACTION",
+          "on_delete": "NO ACTION"
+        }
+      ],
+      "uniques": [
+        {
+          "name": "sqlite_autoindex_sale_batch_allocations_2",
+          "columns": [
+            "idempotency_key"
+          ]
+        }
       ]
     },
     {
       "type": "table",
       "name": "scan_audit_log",
       "tbl": "scan_audit_log",
-      "sql": "CREATE TABLE scan_audit_log ( id INTEGER PRIMARY KEY AUTOINCREMENT, trace_id TEXT NOT NULL, user_id TEXT, supplier_name TEXT NOT NULL, items_count INTEGER NOT NULL, grand_total REAL NOT NULL, delta REAL NOT NULL, is_balanced INTEGER NOT NULL, created_at TEXT NOT NULL DEFAULT (datetime('now', 'utc')) )",
+      "sql": "",
       "columns": [
         {
           "name": "created_at",
@@ -6919,13 +7088,15 @@
           "pk": 0,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [],
+      "uniques": []
     },
     {
       "type": "table",
       "name": "schema_migrations",
       "tbl": "schema_migrations",
-      "sql": "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)",
+      "sql": "",
       "columns": [
         {
           "name": "applied_at",
@@ -6943,13 +7114,15 @@
           "pk": 1,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [],
+      "uniques": []
     },
     {
       "type": "table",
       "name": "security_audit_logs",
       "tbl": "security_audit_logs",
-      "sql": "CREATE TABLE security_audit_logs ( id TEXT PRIMARY KEY, timestamp TEXT NOT NULL, user TEXT NOT NULL, action TEXT NOT NULL, details TEXT NOT NULL, requires_pin INTEGER DEFAULT 0 , version INTEGER NOT NULL DEFAULT 1, device_id TEXT, ip_address TEXT, source TEXT NOT NULL DEFAULT 'local', actor_id TEXT, app_version TEXT, session_id TEXT)",
+      "sql": "",
       "columns": [
         {
           "name": "action",
@@ -7055,13 +7228,15 @@
           "pk": 0,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [],
+      "uniques": []
     },
     {
       "type": "table",
       "name": "stock_batches",
       "tbl": "stock_batches",
-      "sql": "CREATE TABLE stock_batches ( batch_id TEXT PRIMARY KEY, product_id TEXT NOT NULL REFERENCES products(id), quantity_remaining REAL NOT NULL CHECK (quantity_remaining >= 0), unit_cost REAL NOT NULL CHECK (unit_cost >= 0), received_at TEXT NOT NULL, purchase_order_id TEXT, device_id TEXT NOT NULL DEFAULT 'local', idempotency_key TEXT NOT NULL UNIQUE, sync_status TEXT NOT NULL DEFAULT 'pending', version INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')), updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')), deleted INTEGER NOT NULL DEFAULT 0 , shadow_sale_id TEXT, shadow_item_id TEXT, shadow_qty REAL NOT NULL DEFAULT 0, shadow_resolved INTEGER NOT NULL DEFAULT 0, freight_per_unit REAL NOT NULL DEFAULT 0)",
+      "sql": "",
       "columns": [
         {
           "name": "batch_id",
@@ -7207,13 +7382,30 @@
           "pk": 0,
           "hidden": 0
         }
+      ],
+      "fks": [
+        {
+          "table": "products",
+          "from": "product_id",
+          "to": "id",
+          "on_update": "NO ACTION",
+          "on_delete": "NO ACTION"
+        }
+      ],
+      "uniques": [
+        {
+          "name": "sqlite_autoindex_stock_batches_2",
+          "columns": [
+            "idempotency_key"
+          ]
+        }
       ]
     },
     {
       "type": "table",
       "name": "store_expenses",
       "tbl": "store_expenses",
-      "sql": "CREATE TABLE store_expenses ( id TEXT PRIMARY KEY, category TEXT NOT NULL, title TEXT NOT NULL, amount REAL NOT NULL, payment_method TEXT NOT NULL, paid_to TEXT, notes TEXT, recorded_by TEXT NOT NULL, created_at TEXT NOT NULL, json_payload TEXT NOT NULL , version INTEGER NOT NULL DEFAULT 1)",
+      "sql": "",
       "columns": [
         {
           "name": "amount",
@@ -7303,13 +7495,15 @@
           "pk": 0,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [],
+      "uniques": []
     },
     {
       "type": "table",
       "name": "supplier_price_history",
       "tbl": "supplier_price_history",
-      "sql": "CREATE TABLE supplier_price_history ( id TEXT PRIMARY KEY, product_id TEXT NOT NULL, product_name TEXT, supplier TEXT NOT NULL DEFAULT '', invoice_no TEXT, unit_cost REAL NOT NULL DEFAULT 0, quantity REAL NOT NULL DEFAULT 0, batch_id TEXT, received_at TEXT NOT NULL, device_id TEXT NOT NULL DEFAULT 'local', created_at TEXT NOT NULL DEFAULT (datetime('now','utc')) )",
+      "sql": "",
       "columns": [
         {
           "name": "batch_id",
@@ -7399,13 +7593,15 @@
           "pk": 0,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [],
+      "uniques": []
     },
     {
       "type": "table",
       "name": "sync_outbox",
       "tbl": "sync_outbox",
-      "sql": "CREATE TABLE \"sync_outbox\" ( rowid INTEGER PRIMARY KEY AUTOINCREMENT, idempotency_key TEXT NOT NULL UNIQUE, entity_type TEXT NOT NULL, entity_id TEXT NOT NULL, operation TEXT NOT NULL CHECK (operation IN ('UPSERT','DELETE')), payload_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','inflight','synced','failed')), retry_count INTEGER NOT NULL DEFAULT 0, next_retry_at TEXT, last_error TEXT, created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')), updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')) , device_id TEXT, device_signature TEXT, seq_no INTEGER, envelope TEXT, error TEXT)",
+      "sql": "",
       "columns": [
         {
           "name": "created_at",
@@ -7543,13 +7739,22 @@
           "pk": 0,
           "hidden": 0
         }
+      ],
+      "fks": [],
+      "uniques": [
+        {
+          "name": "sqlite_autoindex_sync_outbox_1",
+          "columns": [
+            "idempotency_key"
+          ]
+        }
       ]
     },
     {
       "type": "table",
       "name": "sync_parked_movements",
       "tbl": "sync_parked_movements",
-      "sql": "CREATE TABLE sync_parked_movements ( id TEXT PRIMARY KEY, session_id TEXT NOT NULL, data_json TEXT NOT NULL, row_version INTEGER NOT NULL DEFAULT 1, parked_at TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT )",
+      "sql": "",
       "columns": [
         {
           "name": "attempts",
@@ -7607,13 +7812,15 @@
           "pk": 0,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [],
+      "uniques": []
     },
     {
       "type": "table",
       "name": "sync_state",
       "tbl": "sync_state",
-      "sql": "CREATE TABLE sync_state ( key TEXT PRIMARY KEY, value TEXT NOT NULL )",
+      "sql": "",
       "columns": [
         {
           "name": "key",
@@ -7631,13 +7838,15 @@
           "pk": 0,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [],
+      "uniques": []
     },
     {
       "type": "table",
       "name": "technician_time_log",
       "tbl": "technician_time_log",
-      "sql": "CREATE TABLE technician_time_log ( id TEXT PRIMARY KEY, repair_id TEXT NOT NULL, technician_id TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'work', started_at TEXT NOT NULL, ended_at TEXT )",
+      "sql": "",
       "columns": [
         {
           "name": "ended_at",
@@ -7687,13 +7896,15 @@
           "pk": 0,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [],
+      "uniques": []
     },
     {
       "type": "table",
       "name": "technicians",
       "tbl": "technicians",
-      "sql": "CREATE TABLE technicians ( id TEXT PRIMARY KEY, name TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'Technicien', active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT (datetime('now','utc')), updated_at TEXT NOT NULL DEFAULT (datetime('now','utc')) )",
+      "sql": "",
       "columns": [
         {
           "name": "active",
@@ -7743,13 +7954,15 @@
           "pk": 0,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [],
+      "uniques": []
     },
     {
       "type": "table",
       "name": "trade_ins",
       "tbl": "trade_ins",
-      "sql": "CREATE TABLE trade_ins ( id TEXT PRIMARY KEY, device_model TEXT NOT NULL, imei TEXT NOT NULL, brand TEXT NOT NULL, condition_grade TEXT NOT NULL, buyback_value REAL NOT NULL, resale_margin_percent REAL DEFAULT 0, resale_price REAL NOT NULL, customer_name TEXT NOT NULL, credit_to_wallet INTEGER DEFAULT 0, created_at TEXT NOT NULL, json_payload TEXT NOT NULL , version INTEGER NOT NULL DEFAULT 1, customer_id TEXT, customer_phone TEXT, inspection_json TEXT)",
+      "sql": "",
       "columns": [
         {
           "name": "brand",
@@ -7879,13 +8092,15 @@
           "pk": 0,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [],
+      "uniques": []
     },
     {
       "type": "table",
       "name": "transaction_items",
       "tbl": "transaction_items",
-      "sql": "CREATE TABLE transaction_items ( id TEXT PRIMARY KEY, transaction_id TEXT NOT NULL, product_id TEXT NOT NULL, quantity INTEGER NOT NULL, applied_price REAL NOT NULL, discount REAL DEFAULT 0, imei_number TEXT, cost_price REAL DEFAULT 0, json_payload TEXT NOT NULL, device_id TEXT DEFAULT 'legacy', idempotency_key TEXT DEFAULT '', sync_status TEXT DEFAULT 'pending', created_at TEXT DEFAULT '', updated_at TEXT DEFAULT '', deleted INTEGER DEFAULT 0, version INTEGER NOT NULL DEFAULT 1, sale_item_id TEXT, unit_price_charged REAL DEFAULT 0, unit_cost_at_sale REAL DEFAULT 0, discount_amount REAL DEFAULT 0, line_profit REAL DEFAULT 0, FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE )",
+      "sql": "",
       "columns": [
         {
           "name": "applied_price",
@@ -8055,13 +8270,23 @@
           "pk": 0,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [
+        {
+          "table": "transactions",
+          "from": "transaction_id",
+          "to": "id",
+          "on_update": "NO ACTION",
+          "on_delete": "CASCADE"
+        }
+      ],
+      "uniques": []
     },
     {
       "type": "table",
       "name": "transactions",
       "tbl": "transactions",
-      "sql": "CREATE TABLE transactions ( id TEXT PRIMARY KEY, receipt_number TEXT NOT NULL, customer_id TEXT, subtotal REAL NOT NULL, discount_total REAL DEFAULT 0, total REAL NOT NULL, cost_total REAL DEFAULT 0, profit REAL DEFAULT 0, profit_margin REAL DEFAULT 0, pricing_tier TEXT DEFAULT 'Retail', payment_method TEXT DEFAULT 'Espèces', cash_tendered REAL DEFAULT 0, change_due REAL DEFAULT 0, status TEXT NOT NULL DEFAULT 'COMPLETED', created_at TEXT NOT NULL, json_payload TEXT NOT NULL , device_id TEXT DEFAULT 'legacy', idempotency_key TEXT DEFAULT '', sync_status TEXT DEFAULT 'pending', updated_at TEXT DEFAULT '', deleted INTEGER DEFAULT 0, version INTEGER NOT NULL DEFAULT 1, ledger_cogs_total REAL, original_transaction_id TEXT, is_refund INTEGER NOT NULL DEFAULT 0, restored_cogs REAL, shift_id TEXT)",
+      "sql": "",
       "columns": [
         {
           "name": "cash_tendered",
@@ -8279,13 +8504,15 @@
           "pk": 0,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [],
+      "uniques": []
     },
     {
       "type": "table",
       "name": "vec_products_chunks",
       "tbl": "vec_products_chunks",
-      "sql": "CREATE TABLE \"vec_products_chunks\"(chunk_id INTEGER PRIMARY KEY AUTOINCREMENT,size INTEGER NOT NULL,validity BLOB NOT NULL,rowids BLOB NOT NULL)",
+      "sql": "",
       "columns": [
         {
           "name": "chunk_id",
@@ -8319,13 +8546,15 @@
           "pk": 0,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [],
+      "uniques": []
     },
     {
       "type": "table",
       "name": "vec_products_info",
       "tbl": "vec_products_info",
-      "sql": "CREATE TABLE \"vec_products_info\" (key text primary key, value any)",
+      "sql": "",
       "columns": [
         {
           "name": "key",
@@ -8343,13 +8572,15 @@
           "pk": 0,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [],
+      "uniques": []
     },
     {
       "type": "table",
       "name": "vec_products_metadatachunks00",
       "tbl": "vec_products_metadatachunks00",
-      "sql": "CREATE TABLE \"vec_products_metadatachunks00\"(rowid PRIMARY KEY, data BLOB NOT NULL)",
+      "sql": "",
       "columns": [
         {
           "name": "data",
@@ -8367,13 +8598,15 @@
           "pk": 1,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [],
+      "uniques": []
     },
     {
       "type": "table",
       "name": "vec_products_metadatatext00",
       "tbl": "vec_products_metadatatext00",
-      "sql": "CREATE TABLE \"vec_products_metadatatext00\"(rowid PRIMARY KEY, data TEXT)",
+      "sql": "",
       "columns": [
         {
           "name": "data",
@@ -8391,13 +8624,15 @@
           "pk": 1,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [],
+      "uniques": []
     },
     {
       "type": "table",
       "name": "vec_products_rowids",
       "tbl": "vec_products_rowids",
-      "sql": "CREATE TABLE \"vec_products_rowids\"(rowid INTEGER PRIMARY KEY AUTOINCREMENT,id,chunk_id INTEGER,chunk_offset INTEGER)",
+      "sql": "",
       "columns": [
         {
           "name": "chunk_id",
@@ -8431,13 +8666,15 @@
           "pk": 1,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [],
+      "uniques": []
     },
     {
       "type": "table",
       "name": "vec_products_vector_chunks00",
       "tbl": "vec_products_vector_chunks00",
-      "sql": "CREATE TABLE \"vec_products_vector_chunks00\"(rowid PRIMARY KEY,vectors BLOB NOT NULL)",
+      "sql": "",
       "columns": [
         {
           "name": "rowid",
@@ -8455,13 +8692,15 @@
           "pk": 0,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [],
+      "uniques": []
     },
     {
       "type": "table",
       "name": "vendor_aliases",
       "tbl": "vendor_aliases",
-      "sql": "CREATE TABLE vendor_aliases ( id INTEGER PRIMARY KEY AUTOINCREMENT, supplier_name TEXT NOT NULL, raw_vendor_name TEXT NOT NULL, product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE, created_at TEXT NOT NULL DEFAULT (datetime('now', 'utc')), UNIQUE(supplier_name, raw_vendor_name) )",
+      "sql": "",
       "columns": [
         {
           "name": "created_at",
@@ -8503,13 +8742,31 @@
           "pk": 0,
           "hidden": 0
         }
+      ],
+      "fks": [
+        {
+          "table": "products",
+          "from": "product_id",
+          "to": "id",
+          "on_update": "NO ACTION",
+          "on_delete": "CASCADE"
+        }
+      ],
+      "uniques": [
+        {
+          "name": "sqlite_autoindex_vendor_aliases_1",
+          "columns": [
+            "supplier_name",
+            "raw_vendor_name"
+          ]
+        }
       ]
     },
     {
       "type": "table",
       "name": "vendor_disputes",
       "tbl": "vendor_disputes",
-      "sql": "CREATE TABLE vendor_disputes ( id TEXT PRIMARY KEY, po_id TEXT, supplier_name TEXT NOT NULL, supplier_phone TEXT, invoice_number TEXT, invoice_date TEXT, original_reported_total REAL NOT NULL DEFAULT 0, total_claim_amount REAL NOT NULL DEFAULT 0, adjusted_payable_total REAL NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'DRAFT', items_count INTEGER NOT NULL DEFAULT 0, json_payload TEXT NOT NULL, device_id TEXT NOT NULL DEFAULT 'local', idempotency_key TEXT UNIQUE, sync_status TEXT DEFAULT 'pending', version INTEGER DEFAULT 1, created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')), updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')), deleted INTEGER NOT NULL DEFAULT 0 )",
+      "sql": "",
       "columns": [
         {
           "name": "adjusted_payable_total",
@@ -8663,13 +8920,22 @@
           "pk": 0,
           "hidden": 0
         }
+      ],
+      "fks": [],
+      "uniques": [
+        {
+          "name": "sqlite_autoindex_vendor_disputes_2",
+          "columns": [
+            "idempotency_key"
+          ]
+        }
       ]
     },
     {
       "type": "table",
       "name": "warranty_claims",
       "tbl": "warranty_claims",
-      "sql": "CREATE TABLE warranty_claims ( id TEXT PRIMARY KEY, original_repair_id TEXT NOT NULL, rework_repair_id TEXT, status TEXT NOT NULL DEFAULT 'open', labor_basis REAL NOT NULL DEFAULT 0, parts_basis REAL NOT NULL DEFAULT 0, rma_id TEXT, notes TEXT, opened_at TEXT NOT NULL, closed_at TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now','utc')), updated_at TEXT NOT NULL DEFAULT (datetime('now','utc')) )",
+      "sql": "",
       "columns": [
         {
           "name": "closed_at",
@@ -8767,13 +9033,15 @@
           "pk": 0,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [],
+      "uniques": []
     },
     {
       "type": "table",
       "name": "whatsapp_launches",
       "tbl": "whatsapp_launches",
-      "sql": "CREATE TABLE whatsapp_launches ( id TEXT PRIMARY KEY, customer_id TEXT NOT NULL, phone TEXT NOT NULL, purpose TEXT NOT NULL, stage TEXT, message_preview TEXT, status TEXT NOT NULL DEFAULT 'Lancé', launched_at TEXT NOT NULL, operator TEXT, created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')), deleted INTEGER NOT NULL DEFAULT 0 )",
+      "sql": "",
       "columns": [
         {
           "name": "created_at",
@@ -8863,7 +9131,9 @@
           "pk": 0,
           "hidden": 0
         }
-      ]
+      ],
+      "fks": [],
+      "uniques": []
     },
     {
       "type": "trigger",
@@ -8875,19 +9145,19 @@
       "type": "trigger",
       "name": "trg_products_fts_insert",
       "tbl": "products",
-      "sql": "CREATE TRIGGER trg_products_fts_insert AFTER INSERT ON products BEGIN INSERT INTO products_fts (id, title, brand, sku, barcode, category) VALUES (new.id, new.title, new.brand, new.sku, new.barcode, new.category); END"
+      "sql": "CREATE TRIGGER trg_products_fts_insert AFTER INSERT ON products BEGIN INSERT INTO products_fts (id,title,brand,sku,barcode,category) VALUES (new.id,new.title,new.brand,new.sku,new.barcode,new.category); END"
     },
     {
       "type": "trigger",
       "name": "trg_products_fts_update",
       "tbl": "products",
-      "sql": "CREATE TRIGGER trg_products_fts_update AFTER UPDATE ON products BEGIN UPDATE products_fts SET title = new.title, brand = new.brand, sku = new.sku, barcode = new.barcode, category = new.category WHERE id = new.id; END"
+      "sql": "CREATE TRIGGER trg_products_fts_update AFTER UPDATE ON products BEGIN UPDATE products_fts SET title = new.title,brand = new.brand,sku = new.sku,barcode = new.barcode,category = new.category WHERE id = new.id; END"
     },
     {
       "type": "trigger",
       "name": "trg_refund_requires_dedup",
       "tbl": "transactions",
-      "sql": "CREATE TRIGGER trg_refund_requires_dedup BEFORE INSERT ON transactions WHEN NEW.is_refund = 1 AND COALESCE(NEW.sync_status, '') <> 'synced' AND NOT EXISTS (SELECT 1 FROM refund_dedup WHERE refund_id = NEW.id) BEGIN SELECT RAISE(ABORT, 'REFUND_BYPASS: refunds must go through refund_sale_atomic'); END"
+      "sql": "CREATE TRIGGER trg_refund_requires_dedup BEFORE INSERT ON transactions WHEN NEW.is_refund = 1 AND COALESCE(NEW.sync_status,'') <> 'synced' AND NOT EXISTS (SELECT 1 FROM refund_dedup WHERE refund_id = NEW.id) BEGIN SELECT RAISE(ABORT,'REFUND_BYPASS: refunds must go through refund_sale_atomic'); END"
     },
     {
       "type": "view",
@@ -8905,7 +9175,7 @@
       "type": "view",
       "name": "v_inventory_valuation",
       "tbl": "v_inventory_valuation",
-      "sql": "CREATE VIEW v_inventory_valuation AS SELECT COUNT(*) as total_skus, COALESCE(SUM(stock),0) as total_units, COALESCE(CAST(ROUND(SUM(stock * cost_price)) AS INTEGER),0) as total_cost_value, COALESCE(CAST(ROUND(SUM(stock * price)) AS INTEGER),0) as total_retail_value, COALESCE(CAST(ROUND(SUM(stock * (price - cost_price))) AS INTEGER),0) as potential_profit_margin FROM products WHERE stock > 0"
+      "sql": "CREATE VIEW v_inventory_valuation AS SELECT COUNT(*) as total_skus,COALESCE(SUM(stock),0) as total_units,COALESCE(CAST(ROUND(SUM(stock * cost_price)) AS INTEGER),0) as total_cost_value,COALESCE(CAST(ROUND(SUM(stock * price)) AS INTEGER),0) as total_retail_value,COALESCE(CAST(ROUND(SUM(stock * (price - cost_price))) AS INTEGER),0) as potential_profit_margin FROM products WHERE stock > 0"
     }
   ]
 }

@@ -157,12 +157,42 @@ Two ordering/ownership defects surfaced and are fixed:
    that, rc-5/rc-6 heals failed the manifest post-condition (fail-closed, as
    designed).
 
+## Native base-schema port + barrier (2026-11-04, E-0194)
+
+- **Base schema is native.** `native_migrate` replays the plugin's `v1..v129`
+  migrations against the live DB in `.setup()`, ordered by version (sqlx's order,
+  not source order), and records the sqlx ledger rows (`version`, SHA-384
+  `checksum`, success) in `_sqlx_migrations`. An installed migration whose
+  checksum no longer matches aborts startup.
+- **Barrier, not a poll.** After migrate + heal the core writes
+  `schema_ready.json`; the patched plugin's `load()` waits for it (state-based,
+  100 ms steps, 30 s budget) and treats `status:"failed"` as a hard error. The
+  renderer can no longer reach a half-migrated database.
+- **Ledger catch-up.** Legacy ledgers stop at v112 while the heal already created
+  later objects, so non-idempotent migrations hit duplicates/missing columns.
+  Those migrations are rolled back, recorded as applied, and **retried after a
+  column prep** so table rebuilds still run; completeness is proven by the golden
+  manifest, not by trusting the ledger.
+- **Fresh install** now creates the DB natively (v1 + all migrations + heal)
+  before the window: startup reports `migrations applied 36, tolerated 2, retry
+  [113,114], last 129` and the heal reports the golden manifest hash. The renderer
+  heal is skipped.
+- **Manifest is semantic for tables.** Rebuilt tables legitimately change their
+  stored CREATE text; tables are compared by columns + foreign keys + unique
+  constraints, while indexes/triggers keep their SQL text. Comma spacing is
+  canonicalised so formatting cannot fail a migration.
+
+**Remaining on the fresh path: 13 renderer writes** — `sync.device_id` upserts,
+sync-flag upserts, the maintenance month + `incremental_vacuum`, and an orphan
+`sale_batch_allocations` cleanup. They are the next migration slice; until they
+have native lanes, the fresh install still needs a writable pool (spec 92 under
+`POS_SQL_QUERY_ONLY=1` fails setup, 13 refusals), while the **managed path is at
+0 refusals** and the normal fresh path passes.
+
 ## Next, in order
 
-1. **Barrier + base-schema port** (items 4/5): plugin `load` awaits native
-   completion; v1..current under `_sqlx_migrations`; fresh installs to 0; then
-   delete the JS heal and capture hook.
-2. **Flip criterion** (item 6): full e2e under `POS_SQL_QUERY_ONLY=1` with 0
-   runtime refusals; money-path p95 budget.
-3. Concurrent same-entity case; REPO PASS/OWNER_ACTIONS one-liners; tag after the
-   full floor on the exact commit.
+1. Native lanes for the 13 settings/maintenance writes, re-probe fresh to 0, then
+   delete the JS heal call and the capture hook.
+2. Flip criterion: full e2e under `POS_SQL_QUERY_ONLY=1`; money-path p95 budget.
+3. Release gate for the capture path; concurrent same-entity case; REPO/OWNER
+   one-liners; tag after the full floor on the exact commit.

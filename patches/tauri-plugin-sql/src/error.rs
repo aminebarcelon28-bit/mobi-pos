@@ -12,6 +12,10 @@ pub enum Error {
     Migration(#[from] sqlx::migrate::MigrateError),
     #[error("invalid connection url: {0}")]
     InvalidDbUrl(String),
+    /// The native startup migration has not completed (or failed). The renderer
+    /// must never query a half-migrated database.
+    #[error("schema not ready: {0}")]
+    SchemaNotReady(String),
     #[error("database {0} not loaded")]
     DatabaseNotLoaded(String),
     #[error("unsupported datatype: {0}")]

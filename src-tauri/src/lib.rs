@@ -1019,7 +1019,7 @@ fn cleanup_legacy_duplicate() {
     }
 }
 
-fn base_schema_migrations() -> Vec<Migration> {
+pub(crate) fn base_schema_migrations() -> Vec<Migration> {
     vec![
         // F2-coverage: loyalty_ledger (created below in v1) is a LOCAL-ONLY
         // audit journal by design — no writers enqueue it, no remote table,
@@ -2389,9 +2389,20 @@ pub fn run() {
                 // the kernel is fail-closed by construction.
                 // SEC-01 increment 2: boot maintenance is native (the renderer
                 // pool is read-only). Failures fall back to the renderer path.
-                match crate::boot_maintenance::run_schema_heal_at_startup(&app_dir) {
-                    Ok(r) => eprintln!("[boot] native schema heal: {r:?}"),
-                    Err(e) => eprintln!("[boot] native schema heal skipped: {e}"),
+                // The renderer must never query a database that is still being
+                // migrated: plugin load() waits for schema_ready.json (see the
+                // workspace patch), and this setup runs before the window.
+                match crate::boot_maintenance::run_native_startup(&app_dir) {
+                    Ok((m, r)) => {
+                        eprintln!("[boot] native migrations: {m:?}");
+                        eprintln!("[boot] native schema heal: {r:?}");
+                        crate::boot_maintenance::write_schema_marker(&app_dir, true, "ok");
+                    }
+                    Err(e) => {
+                        eprintln!("[boot] native startup FAILED: {e}");
+                        crate::boot_maintenance::write_schema_marker(&app_dir, false, &e);
+                        crate::boot_maintenance::set_startup_failure(e);
+                    }
                 }
                 match crate::boot_maintenance::run_at_startup(&app_dir) {
                     Ok(r) => eprintln!("[boot] native maintenance: {r:?}"),

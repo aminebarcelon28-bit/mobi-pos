@@ -16,6 +16,7 @@ pub(crate) async fn load<R: Runtime>(
     migrations: State<'_, Migrations>,
     db: String,
 ) -> Result<String, crate::Error> {
+    crate::wrapper::await_schema_ready(&app).await?;
     let pool = DbPool::connect(&db, &app).await?;
 
     if let Some(migrations) = migrations.0.lock().await.remove(&db) {

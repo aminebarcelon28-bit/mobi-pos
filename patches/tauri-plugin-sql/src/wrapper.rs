@@ -60,6 +60,42 @@ fn record_write_violation(query: &str, err: &str) {
 #[cfg(not(debug_assertions))]
 fn record_write_violation(_query: &str, _err: &str) {}
 
+/// SEC-01 barrier: wait for the native startup migration to publish
+/// `schema_ready.json` (written by the Rust core after migrate + heal). This is a
+/// state wait, not a fixed sleep, and a "failed" marker is a hard error so the
+/// renderer can never fall back to a half-migrated database.
+pub(crate) async fn await_schema_ready<R: Runtime>(
+    app: &tauri::AppHandle<R>,
+) -> Result<(), crate::Error> {
+    use tauri::Manager;
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| crate::Error::SchemaNotReady(format!("app dir: {e}")))?;
+    let path = dir.join("schema_ready.json");
+    for _ in 0..300 {
+        if let Ok(raw) = std::fs::read_to_string(&path) {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
+                match v.get("status").and_then(|s| s.as_str()) {
+                    Some("ready") => return Ok(()),
+                    Some("failed") => {
+                        let detail = v
+                            .get("detail")
+                            .and_then(|d| d.as_str())
+                            .unwrap_or("native migration failed");
+                        return Err(crate::Error::SchemaNotReady(detail.to_string()));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    Err(crate::Error::SchemaNotReady(
+        "native migration did not finish within 30 s".to_string(),
+    ))
+}
+
 pub enum DbPool {
     #[cfg(feature = "sqlite")]
     Sqlite(Pool<Sqlite>),

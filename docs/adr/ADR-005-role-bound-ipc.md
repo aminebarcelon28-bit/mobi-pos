@@ -222,3 +222,14 @@ entirely, so it subsumes steps 3–4 of B.
 5. **Assuming the heal alone reaches the golden schema on legacy DBs** failed for
    native-owned objects (audit_chain, attribution columns); the migration now
    ensures them first.
+
+6. **Replaying the plugin migrations in source order** failed on a fresh DB
+   (v113 before the migration that supplies its columns). sqlx sorts by version;
+   the native runner now does the same.
+7. **Trusting the legacy ledger** (stops at v112) skipped table rebuilds whose
+   columns the heal adds. Fixed with a prep pass (heal ADD COLUMNs) + retry of the
+   skipped migrations, with the golden manifest as the completeness proof.
+8. **Copying golden `CREATE TABLE` text** into the completion set hit FTS shadow
+   tables and triggers (reserved names). Those are excluded; tables are compared
+   semantically (columns/FKs/uniques) because a legitimate rebuild changes the
+   stored text.

@@ -18,7 +18,8 @@ if (!dbPath) {
   process.exit(2);
 }
 const sha256 = (s) => crypto.createHash('sha256').update(s).digest('hex');
-const normSql = (s) => (s ? s.replace(/\s+/g, ' ').trim().replace(/;$/, '') : '');
+const normSql = (s) =>
+  (s ? s.replace(/\s+/g, ' ').trim().replace(/;$/, '').replace(/,\s*/g, ',') : '');
 const quote = (n) => `"${String(n).replace(/"/g, '""')}"`;
 
 // JSON text columns are compared semantically: key order is an artefact of the
@@ -51,13 +52,32 @@ const objects = db
   )
   .all()
   .map((r) => {
-    const o = { type: r.type, name: r.name, tbl: r.tbl_name, sql: normSql(r.sql) };
+    // Tables are compared semantically (columns + FKs + unique constraints):
+    // a legitimate rebuild changes the stored CREATE text without changing the
+    // schema contract. Indexes/triggers keep their SQL.
+    const o = { type: r.type, name: r.name, tbl: r.tbl_name, sql: r.type === 'table' ? '' : normSql(r.sql) };
     if (r.type === 'table') {
       o.columns = db
         .prepare(`PRAGMA table_xinfo(${quote(r.name)})`)
         .all()
         .map((c) => ({ name: c.name, type: c.type, notnull: c.notnull, dflt: c.dflt_value ?? null, pk: c.pk, hidden: c.hidden }))
         .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    }
+    if (r.type === 'table') {
+      o.fks = db
+        .prepare(`PRAGMA foreign_key_list(${quote(r.name)})`)
+        .all()
+        .map((f) => ({ table: f.table, from: f.from, to: f.to, on_update: f.on_update, on_delete: f.on_delete }))
+        .sort((a, b) => (a.from + a.table < b.from + b.table ? -1 : 1));
+      o.uniques = db
+        .prepare(`PRAGMA index_list(${quote(r.name)})`)
+        .all()
+        .filter((i) => i.origin === 'u')
+        .map((i) => ({
+          name: i.name,
+          columns: db.prepare(`PRAGMA index_xinfo(${quote(i.name)})`).all().map((c) => c.name).filter(Boolean),
+        }))
+        .sort((a, b) => (a.name < b.name ? -1 : 1));
     }
     if (r.type === 'index') {
       o.columns = db
