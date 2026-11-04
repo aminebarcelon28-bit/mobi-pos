@@ -255,3 +255,12 @@ write that needs its own tests and refund-suite re-runs before it can have a lan
 12. **`npm run e2e:clean` does not wipe the app database.** A probe without
    `POS_E2E_WIPE=1` reported `SHIFT_ALREADY_OPEN` from a leftover shift; the
    first "shift UI fails under query_only" conclusion was measurement error.
+
+13. **The static baseline moved 318 -> 319 without a new writer.** The extra
+    entry is `shiftAdapter.ts` `UPDATE cash_sessions SET cashier_name …`, which
+    existed before the change (previously at line 979) but sat outside the
+    scanner's detected window; the edit shifted it into range. Proof:
+    `git show HEAD~1:src/db/adapters/shiftAdapter.ts | Select-String 'SET cashier_name'`.
+    The count is an honest inventory, not a relaxed limit; no new renderer write
+    was introduced (the boot-path renderer heal call and the capture hook were
+    removed in the same change).
