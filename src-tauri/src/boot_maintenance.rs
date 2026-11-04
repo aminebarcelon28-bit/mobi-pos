@@ -472,6 +472,17 @@ pub fn run_schema_heal_core(
         }
     }
 
+    // Row-driven backfills the renderer performed in JS (latch-gated). They
+    // change data, not schema, so they run before the post-conditions.
+    if let Err(e) = dedouble_json_payloads(conn) {
+        let _ = conn.execute_batch("ROLLBACK");
+        return Err(fail(usize::MAX, "<json dedouble>", e, None, None));
+    }
+    if let Err(e) = prune_stale_event_log(conn) {
+        let _ = conn.execute_batch("ROLLBACK");
+        return Err(fail(usize::MAX, "<event_log prune>", e, None, None));
+    }
+
     // Post-conditions INSIDE the transaction: integrity, foreign keys, and the
     // schema must equal the golden manifest exactly.
     let integrity: String = match conn.query_row("PRAGMA integrity_check", [], |r| r.get(0)) {
@@ -516,6 +527,17 @@ pub fn run_schema_heal_core(
     };
     report.manifest_sha256 = manifest_sha256(&actual);
     if actual != spec.golden_manifest {
+        #[cfg(debug_assertions)]
+        {
+            let _ = std::fs::write(
+                std::env::temp_dir().join("mobi-heal-expected.json"),
+                spec.golden_manifest,
+            );
+            let _ = std::fs::write(
+                std::env::temp_dir().join("mobi-heal-actual.json"),
+                &actual,
+            );
+        }
         let _ = conn.execute_batch("ROLLBACK");
         return Err(fail(
             usize::MAX,
@@ -535,6 +557,222 @@ pub fn run_schema_heal_core(
         *g = None;
     }
     Ok(report)
+}
+
+// ── row-driven backfills ported from the renderer heal ─────────────────────
+// These two functions are NOT plain statements: the TS heal parses each row's
+// JSON and rewrites it, and prunes the event log by age. A capture on a
+// near-empty DB would miss them, which is exactly why equivalence is measured
+// with row fixtures.
+
+/// Dual-store tables carrying json_payload (same list as the renderer).
+const JSON_PAYLOAD_TABLES: &[&str] = &[
+    "products",
+    "customers",
+    "transactions",
+    "transaction_items",
+    "repair_orders",
+    "purchase_orders",
+    "trade_ins",
+    "product_bundles",
+    "cash_sessions",
+    "cash_movements",
+    "customer_debts",
+    "store_expenses",
+    "held_orders",
+    "vendor_disputes",
+];
+
+/// TS unwrapDoubleEncodedPayload: peel up to 8 layers of a JSON string or of an
+/// object whose json_payload is a JSON string, merging the outer object over the
+/// inner one (outer keys win, json_payload removed).
+pub fn unwrap_double_encoded(value: serde_json::Value) -> serde_json::Value {
+    let mut current = value;
+    for _ in 0..8 {
+        match current.clone() {
+            serde_json::Value::String(s) => match serde_json::from_str::<serde_json::Value>(&s) {
+                Ok(inner @ serde_json::Value::Object(_)) => current = inner,
+                _ => break,
+            },
+            serde_json::Value::Object(mut outer) => {
+                let has_inner = matches!(outer.get("json_payload"), Some(serde_json::Value::String(_)));
+                if !has_inner {
+                    current = serde_json::Value::Object(outer);
+                    break;
+                }
+                let raw = outer
+                    .get("json_payload")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                let inner = match serde_json::from_str::<serde_json::Value>(&raw) {
+                    Ok(v @ serde_json::Value::Object(_)) => v,
+                    _ => break,
+                };
+                outer.remove("json_payload");
+                if let serde_json::Value::Object(mut merged) = inner {
+                    for (k, v) in outer {
+                        merged.insert(k, v);
+                    }
+                    current = serde_json::Value::Object(merged);
+                } else {
+                    break;
+                }
+            }
+            _ => break,
+        }
+    }
+    current
+}
+
+/// Renderer's healDoubleEncodedJsonPayloads: latch-gated, rowid-paged,
+/// per-table best-effort. Returns rows rewritten.
+pub fn dedouble_json_payloads(conn: &Connection) -> Result<usize, String> {
+    let latched: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM app_settings WHERE key='schema.heal.json_dedouble.done'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    if latched > 0 {
+        return Ok(0);
+    }
+    let mut rewritten = 0usize;
+    for table in JSON_PAYLOAD_TABLES {
+        let cols: Vec<String> = conn
+            .prepare(&format!("PRAGMA table_info(\"{table}\")"))
+            .and_then(|mut st| {
+                st.query_map([], |r| r.get::<_, String>(1))?
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .unwrap_or_default();
+        if !cols.iter().any(|c| c == "id") || !cols.iter().any(|c| c == "json_payload") {
+            continue;
+        }
+        let mut cursor: i64 = 0;
+        loop {
+            let mut stmt = conn
+                .prepare(&format!(
+                    "SELECT rowid, id, json_payload FROM \"{table}\" WHERE rowid > ?1 ORDER BY rowid LIMIT 500"
+                ))
+                .map_err(|e| format!("dedouble prepare {table}: {e}"))?;
+            let rows: Vec<(i64, String, String)> = stmt
+                .query_map([cursor], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get::<_, Option<String>>(2)?.unwrap_or_default()))
+                })
+                .map_err(|e| format!("dedouble query {table}: {e}"))?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| format!("dedouble row {table}: {e}"))?;
+            if rows.is_empty() {
+                break;
+            }
+            let n = rows.len();
+            for (rid, id, raw) in rows {
+                cursor = rid;
+                if raw.is_empty() {
+                    continue;
+                }
+                let parsed: serde_json::Value = match serde_json::from_str(&raw) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+                let encoded = serde_json::to_string(&unwrap_double_encoded(parsed))
+                    .map_err(|e| format!("dedouble serialize: {e}"))?;
+                if encoded == raw {
+                    continue;
+                }
+                conn.execute(
+                    &format!("UPDATE \"{table}\" SET json_payload = ?1 WHERE id = ?2"),
+                    rusqlite::params![encoded, id],
+                )
+                .map_err(|e| format!("dedouble update {table}: {e}"))?;
+                rewritten += 1;
+            }
+            if n < 500 {
+                break;
+            }
+        }
+    }
+    // The renderer latches after the pass (and retries next boot on errors). The
+    // latch is written HERE, not as a statement, so the backfill cannot be
+    // skipped by replay ordering.
+    let _ = conn.execute(
+        "INSERT INTO app_settings (key, value_json, updated_at, version)
+         VALUES ('schema.heal.json_dedouble.done', 'true', datetime('now','utc'), 1)
+         ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at",
+        [],
+    );
+    let _ = conn.execute(
+        "INSERT INTO app_settings (key, value_json, updated_at)
+         VALUES ('schema.heal.json_dedouble.done', 'true', datetime('now','utc'))
+         ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at",
+        [],
+    );
+    Ok(rewritten)
+}
+
+/// Renderer's pruneStaleEventLog: only with a positive sync marker; deletes
+/// rows older than 90 days. Returns rows deleted.
+pub fn prune_stale_event_log(conn: &Connection) -> Result<usize, String> {
+    let cols: Vec<String> = conn
+        .prepare("PRAGMA table_info(\"event_log\")")
+        .and_then(|mut st| {
+            st.query_map([], |r| r.get::<_, String>(1))?
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .unwrap_or_default();
+    if cols.is_empty() || !cols.iter().any(|c| c == "synced_to_cloud") {
+        return Ok(0);
+    }
+    let ts = if cols.iter().any(|c| c == "created_at") {
+        "created_at"
+    } else if cols.iter().any(|c| c == "ts") {
+        "ts"
+    } else {
+        return Ok(0);
+    };
+    let cutoff_ms = {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        now - 90 * 86_400_000
+    };
+    let cutoff = iso_utc(cutoff_ms);
+    conn.execute(
+        &format!("DELETE FROM \"event_log\" WHERE synced_to_cloud = 1 AND {ts} < ?1"),
+        rusqlite::params![cutoff],
+    )
+    .map_err(|e| format!("event_log prune: {e}"))
+}
+
+/// ISO-8601 UTC with milliseconds, the shape the renderer's toISOString uses.
+pub fn iso_utc(ms: i64) -> String {
+    let secs = ms.div_euclid(1000);
+    let days = secs.div_euclid(86_400);
+    let rem = secs.rem_euclid(86_400);
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
+        y,
+        m,
+        d,
+        rem / 3600,
+        (rem % 3600) / 60,
+        rem % 60,
+        ms.rem_euclid(1000)
+    )
 }
 
 fn production_spec() -> HealSpec<'static> {
@@ -629,6 +867,12 @@ pub fn run_schema_heal_at_startup(app_dir: &std::path::Path) -> Result<SchemaHea
     let path = crate::e2e::live_db_path(app_dir);
     if !path.exists() {
         return Err("database not initialised yet".to_string());
+    }
+    // Native-owned trust tables must exist before the manifest post-condition
+    // (they are created lazily elsewhere; a legacy DB may predate them).
+    {
+        let mut conn = Connection::open(&path).map_err(|e| format!("heal open: {e}"))?;
+        let _ = crate::trust_core::audit_append::ensure_audit_schema(&mut conn);
     }
     let backups = app_dir.join("backups");
     let (backup_path, backup_sha) = backup_before_heal(&path, &backups)?;
@@ -1074,6 +1318,96 @@ mod tests {
             .unwrap();
         assert_eq!(k, "keep", "backup restores the data");
         let _ = std::fs::remove_dir_all(&dir);
+        cleanup(&path);
+    }
+
+
+    /// Equivalence harness entry: run the PRODUCTION native heal against the DB
+    /// given in POS_EQUIV_DB (the harness passes a copy) and print its manifest
+    /// hash for comparison with the renderer heal on another copy.
+    #[test]
+    fn schema_equiv_fixture() {
+        let Ok(path) = std::env::var("POS_EQUIV_DB") else {
+            return; // not requested
+        };
+        let mut conn = Connection::open(&path).expect("equiv fixture open");
+        conn.busy_timeout(std::time::Duration::from_millis(5000)).unwrap();
+        let _ = crate::trust_core::audit_append::ensure_audit_schema(&mut conn);
+        match run_schema_heal(&mut conn) {
+            Ok(r) => println!(
+                "EQUIV_NATIVE_OK schema_sha={} applied={} tolerated={}",
+                r.manifest_sha256, r.applied, r.tolerated
+            ),
+            Err(f) => panic!("EQUIV_NATIVE_ERR {f}"),
+        }
+    }
+
+
+    #[test]
+    fn row_driven_backfill_runs_inside_the_migration() {
+        let (path, mut conn) = tmp_db("dedouble");
+        conn.execute_batch(
+            "CREATE TABLE app_settings (key TEXT PRIMARY KEY, value_json TEXT, updated_at TEXT, version INTEGER);
+             CREATE TABLE products (id TEXT PRIMARY KEY, json_payload TEXT NOT NULL);",
+        )
+        .unwrap();
+        let inner = serde_json::json!({"json_payload": "{\"sku\":\"REF-1\",\"title\":\"Phone\"}", "extra": 1});
+        let double = serde_json::json!({"json_payload": inner.to_string(), "outer": true});
+        conn.execute(
+            "INSERT INTO products (id, json_payload) VALUES ('P1', ?1)",
+            rusqlite::params![double.to_string()],
+        )
+        .unwrap();
+
+        // Schema-only statement: the backfill writes the latch AFTER processing,
+        // so the fixture must not pre-latch (that was the ordering bug the
+        // equivalence harness surfaced).
+        let stmts = ["CREATE TABLE IF NOT EXISTS z (x INTEGER);"];
+        let hs = hashes(&stmts);
+        // Golden = the same schema after that statement (the backfill changes data only).
+        let scratch = Connection::open_in_memory().unwrap();
+        scratch
+            .execute_batch(
+                "CREATE TABLE app_settings (key TEXT PRIMARY KEY, value_json TEXT, updated_at TEXT, version INTEGER);
+                 CREATE TABLE products (id TEXT PRIMARY KEY, json_payload TEXT NOT NULL);
+                 CREATE TABLE z (x INTEGER);",
+            )
+            .unwrap();
+        let golden = schema_manifest(&scratch).unwrap();
+
+        let spec = HealSpec {
+            statements: &stmts,
+            hashes: &hs,
+            tolerances: &[],
+            golden_manifest: &golden,
+        };
+        run_schema_heal_core(&mut conn, &spec).expect("migration with backfill");
+        let after: String = conn
+            .query_row("SELECT json_payload FROM products WHERE id='P1'", [], |r| r.get(0))
+            .unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&after).unwrap();
+        assert_eq!(parsed["sku"], "REF-1", "nested payload unwrapped: {after}");
+        assert_eq!(parsed["title"], "Phone");
+        assert_eq!(parsed["outer"], true, "outer keys survive");
+        assert!(parsed.get("json_payload").is_none(), "wrapper key removed");
+
+        assert_eq!(dedouble_json_payloads(&conn).unwrap(), 0, "latch makes it a no-op");
+        cleanup(&path);
+    }
+
+    #[test]
+    fn event_log_prune_deletes_only_synced_old_rows() {
+        let (path, conn) = tmp_db("prune");
+        conn.execute_batch(
+            "CREATE TABLE event_log (id INTEGER PRIMARY KEY, created_at TEXT, synced_to_cloud INTEGER);
+             INSERT INTO event_log (created_at, synced_to_cloud) VALUES ('2000-01-01T00:00:00.000Z', 1);
+             INSERT INTO event_log (created_at, synced_to_cloud) VALUES ('2000-01-01T00:00:00.000Z', 0);
+             INSERT INTO event_log (created_at, synced_to_cloud) VALUES ('2999-01-01T00:00:00.000Z', 1);",
+        )
+        .unwrap();
+        assert_eq!(prune_stale_event_log(&conn).unwrap(), 1);
+        let left: i64 = conn.query_row("SELECT COUNT(*) FROM event_log", [], |r| r.get(0)).unwrap();
+        assert_eq!(left, 2, "unsynced and future rows survive");
         cleanup(&path);
     }
 

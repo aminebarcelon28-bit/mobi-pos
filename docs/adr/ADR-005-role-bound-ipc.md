@@ -204,3 +204,21 @@ entirely, so it subsumes steps 3–4 of B.
   ran before the base tables and left a half-schema DB.
 - **Next:** port the v1 base schema to native startup, re-probe the fresh path to 0,
   flip the plugin default, then money paths with the ≤10 % p95 budget.
+
+### Failed attempts (recorded, kept for the trail)
+
+1. **Tolerating message substrings** ("has no column named") let the skip flag turn
+   on for a half-schema DB — the imei_records.status incident. Replaced by an exact
+   per-statement tolerance map + golden manifest.
+2. **Creating the DB natively before the plugin's base migration** made the heal run
+   before the base tables existed; it "passed" by tolerating missing tables and left
+   a broken schema. Reverted; fresh installs still use the renderer heal.
+3. **Polling the heal flag for 3 s** to ride out the startup race delayed the
+   renderer heal past seeding, with the same half-schema failure. Reverted to a
+   single read; the real fix is a load() barrier, still open.
+4. **Capturing the json_dedouble latch as a statement** ran it before the backfill
+   and skipped the row rewrite; equivalence caught it (data diff on customers).
+   The latch is now written by the backfill after processing.
+5. **Assuming the heal alone reaches the golden schema on legacy DBs** failed for
+   native-owned objects (audit_chain, attribution columns); the migration now
+   ensures them first.

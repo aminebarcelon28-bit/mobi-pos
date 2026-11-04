@@ -153,6 +153,32 @@ fn table_columns(conn: &Connection) -> Result<std::collections::HashSet<String>,
     Ok(cols)
 }
 
+/// Ensure every native-owned audit object/column exists: the chain table and
+/// the attribution columns (SEC-18). Called before the schema migration so the
+/// manifest post-condition can pass on a legacy database.
+pub fn ensure_audit_schema(conn: &mut Connection) -> Result<(), TrustError> {
+    ensure_audit_chain(conn)?;
+    let tx = conn
+        .transaction()
+        .map_err(|e| TrustError::op_failed(format!("audit schema tx: {e}")))?;
+    ensure_attribution_columns(&tx)?;
+    tx.commit()
+        .map_err(|e| TrustError::op_failed(format!("audit schema commit: {e}")))
+}
+
+/// Create the native audit_chain table when absent. Called before the schema
+/// migration so its post-condition sees the native-owned trust tables.
+pub fn ensure_audit_chain(conn: &Connection) -> Result<(), TrustError> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS audit_chain (
+            event_id TEXT PRIMARY KEY,
+            prev_hash TEXT NOT NULL,
+            entry_hash TEXT NOT NULL
+        );",
+    )
+    .map_err(|e| TrustError::op_failed(format!("audit chain table: {e}")))
+}
+
 /// Head of the chain: last `audit_chain.entry_hash`, else a legacy boundary
 /// derived from the newest legacy row, else genesis.
 fn chain_head(conn: &Connection) -> Result<String, TrustError> {

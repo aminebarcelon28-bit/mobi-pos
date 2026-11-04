@@ -151,7 +151,9 @@
     "sbom": "node scripts/gen-sbom.mjs",
     "gate:licences": "node scripts/gen-sbom.mjs --check",
     "gate:schema-heal": "node scripts/check-schema-heal-drift.mjs",
-    "gen:schema-heal": "node scripts/gen-schema-heal.mjs"
+    "gen:schema-heal": "node scripts/gen-schema-heal.mjs",
+    "gate:schema-equiv": "node scripts/test_schema_equiv.mjs",
+    "gen:schema-equiv-fixture": "node scripts/make-double-fixture.mjs"
   },
   "dependencies": {
     "@libsql/client": "^0.18.0",

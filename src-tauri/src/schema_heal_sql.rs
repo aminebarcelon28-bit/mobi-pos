@@ -146,7 +146,6 @@ pub const SCHEMA_HEAL_STATEMENTS: &[&str] = &[
     r##"UPDATE products SET stock = 999999, category = 'Services' WHERE (id LIKE 'qt-%' OR id LIKE 'prod-misc-%' OR category = 'Services') AND stock < 999999"##,
     r##"INSERT INTO app_settings (key, value_json, updated_at, version) VALUES ('schema.heal.v103_services.done', 'true', datetime('now','utc'), 1) ON CONFLICT(key) DO UPDATE SET value_json='true', updated_at=excluded.updated_at"##,
     r##"UPDATE transaction_items SET unit_price_charged = applied_price, unit_cost_at_sale = cost_price, discount_amount = discount, line_profit = (applied_price - cost_price) * quantity WHERE unit_price_charged = 0"##,
-    r##"INSERT INTO app_settings (key, value_json, updated_at, version) VALUES ('schema.heal.json_dedouble.done', 'true', datetime('now','utc'), 1) ON CONFLICT(key) DO UPDATE SET value_json='true', updated_at=excluded.updated_at"##,
 ];
 
 /// Stable FNV-1a-64 of each statement (index-aligned).
@@ -276,7 +275,6 @@ pub const SCHEMA_HEAL_HASHES: &[u64] = &[
     0x80a05c67e4ba5811,
     0x49a068bc16f5f7e1,
     0xbeeba3c7827778a2,
-    0x4f19d9bd5b7bc239,
 ];
 
 /// Exact tolerated outcomes, keyed by statement hash.

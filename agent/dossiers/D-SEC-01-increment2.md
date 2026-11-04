@@ -121,3 +121,47 @@ prunes to 3 and restores.
 2. **Barrier** (plugin `load` awaits native completion) and **base-schema port**
    (v1..current under the same ledger) so fresh installs reach 0.
 3. Then flip, full-suite runtime-refusal gate, money-path latency.
+## Equivalence gate (2026-11-04, E-0192)
+
+`npm run gate:schema-equiv` compares the native migration against a faithful
+simulation of the renderer heal on five committed fixtures (gzipped):
+`rc5`, `rc6`, `rc5-double`, `rc6-double`, `current`. For each it compares the
+canonical schema manifest and every table's row count + order-independent row
+hash (clock columns masked, JSON columns canonicalised).
+
+```
+[schema-equiv] PASS current    schema equal (…6c28c50cb2) data diffs 0
+[schema-equiv] PASS rc5-double schema equal (…6c28c50cb2) data diffs 0
+[schema-equiv] PASS rc5        schema equal (…6c28c50cb2) data diffs 0
+[schema-equiv] PASS rc6-double schema equal (…6c28c50cb2) data diffs 0
+[schema-equiv] PASS rc6        schema equal (…6c28c50cb2) data diffs 0
+SCHEMA EQUIVALENCE: 5/5 fixture(s) identical
+```
+
+**Row-driven backfills were the real gap.** The capture came from a near-empty DB,
+so it never exercised `healDoubleEncodedJsonPayloads` (parses each row's JSON and
+rewrites it) or `pruneStaleEventLog`. Both are now ported to Rust
+(`unwrap_double_encoded`, `dedouble_json_payloads`, `prune_stale_event_log`) and run
+inside the migration transaction, with row fixtures proving the rewrite (nested
+`json_payload` unwrapped, outer keys preserved, latch written after the pass) and
+the prune's fail-closed rule (only `synced_to_cloud = 1` and older than 90 days).
+
+Two ordering/ownership defects surfaced and are fixed:
+
+1. the `json_dedouble` latch was captured as a *statement* and therefore ran
+   before the backfill, skipping it — excluded from the statement list, written by
+   the backfill itself;
+2. legacy DBs lack native-owned objects (`audit_chain`, SEC-18 attribution
+   columns). The migration now ensures them first (`ensure_audit_schema`); without
+   that, rc-5/rc-6 heals failed the manifest post-condition (fail-closed, as
+   designed).
+
+## Next, in order
+
+1. **Barrier + base-schema port** (items 4/5): plugin `load` awaits native
+   completion; v1..current under `_sqlx_migrations`; fresh installs to 0; then
+   delete the JS heal and capture hook.
+2. **Flip criterion** (item 6): full e2e under `POS_SQL_QUERY_ONLY=1` with 0
+   runtime refusals; money-path p95 budget.
+3. Concurrent same-entity case; REPO PASS/OWNER_ACTIONS one-liners; tag after the
+   full floor on the exact commit.

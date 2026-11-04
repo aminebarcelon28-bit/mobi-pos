@@ -51,8 +51,10 @@ const sourceSha = sha256(sourceRegion);
 
 // ── 2. Statements the app ran, owned by those functions ─────────────────────
 const TX = /^(BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE)\b/i;
-// Pre-v100 app_settings shape only (no id/data_json on a modern DB).
-const OBSOLETE = /^(UPDATE app_settings SET (key = id|value_json = data_json)|INSERT INTO app_settings \(id,)/i;
+// Pre-v100 app_settings shape only (no id/data_json on a modern DB), plus the
+// json_dedouble latch: that latch is written by the native backfill AFTER it
+// processes rows, so replaying it as a statement would skip the backfill.
+const OBSOLETE = /^(UPDATE app_settings SET (key = id|value_json = data_json)|INSERT INTO app_settings \(id,|INSERT INTO app_settings \(key, value_json, updated_at[^)]*\) VALUES \('schema\.heal\.json_dedouble)/i;
 
 const lines = fs.readFileSync(capturePath, 'utf8').split(/\r?\n/).filter(Boolean);
 const seen = new Set();
