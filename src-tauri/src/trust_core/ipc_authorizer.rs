@@ -469,6 +469,7 @@ static COMMAND_REGISTRY: &[(&str, Capability)] = &[
     ("purge_orphan_allocations", Capability::OperationalWrites),
     ("open_shift", Capability::OperationalWrites),
     ("set_shift_cashier", Capability::OperationalWrites),
+    ("close_shift", Capability::OperationalWrites),
     ("enqueue_sync_upsert", Capability::OperationalWrites),
     ("enqueue_sync_delete", Capability::OperationalWrites),
     ("upsert_customer", Capability::OperationalWrites),
@@ -479,6 +480,7 @@ static COMMAND_REGISTRY: &[(&str, Capability)] = &[
     ("void_sale_mirror", Capability::OperationalWrites),
     ("refund_sale_mirror", Capability::OperationalWrites),
     ("upsert_customer_debt", Capability::OperationalWrites),
+    ("upsert_product", Capability::OperationalWrites),
     ("finalize_shift_adoption", Capability::OperationalWrites),
     // SEC-01 increment 2: native read-only query lane (query_only on its own
     // connection; writes are refused by SQLite).
@@ -1169,6 +1171,7 @@ pub static ALL_COMMAND_FNS_IN_TESTS: &[&str] = &[
     "purge_orphan_allocations",
     "open_shift",
     "set_shift_cashier",
+    "close_shift",
     "enqueue_sync_upsert",
     "enqueue_sync_delete",
     "upsert_customer",
@@ -1179,6 +1182,7 @@ pub static ALL_COMMAND_FNS_IN_TESTS: &[&str] = &[
     "void_sale_mirror",
     "refund_sale_mirror",
     "upsert_customer_debt",
+    "upsert_product",
     "emergency_export_ledger",
     "launch_dialer",
     "launch_call",

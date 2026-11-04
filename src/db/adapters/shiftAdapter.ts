@@ -931,6 +931,7 @@ export const shiftAdapter = {
       updatedAt: closeNowIso,
     };
 
+    let closedNatively = false;
     if (isTauriEnv()) {
       const { getLocalDb } = await import('../sqlPluginAdapter');
       const sql = (await getLocalDb()) as unknown as SqlDb;
@@ -940,41 +941,65 @@ export const shiftAdapter = {
         console.warn('[closeShift] ensureSessionInSqlite warning:', err);
       }
 
-      await sql.execute(
-        `UPDATE cash_sessions
-         SET status = 'CLOSED',
-             closed_at = ?,
-             expected_cash = ?,
-             actual_cash = ?,
-             discrepancy = ?,
-             closing_note = ?,
-             json_payload = ?,
-             updated_at = ?,
-             version = version + 1
-         WHERE id = ?`,
-        [
-          closeNowIso,
-          toWholeDa(expectedCash),
-          toWholeDa(actualCash),
-          toWholeDa(discrepancy),
-          closingNote || '',
-          JSON.stringify(closedSession),
-          closeNowIso,
-          openSession.id,
-        ]
-      );
-
-      const rows = await sql.select<{ id: string; status: string }>(
-        'SELECT id, status FROM cash_sessions WHERE id = ?',
-        [openSession.id]
-      );
-      if (!rows[0] || rows[0].status !== 'CLOSED') {
-        throw new ShiftSqliteError('SQLITE_CLOSE_FAILED', 'Vérification SQLite échouée : session non trouvée en statut CLOSED');
+      // Native lane (SEC-01): the close totals and its sync envelope commit
+      // together; the renderer only mirrors to Dexie afterwards.
+      try {
+        const { invokeCommand } = await import('../../platform/invoke');
+        await invokeCommand<{ version: number }>('close_shift', {
+          request: {
+            id: openSession.id,
+            closedAt: closeNowIso,
+            expectedCash: toWholeDa(expectedCash),
+            actualCash: toWholeDa(actualCash),
+            discrepancy: toWholeDa(discrepancy),
+            closingNote: closingNote || '',
+            jsonPayload: JSON.stringify(closedSession),
+          },
+        });
+        closedNatively = true;
+      } catch (err) {
+        const msg = String((err as Error)?.message ?? err);
+        if (msg.includes('SHIFT_NOT_OPEN')) {
+          throw new ShiftSqliteError('SQLITE_CLOSE_FAILED', 'Session non trouvée en statut OUVERTE', err);
+        }
+        if (!/not found|unknown command/i.test(msg)) throw err;
+        // Older host without the command: renderer SQL below.
+        await sql.execute(
+          `UPDATE cash_sessions
+           SET status = 'CLOSED',
+               closed_at = ?,
+               expected_cash = ?,
+               actual_cash = ?,
+               discrepancy = ?,
+               closing_note = ?,
+               json_payload = ?,
+               updated_at = ?,
+               version = version + 1
+           WHERE id = ?`,
+          [
+            closeNowIso,
+            toWholeDa(expectedCash),
+            toWholeDa(actualCash),
+            toWholeDa(discrepancy),
+            closingNote || '',
+            JSON.stringify(closedSession),
+            closeNowIso,
+            openSession.id,
+          ]
+        );
+  
+        const rows = await sql.select<{ id: string; status: string }>(
+          'SELECT id, status FROM cash_sessions WHERE id = ?',
+          [openSession.id]
+        );
+        if (!rows[0] || rows[0].status !== 'CLOSED') {
+          throw new ShiftSqliteError('SQLITE_CLOSE_FAILED', 'Vérification SQLite échouée : session non trouvée en statut CLOSED');
+        }
       }
     }
 
     await dexieDb.cashSessions.put(closedSession);
-    void fireSync('cash_session', closedSession.id, closedSession);
+    if (!closedNatively) void fireSync('cash_session', closedSession.id, closedSession);
     return closedSession;
   },
 

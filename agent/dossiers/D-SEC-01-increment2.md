@@ -429,10 +429,55 @@ flip residual, not a silent skip.
 
 p95 regression **+0.09 %**, far inside the ≤ 10 % budget.
 
+## Product mirror + shift close (2026-11-05, E-0201)
+
+**Refund spec under the flag: 0 refusals.** `30-ref-refunds` is green (12/12) with an
+empty refusal log. The last refusal (the product upsert) is gone.
+
+**`upsert_product`** (`src-tauri/src/product_lane.rs`, 4 tests): one transaction for
+the product row, the conditional `inventory_ledger` ADJUST, the stock recompute,
+the opening `stock_batches` row and all sync envelopes. The renderer keeps the
+reads (existing key/version, ledger sum, batch count) so the stock decision is
+unchanged. The lane writes the bumped `version` explicitly; the old SQL referenced
+`excluded.version` without inserting a version column, so the clock reset to the
+default on every catalog edit.
+
+**`close_shift`** (`shift_lane.rs`, 2 tests): status CLOSED + closed_at +
+expected/actual/discrepancy + note + payload + envelope in one transaction; an
+unknown session is `SHIFT_NOT_OPEN` with no writes. `40-shf-shifts` normal stays
+**12/12**; under the flag it went from 1/12 to **10/12** and its refusals from 11
+to 3.
+
+**Wide flag sweep (measured):**
+
+| Spec | Normal | Flag | Refusals |
+|---|---|---|---|
+| 30-ref-refunds | 12/12 | **12/12** | **0** |
+| 10-mny-money | 14/14 | **14/14** | **0** |
+| 50-sec-authorization | 10/10 | **10/10** | **0** |
+| 40-shf-shifts | 12/12 | 10/12 | 3 |
+| 92-sql-readonly-app | 1/1 | RED | 5 |
+| 24-syn-sync (normal) | 27/30 | — | same 3 pre-existing (SYN-04/26/27) |
+
+The remaining flag refusals are now a precise list:
+
+```
+x1 INSERT INTO held_orders (…)          ← hold order (shift spec)
+x1 UPDATE held_orders SET deleted=1 …   ← held-order removal
+x1 INSERT INTO cash_movements (…)       ← manual drawer movement
+x5 spec-92 controls                     ← the spec's own writable-pool probes
+```
+
+The spec-92 five are its **controls** (create/insert/drop `sec2_control`, bulk
+seed/cleanup of products) — they exist to prove the database is writable through
+the pool. After the flip the writable path is native, so those controls must be
+re-pointed at a native command (e.g. `upsert_store_expense`) rather than deleted.
+
 ## Next, in order
 
-1. `upsert_product` lane (upsert + ledger ADJUST + stock recompute + opening
-   batch, one transaction) — removes the last measured refusal.
-2. Native FIFO reconcile (`fifo:reconcile`) for shadow-bearing data, with
-   row-level COGS golden tests (do **not** port the math blind).
-3. Full suite under the flag to 0; clean-worktree floor; tag.
+1. `cash_movements` + `held_orders` lanes (three refusals above) — small, same
+   pattern as the expense lane.
+2. Re-point spec 92's writable controls at a native lane.
+3. Native FIFO reconcile for shadow-bearing data (still renderer-side; preflight
+   only suppresses the no-work transaction).
+4. Full suite under the flag; clean-worktree floor; tag.

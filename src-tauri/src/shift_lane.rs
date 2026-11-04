@@ -398,6 +398,125 @@ pub fn set_shift_cashier(
     )
 }
 
+/// Shift close fields. Fiscal state: expected/actual/discrepancy are frozen
+/// into the row in the same transaction that emits the sync envelope.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloseShiftRequest {
+    pub id: String,
+    pub closed_at: String,
+    pub expected_cash: i64,
+    pub actual_cash: i64,
+    pub discrepancy: i64,
+    pub closing_note: String,
+    pub json_payload: String,
+}
+
+pub fn close_shift_core(
+    conn: &mut Connection,
+    req: &CloseShiftRequest,
+) -> Result<OpenShiftReport, String> {
+    if req.id.trim().is_empty() {
+        return Err("SHIFT_NOT_OPEN".to_string());
+    }
+    let tx = conn.transaction().map_err(|e| format!("close shift tx: {e}"))?;
+    let changes = tx
+        .execute(
+            "UPDATE cash_sessions
+                SET status = 'CLOSED',
+                    closed_at = ?1,
+                    expected_cash = ?2,
+                    actual_cash = ?3,
+                    discrepancy = ?4,
+                    closing_note = ?5,
+                    json_payload = ?6,
+                    updated_at = ?1,
+                    version = COALESCE(version, 1) + 1
+              WHERE id = ?7",
+            rusqlite::params![
+                req.closed_at,
+                req.expected_cash,
+                req.actual_cash,
+                req.discrepancy,
+                req.closing_note,
+                req.json_payload,
+                req.id
+            ],
+        )
+        .map_err(|e| format!("close shift update: {e}"))?;
+    if changes == 0 {
+        return Err("SHIFT_NOT_OPEN".to_string());
+    }
+    let version: i64 = tx
+        .query_row(
+            "SELECT COALESCE(version, 1) FROM cash_sessions WHERE id = ?1",
+            rusqlite::params![req.id],
+            |r| r.get(0),
+        )
+        .map_err(|e| format!("close shift version: {e}"))?;
+
+    let (key, _) = match existing_key(&tx, "cash_session", &req.id) {
+        Some(v) => v,
+        None => {
+            let k = uuid::Uuid::new_v4().to_string();
+            tx.execute(
+                "INSERT OR IGNORE INTO entity_keys (entity_type, entity_id, idempotency_key, version)
+                 VALUES ('cash_session', ?1, ?2, ?3)",
+                rusqlite::params![req.id, k, version],
+            )
+            .map_err(|e| format!("close shift entity key: {e}"))?;
+            (k, version)
+        }
+    };
+
+    let mut payload: serde_json::Value =
+        serde_json::from_str(&req.json_payload).unwrap_or_else(|_| serde_json::json!({}));
+    if !payload.is_object() {
+        payload = serde_json::json!({});
+    }
+    if let Some(obj) = payload.as_object_mut() {
+        obj.insert("version".to_string(), serde_json::json!(version));
+        obj.insert("status".to_string(), serde_json::Value::String("CLOSED".into()));
+    }
+    tx.execute(
+        "INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
+         VALUES (?1, 'cash_session', ?2, 'UPSERT', ?3, 'pending')
+         ON CONFLICT(idempotency_key) DO UPDATE SET operation = 'UPSERT',
+             payload_json = excluded.payload_json,
+             status = 'pending',
+             retry_count = 0,
+             next_retry_at = NULL,
+             last_error = NULL,
+             updated_at = ?4",
+        rusqlite::params![key, req.id, payload.to_string(), req.closed_at],
+    )
+    .map_err(|e| format!("close shift outbox: {e}"))?;
+
+    tx.commit().map_err(|e| format!("close shift commit: {e}"))?;
+    Ok(OpenShiftReport {
+        session_id: req.id.clone(),
+        device_id: resolve_device_id(conn),
+        idempotency_key: key,
+        version,
+    })
+}
+
+/// Native shift close. Fiscal write: one transaction, then the envelope.
+#[tauri::command]
+pub fn close_shift(
+    app: tauri::AppHandle,
+    request: CloseShiftRequest,
+) -> Result<OpenShiftReport, TrustError> {
+    crate::trust_core::ipc_authorizer::authorize_and_execute(
+        "close_shift",
+        crate::trust_core::capability_policy::Capability::OperationalWrites,
+        |_| {
+            let mut conn = open_db(&app)?;
+            close_shift_core(&mut conn, &request).map_err(TrustError::op_failed)
+        },
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -440,6 +559,74 @@ mod tests {
             json_payload: "{\"id\":\"SHIFT-T1\",\"deviceId\":\"SPOOFED\",\"status\":\"OPEN\"}"
                 .to_string(),
         }
+    }
+
+    #[test]
+    fn close_shift_freezes_the_totals_and_emits_one_envelope() {
+        let mut conn = seeded();
+        open_shift_core(&mut conn, &request()).expect("open");
+        let req = CloseShiftRequest {
+            id: "SHIFT-T1".to_string(),
+            closed_at: "2026-11-04T23:00:00.000Z".to_string(),
+            expected_cash: 5000,
+            actual_cash: 4900,
+            discrepancy: -100,
+            closing_note: "fin de journee".to_string(),
+            json_payload: "{\"id\":\"SHIFT-T1\",\"status\":\"CLOSED\"}".to_string(),
+        };
+        let report = close_shift_core(&mut conn, &req).expect("close");
+        let (status, expected, actual, discrepancy): (String, i64, i64, i64) = conn
+            .query_row(
+                "SELECT status, expected_cash, actual_cash, discrepancy FROM cash_sessions WHERE id='SHIFT-T1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(status, "CLOSED");
+        assert_eq!(expected, 5000);
+        assert_eq!(actual, 4900);
+        assert_eq!(discrepancy, -100);
+        let outbox: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sync_outbox WHERE entity_id='SHIFT-T1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(outbox, 1, "one envelope per shift");
+        let payload: String = conn
+            .query_row(
+                "SELECT payload_json FROM sync_outbox WHERE entity_id='SHIFT-T1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&payload).unwrap();
+        assert_eq!(parsed["status"], "CLOSED");
+        assert_eq!(parsed["version"], report.version);
+    }
+
+    #[test]
+    fn close_shift_refuses_an_unknown_session_without_writing() {
+        let mut conn = seeded();
+        let err = close_shift_core(
+            &mut conn,
+            &CloseShiftRequest {
+                id: "SHIFT-MISSING".to_string(),
+                closed_at: "2026-11-04T23:00:00.000Z".to_string(),
+                expected_cash: 0,
+                actual_cash: 0,
+                discrepancy: 0,
+                closing_note: String::new(),
+                json_payload: "{}".to_string(),
+            },
+        )
+        .expect_err("must refuse");
+        assert_eq!(err, "SHIFT_NOT_OPEN");
+        let outbox: i64 = conn
+            .query_row("SELECT COUNT(*) FROM sync_outbox", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(outbox, 0);
     }
 
     #[test]

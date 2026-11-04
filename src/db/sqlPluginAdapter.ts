@@ -3840,86 +3840,156 @@ export async function syncProductUpsertBulk(products: ProductSyncInput[]): Promi
         ).catch(() => [{ n: 0 }])) as Array<{ n: number }>)[0]?.n > 0;
         const currentSum = Number(sumRows?.[0]?.s ?? 0);
 
-        await db.execute(
-          `INSERT INTO products (id, sku, barcode, title, brand, category, price, wholesale_price,
-            cost_price, stock, image_url, is_serialized, imei_number, vendor_name, lead_time_days,
-            daily_sales_velocity, reorder_point, json_payload, device_id, idempotency_key,
-            sync_status, created_at, updated_at, deleted)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,'pending',$21,$22,0)
-           ON CONFLICT(id) DO UPDATE SET sku=excluded.sku, barcode=excluded.barcode, title=excluded.title,
-             brand=excluded.brand, category=excluded.category, price=excluded.price,
-             wholesale_price=excluded.wholesale_price, cost_price=excluded.cost_price,
-             image_url=excluded.image_url, is_serialized=excluded.is_serialized,
-             imei_number=excluded.imei_number, vendor_name=excluded.vendor_name,
-             lead_time_days=excluded.lead_time_days, daily_sales_velocity=excluded.daily_sales_velocity,
-             reorder_point=excluded.reorder_point, json_payload=excluded.json_payload,
-            updated_at=excluded.updated_at, sync_status='pending', deleted=0,
-            version=excluded.version`,
-          [
-            pId, p.sku ?? '', p.barcode ?? '', title, brand, category,
-            Number(p.price ?? 0), Number(p.wholesalePrice ?? 0), Number(p.costPrice ?? 0), wantStock,
-            sanitizeImageField(p.imageUrl) ?? null, p.isSerialized ? 1 : 0, p.imeiNumber ?? null, p.vendorName ?? null,
-            p.leadTimeDays ?? 7, p.dailySalesVelocity ?? 0, p.reorderPoint ?? 5,
-            toBoundedSyncJson(p.raw ?? p), deviceId, pkey, (prev?.created_at as string) ?? now, now,
-            baseVersion + 1,
-          ],
-        );
-
-        const baseline = hasLedger ? currentSum : 0;
-        const adjust = wantStock - baseline;
-        if (adjust !== 0) {
-          const ledgerId = newIdempotencyKey();
-          const ledgerKey = newIdempotencyKey();
-          await db.execute(
-            `INSERT INTO inventory_ledger (id, product_id, delta, reason, ref_type, ref_id, device_id,
-              idempotency_key, sync_status, created_at, updated_at, deleted)
-             VALUES ($1,$2,$3,'ADJUST','manual',$2,$4,$5,'pending',$6,$6,0)`,
-            [ledgerId, pId, adjust, deviceId, ledgerKey, now],
-          );
-          await db.execute(
-            `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
-             VALUES ($1,'ledger',$2,'UPSERT',$3,'pending') ON CONFLICT(idempotency_key) DO NOTHING`,
-            [ledgerKey, ledgerId, JSON.stringify({
-              id: ledgerId, product_id: pId, delta: adjust, reason: 'ADJUST',
-              ref_type: 'manual', ref_id: pId, device_id: deviceId, idempotency_key: ledgerKey,
-            })],
-          );
-          await db.execute(
-            `UPDATE products SET stock = COALESCE((SELECT SUM(delta) FROM inventory_ledger WHERE product_id=$1 AND deleted=0), stock),
-              updated_at=$2, sync_status='pending' WHERE id=$1`,
-            [pId, now],
-          );
-        }
-
+        // Native lane (SEC-01): product row + conditional ledger ADJUST + stock
+        // recompute + opening batch + sync envelopes in ONE transaction.
+        const ledgerBaseline = hasLedger ? currentSum : 0;
+        const ledgerAdjust = wantStock - ledgerBaseline;
+        let batchCount = 0;
         if (wantStock > 0) {
           try {
             const batchRows = (await db.select(
               'SELECT COUNT(*) as count FROM stock_batches WHERE product_id = $1 AND deleted = 0',
               [pId],
             ).catch(() => [{ count: 0 }])) as Array<{ count: number }>;
-            const batchCount = Number(batchRows[0]?.count ?? 0);
-            if (batchCount === 0) {
-              const cost = Number(p.costPrice ?? 0);
-              await insertStockBatch({
-                productId: pId,
-                quantityRemaining: wantStock,
-                unitCost: Math.max(0, cost),
-                purchaseOrderId: 'MATRIX_OPENING',
-              });
-            }
-          } catch (sbErr) {
-            console.warn('[sqlPluginAdapter] Bulk matrix opening stock batch creation skipped:', sbErr);
+            batchCount = Number(batchRows[0]?.count ?? 0);
+          } catch {
+            batchCount = 0;
           }
         }
-
-        const rows = (await db.select('SELECT * FROM products WHERE id=$1', [pId]).catch(() => [])) as Array<Record<string, unknown>>;
-        if (rows?.[0]) {
+        if (isTauriEnv()) {
+          const { invokeCommand } = await import('../platform/invoke');
+          const opening =
+            wantStock > 0 && batchCount === 0
+              ? {
+                  quantity: wantStock,
+                  unitCost: Math.max(0, Number(p.costPrice ?? 0)),
+                  purchaseOrderId: 'MATRIX_OPENING',
+                }
+              : null;
+          const report = await invokeCommand<{ batchId?: string | null }>('upsert_product', {
+            request: {
+              id: pId,
+              sku: p.sku ?? '',
+              barcode: p.barcode ?? '',
+              title,
+              brand,
+              category,
+              price: Number(p.price ?? 0),
+              wholesalePrice: Number(p.wholesalePrice ?? 0),
+              costPrice: Number(p.costPrice ?? 0),
+              stock: wantStock,
+              imageUrl: sanitizeImageField(p.imageUrl) ?? null,
+              isSerialized: Boolean(p.isSerialized),
+              imeiNumber: p.imeiNumber ?? null,
+              vendorName: p.vendorName ?? null,
+              leadTimeDays: p.leadTimeDays ?? 7,
+              dailySalesVelocity: p.dailySalesVelocity ?? 0,
+              reorderPoint: p.reorderPoint ?? 5,
+              jsonPayload: toBoundedSyncJson(p.raw ?? p),
+              deviceId,
+              idempotencyKey: pkey,
+              createdAt: (prev?.created_at as string) ?? now,
+              updatedAt: now,
+              version: baseVersion + 1,
+              ledgerAdjust: ledgerAdjust !== 0 ? ledgerAdjust : null,
+              openingBatch: opening,
+            },
+          });
+          if (report?.batchId && opening) {
+            const { db: dexieDb } = await import('./database');
+            await dexieDb.stockBatches
+              .put({
+                batchId: report.batchId,
+                productId: pId,
+                quantityRemaining: opening.quantity,
+                unitCost: opening.unitCost,
+                receivedAt: now,
+                purchaseOrderId: opening.purchaseOrderId,
+              })
+              .catch(() => {});
+          }
+        } else {
           await db.execute(
-            `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
-             VALUES ($1,'product',$2,'UPSERT',$3,'pending')
-             ON CONFLICT(idempotency_key) DO UPDATE SET operation='UPSERT', payload_json=excluded.payload_json, status='pending', retry_count=0, next_retry_at=NULL, last_error=NULL, updated_at=$4`,
-            [pkey, pId, toBoundedSyncJson(rows[0]), now],
+            `INSERT INTO products (id, sku, barcode, title, brand, category, price, wholesale_price,
+              cost_price, stock, image_url, is_serialized, imei_number, vendor_name, lead_time_days,
+              daily_sales_velocity, reorder_point, json_payload, device_id, idempotency_key,
+              sync_status, created_at, updated_at, deleted)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,'pending',$21,$22,0)
+             ON CONFLICT(id) DO UPDATE SET sku=excluded.sku, barcode=excluded.barcode, title=excluded.title,
+               brand=excluded.brand, category=excluded.category, price=excluded.price,
+               wholesale_price=excluded.wholesale_price, cost_price=excluded.cost_price,
+               image_url=excluded.image_url, is_serialized=excluded.is_serialized,
+               imei_number=excluded.imei_number, vendor_name=excluded.vendor_name,
+               lead_time_days=excluded.lead_time_days, daily_sales_velocity=excluded.daily_sales_velocity,
+               reorder_point=excluded.reorder_point, json_payload=excluded.json_payload,
+              updated_at=excluded.updated_at, sync_status='pending', deleted=0,
+              version=excluded.version`,
+            [
+              pId, p.sku ?? '', p.barcode ?? '', title, brand, category,
+              Number(p.price ?? 0), Number(p.wholesalePrice ?? 0), Number(p.costPrice ?? 0), wantStock,
+              sanitizeImageField(p.imageUrl) ?? null, p.isSerialized ? 1 : 0, p.imeiNumber ?? null, p.vendorName ?? null,
+              p.leadTimeDays ?? 7, p.dailySalesVelocity ?? 0, p.reorderPoint ?? 5,
+              toBoundedSyncJson(p.raw ?? p), deviceId, pkey, (prev?.created_at as string) ?? now, now,
+              baseVersion + 1,
+            ],
           );
+  
+          const baseline = hasLedger ? currentSum : 0;
+          const adjust = wantStock - baseline;
+          if (adjust !== 0) {
+            const ledgerId = newIdempotencyKey();
+            const ledgerKey = newIdempotencyKey();
+            await db.execute(
+              `INSERT INTO inventory_ledger (id, product_id, delta, reason, ref_type, ref_id, device_id,
+                idempotency_key, sync_status, created_at, updated_at, deleted)
+               VALUES ($1,$2,$3,'ADJUST','manual',$2,$4,$5,'pending',$6,$6,0)`,
+              [ledgerId, pId, adjust, deviceId, ledgerKey, now],
+            );
+            await db.execute(
+              `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
+               VALUES ($1,'ledger',$2,'UPSERT',$3,'pending') ON CONFLICT(idempotency_key) DO NOTHING`,
+              [ledgerKey, ledgerId, JSON.stringify({
+                id: ledgerId, product_id: pId, delta: adjust, reason: 'ADJUST',
+                ref_type: 'manual', ref_id: pId, device_id: deviceId, idempotency_key: ledgerKey,
+              })],
+            );
+            await db.execute(
+              `UPDATE products SET stock = COALESCE((SELECT SUM(delta) FROM inventory_ledger WHERE product_id=$1 AND deleted=0), stock),
+                updated_at=$2, sync_status='pending' WHERE id=$1`,
+              [pId, now],
+            );
+          }
+  
+          if (wantStock > 0) {
+            try {
+              const batchRows = (await db.select(
+                'SELECT COUNT(*) as count FROM stock_batches WHERE product_id = $1 AND deleted = 0',
+                [pId],
+              ).catch(() => [{ count: 0 }])) as Array<{ count: number }>;
+              const batchCount = Number(batchRows[0]?.count ?? 0);
+              if (batchCount === 0) {
+                const cost = Number(p.costPrice ?? 0);
+                await insertStockBatch({
+                  productId: pId,
+                  quantityRemaining: wantStock,
+                  unitCost: Math.max(0, cost),
+                  purchaseOrderId: 'MATRIX_OPENING',
+                });
+              }
+            } catch (sbErr) {
+              console.warn('[sqlPluginAdapter] Bulk matrix opening stock batch creation skipped:', sbErr);
+            }
+          }
+  
+          const rows = (await db.select('SELECT * FROM products WHERE id=$1', [pId]).catch(() => [])) as Array<Record<string, unknown>>;
+          if (rows?.[0]) {
+            await db.execute(
+              `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
+               VALUES ($1,'product',$2,'UPSERT',$3,'pending')
+               ON CONFLICT(idempotency_key) DO UPDATE SET operation='UPSERT', payload_json=excluded.payload_json, status='pending', retry_count=0, next_retry_at=NULL, last_error=NULL, updated_at=$4`,
+              [pkey, pId, toBoundedSyncJson(rows[0]), now],
+            );
+          }
         }
       }
     } catch (err) {

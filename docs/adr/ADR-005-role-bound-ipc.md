@@ -305,3 +305,15 @@ adjust / opening batch), which stays named. `fifo:reconcile` now preflights for
 unresolved SHADOW batches and no longer opens an empty transaction; its write
 algorithm remains renderer-side and must be ported before flipping for
 shadow-bearing data. Money p95 at n=200: +0.09 % under the flag.
+
+### Product mirror and shift close are native (2026-11-05)
+
+`upsert_product` owns the product row, the conditional ledger ADJUST, the stock
+recompute, the opening batch and their envelopes in one transaction; the renderer
+keeps only the reads that decide the stock. `close_shift` owns the fiscal close
+totals and the envelope together. With these, `30-ref-refunds` and `10-mny-money`
+run green under `POS_SQL_QUERY_ONLY=1` with **zero** refused writes, and
+`50-sec-authorization` likewise. `40-shf-shifts` is at 10/12 with three named
+renderer writes left (`held_orders` insert/delete, `cash_movements` insert), and
+spec 92's five are its own writable-pool controls that must move to a native
+command now that the native lanes are the writable path.
