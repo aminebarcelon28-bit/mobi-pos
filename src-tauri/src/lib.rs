@@ -30,6 +30,7 @@ pub mod trust_core;
 pub mod e2e; pub mod import;
 pub mod sql_ro;
 pub mod boot_maintenance;
+pub mod schema_heal_sql;
 #[cfg(test)] pub mod sql_boundary;
 
 use crate::trust_core::{
@@ -2388,6 +2389,10 @@ pub fn run() {
                 // the kernel is fail-closed by construction.
                 // SEC-01 increment 2: boot maintenance is native (the renderer
                 // pool is read-only). Failures fall back to the renderer path.
+                match crate::boot_maintenance::run_schema_heal_at_startup(&app_dir) {
+                    Ok(r) => eprintln!("[boot] native schema heal: {r:?}"),
+                    Err(e) => eprintln!("[boot] native schema heal skipped: {e}"),
+                }
                 match crate::boot_maintenance::run_at_startup(&app_dir) {
                     Ok(r) => eprintln!("[boot] native maintenance: {r:?}"),
                     Err(e) => eprintln!("[boot] native maintenance skipped: {e}"),
@@ -2460,6 +2465,9 @@ pub fn run() {
             boot_maintenance::boot_maintenance,
             boot_maintenance::finalize_shift_adoption,
             boot_maintenance::boot_maintenance_applied,
+            boot_maintenance::schema_heal_applied,
+            boot_maintenance::run_schema_heal_command,
+            boot_maintenance::bump_parked_attempts_command,
             emergency_export::emergency_export_ledger,
             sav_attachments::sav_attachment_write,
             sav_attachments::sav_attachment_read,
@@ -2544,6 +2552,9 @@ pub fn run() {
             boot_maintenance::boot_maintenance,
             boot_maintenance::finalize_shift_adoption,
             boot_maintenance::boot_maintenance_applied,
+            boot_maintenance::schema_heal_applied,
+            boot_maintenance::run_schema_heal_command,
+            boot_maintenance::bump_parked_attempts_command,
             emergency_export::emergency_export_ledger,
             sav_attachments::sav_attachment_write,
             sav_attachments::sav_attachment_read,

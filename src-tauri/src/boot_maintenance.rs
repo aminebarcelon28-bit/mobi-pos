@@ -155,6 +155,99 @@ pub fn close_duplicate_live_shifts(
     Ok(closed)
 }
 
+/// Result of replaying the captured schema-heal migration.
+#[derive(Debug, Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SchemaHealReport {
+    pub total: usize,
+    pub applied: usize,
+    pub tolerated: usize,
+    pub failed: usize,
+    pub first_error: Option<String>,
+}
+
+static SCHEMA_APPLIED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Replay the renderer's schema heal natively. Every statement is idempotent, so
+/// "duplicate column"/"already exists" is a normal outcome on a healed DB; any
+/// other error is counted and the worst is reported. The flag is only set when
+/// nothing failed, so a partial heal never makes the renderer skip its pass.
+pub fn run_schema_heal(conn: &mut Connection) -> SchemaHealReport {
+    let mut report = SchemaHealReport {
+        total: crate::schema_heal_sql::SCHEMA_HEAL_STATEMENTS.len(),
+        ..Default::default()
+    };
+    for sql in crate::schema_heal_sql::SCHEMA_HEAL_STATEMENTS {
+        match conn.execute_batch(sql) {
+            Ok(()) => report.applied += 1,
+            Err(e) => {
+                let msg = e.to_string().to_lowercase();
+                // Already applied, or a legacy backfill whose precondition is
+                // absent on this shape (the renderer tolerated these too).
+                // Only outcomes that mean "already applied" are tolerated. A
+                // missing table/column means the base schema is not there yet —
+                // the heal did NOT apply, and the flag must stay off so the
+                // renderer's pass owns that case.
+                if msg.contains("duplicate column")
+                    || msg.contains("already exists")
+                    || msg.contains("has no column named")
+                {
+                    report.tolerated += 1;
+                } else {
+                    report.failed += 1;
+                    if report.first_error.is_none() {
+                        report.first_error = Some(format!("{} :: {}", e, sql.chars().take(80).collect::<String>()));
+                    }
+                }
+            }
+        }
+    }
+    if report.failed == 0 {
+        SCHEMA_APPLIED.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+    report
+}
+
+/// Startup entry: heal an EXISTING database before the WebView. A fresh install has
+/// no file yet (the plugin creates it), so the renderer path still owns first run;
+/// the flag tells it when it can skip.
+pub fn run_schema_heal_at_startup(app_dir: &std::path::Path) -> Result<SchemaHealReport, String> {
+    let path = crate::e2e::live_db_path(app_dir);
+    if !path.exists() {
+        // A fresh install has no base schema yet (the plugin's v1 migration creates
+        // it). Replaying the heal before those tables exist would "succeed" only by
+        // tolerating "no such table" and leave a half-schema DB — measured: it broke
+        // imei_records on the next boot. The renderer path owns first run until a
+        // native BASE migration exists.
+        return Err("database not initialised yet".to_string());
+    }
+    let mut conn = Connection::open(&path).map_err(|e| format!("heal open: {e}"))?;
+    conn.busy_timeout(std::time::Duration::from_millis(5000))
+        .map_err(|e| format!("heal busy: {e}"))?;
+    conn.pragma_update(None, "foreign_keys", "ON")
+        .map_err(|e| format!("heal fk: {e}"))?;
+    Ok(run_schema_heal(&mut conn))
+}
+
+/// Public probe: true when the native schema heal completed with zero failures.
+#[tauri::command]
+pub fn schema_heal_applied() -> bool {
+    SCHEMA_APPLIED.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// Gated command for hosts that want to run it explicitly (tests/diagnostics).
+#[tauri::command]
+pub fn run_schema_heal_command(app: tauri::AppHandle) -> Result<SchemaHealReport, TrustError> {
+    crate::trust_core::ipc_authorizer::authorize_and_execute(
+        "run_schema_heal_command",
+        crate::trust_core::capability_policy::Capability::OperationalWrites,
+        |_| {
+            let mut conn = open_live_db(&app)?;
+            Ok(run_schema_heal(&mut conn))
+        },
+    )
+}
+
 /// Set once the native startup pass ran, so the renderer can skip its SQL.
 static BOOT_APPLIED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -181,6 +274,25 @@ pub fn run_at_startup(app_dir: &std::path::Path) -> Result<BootMaintenanceReport
 #[tauri::command]
 pub fn boot_maintenance_applied() -> bool {
     BOOT_APPLIED.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// Bump the retry counter on parked cash movements (boot drain housekeeping).
+/// Fixed literal: the renderer supplies nothing.
+pub fn bump_parked_attempts(conn: &Connection) -> Result<usize, String> {
+    conn.execute("UPDATE sync_parked_movements SET attempts = attempts + 1", [])
+        .map_err(|e| format!("bump parked attempts: {e}"))
+}
+
+#[tauri::command]
+pub fn bump_parked_attempts_command(app: tauri::AppHandle) -> Result<usize, TrustError> {
+    crate::trust_core::ipc_authorizer::authorize_and_execute(
+        "bump_parked_attempts_command",
+        crate::trust_core::capability_policy::Capability::OperationalWrites,
+        |_| {
+            let conn = open_live_db(&app)?;
+            bump_parked_attempts(&conn).map_err(crate::trust_core::ipc_authorizer::TrustError::op_failed)
+        },
+    )
 }
 
 fn open_live_db(app: &tauri::AppHandle) -> Result<Connection, TrustError> {

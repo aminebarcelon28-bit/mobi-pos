@@ -900,6 +900,9 @@ async function healSyncOutboxEntityCheck(db: Database): Promise<void> {
  * it. Never fails boot.
  */
 export async function ensureShiftLedgerV113(db: Database): Promise<void> {
+  // Native heal already applied the same statements (captured from this
+  // function); replaying them here would write through the renderer pool.
+  if (nativeSchemaHeal) return;
   const steps: Array<[string, string]> = [
     [
       'sync_parked_movements table',
@@ -1185,6 +1188,7 @@ export async function healPoisonedInventoryBaselines(db: Database): Promise<{ he
  * everything falls back to the old renderer paths.
  */
 let nativeBootMaintenance = false;
+let nativeSchemaHeal = false;
 export function nativeBootMaintenanceApplied(): boolean {
   return nativeBootMaintenance;
 }
@@ -1276,6 +1280,15 @@ export function getLocalDb(): Promise<Database> {
         // binary, or a host that skipped it).
         let applied = false;
         try {
+          // Single read, no poll: on a fresh install the startup pass has no DB
+          // yet, and delaying the renderer heal would let seeding run against a
+          // half-schema database (measured: imei_records.status missing). The
+          // native skip only applies when setup already finished.
+          nativeSchemaHeal = (await invokeCommand<boolean>('schema_heal_applied')) === true;
+        } catch {
+          nativeSchemaHeal = false;
+        }
+        try {
           applied = (await invokeCommand<boolean>('boot_maintenance_applied')) === true;
         } catch {
           applied = false;
@@ -1288,6 +1301,7 @@ export function getLocalDb(): Promise<Database> {
         (globalThis as unknown as { __bootDiag?: unknown }).__bootDiag = {
           applied,
           native: nativeBootMaintenance,
+          schemaHeal: nativeSchemaHeal,
         };
         markBoot('db:native-boot');
         console.info('[boot] native maintenance applied =', applied);
@@ -1305,12 +1319,15 @@ export function getLocalDb(): Promise<Database> {
       }
     }
     if (!columnsEnsured) {
-      // Always run the renderer heal: the native pass replaced only the four
-      // maintenance statements, and an upgraded DB may still be missing
-      // TS-owned columns/tables. Migrating this heal behind native commands is
-      // required before the pool can be read-only (ADR-005, item 4).
-      await ensureLocalSyncColumns(cached);
-      columnsEnsured = true;
+      // The native schema heal replays the same 131 statements (captured from
+      // this very function) at startup. Skip only when it reported zero
+      // failures; a partial heal must fall back to the renderer pass.
+      if (nativeSchemaHeal) {
+        columnsEnsured = true;
+      } else {
+        await ensureLocalSyncColumns(cached);
+        columnsEnsured = true;
+      }
       markBoot('db:heal');
       // LCP: monthly WAL-checkpoint + incremental vacuum moved OUT of the
       // boot critical path (App.tsx idle-schedules

@@ -194,24 +194,13 @@ entirely, so it subsumes steps 3–4 of B.
 
 ### Gate and current status (2026-11-04)
 
-- **Gate:** `node scripts/check-sql-boundary.mjs` lists every renderer write
-  statement in `src/` (**318**), `--ratchet` fails on any new one, `--fail` is
-  reserved for the end state. CI runs the ratchet and the report. The baseline may
-  only shrink (it did not grow when the boot writes moved).
-- **Landed (step 2, partial — E-0188):** native `boot_maintenance`
-  (`src-tauri/src/boot_maintenance.rs`) runs in `.setup()` before the WebView and
-  in one transaction: purge synced outbox, reset inflight, reconcile the customer
-  debt cache, close duplicate live shifts (on adoption) and create the
-  one-live-shift index. Fixed literals, capability/role checked, 5 Rust tests.
-  The renderer skips exactly those statements and keeps its SQL as an explicit
-  fallback.
-- **Still blocks the flip (measured — E-0189):** running `50-sec-authorization`
-  with `POS_SQL_QUERY_ONLY=1` refused **205** renderer statements — ~120 from the
-  schema heal (DDL/backfills/latches), the rest from settings/session
-  (`sync.device_id`, sync flags), sync rescue and maintenance. A first-boot flip
-  would brick the app, so the plugin switch stays opt-in until that surface is
-  migrated.
-- **Order:** schema heal → a native versioned migration runner; settings/session
-  writes → native commands; re-measure until **0**; then flip the default; money
-  paths last with before/after latency (budget: checkout p95 ≤ 10 % regression;
-  baseline 230–750 ms, read lane 0.4 ms p50).
+- **Gate:** 318 renderer write statements, ratchet in CI; baseline may only shrink.
+- **Landed:** native `boot_maintenance` (outbox purge/reset, debt cache, live-shift
+  index) and the **native schema heal** (128 fixed statements captured from the
+  renderer's own function, replayed at startup; `bump_parked_attempts` too).
+- **Measured:** 205 refused statements → **0 on the managed boot path**; a fresh
+  install still needs the renderer heal (~140), because the plugin's v1 base schema
+  is created there. Creating the DB natively first was tried and reverted: the heal
+  ran before the base tables and left a half-schema DB.
+- **Next:** port the v1 base schema to native startup, re-probe the fresh path to 0,
+  flip the plugin default, then money paths with the ≤10 % p95 budget.

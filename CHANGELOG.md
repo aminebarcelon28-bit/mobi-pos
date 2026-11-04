@@ -44,6 +44,10 @@ gate table is recorded in the same ledger.
   (23/23) — a moved line no longer fails, an edited or new one does.
 
 ### Changed
+- **Schema heal replayed natively:** 128 statements captured from the renderer's
+  own heal and re-run at startup; the managed boot path now needs **zero** renderer
+  writes under a read-only pool (fresh installs still use the renderer heal until the
+  base schema moves native).
 - **Native boot maintenance (SEC-01 step 2):** outbox purge/inflight reset, debt
   cache reconcile, duplicate live-shift close and the one-live-shift index run in
   one native transaction at startup; the renderer skips those statements.

@@ -3,7 +3,7 @@
 // Pull: Per-table cursors -> Local SQLite + Dexie UI store updates.
 // Zero data loss, zero silent drops, zero dependency on vendor servers.
 
-import { getLocalDb, requeuePendingCustomerWrites, getPendingOutbox, markOutbox, markOutboxMany, utcNowIso, getFailedOutboxCount, retryQuarantinedOutbox, syncProductsFromSqlToDexie, sanitizeSyncPayload, sanitizeImageField, toBoundedSyncJson, isDeviceLocalSettingKey } from '../db/sqlPluginAdapter';
+import { getLocalDb, nativeBootMaintenanceApplied, requeuePendingCustomerWrites, getPendingOutbox, markOutbox, markOutboxMany, utcNowIso, getFailedOutboxCount, retryQuarantinedOutbox, syncProductsFromSqlToDexie, sanitizeSyncPayload, sanitizeImageField, toBoundedSyncJson, isDeviceLocalSettingKey } from '../db/sqlPluginAdapter';
 import { getTursoClient, probeOnline, closeTursoClient, withNetworkTimeout } from './tursoClient';
 import { getCloudCredentials } from './keychain';
 import { db as dexieDb } from '../db/database';
@@ -406,7 +406,9 @@ class SyncManager {
     // left by a just-killed process; stale >30min rows are the same class.
     try {
       const bootDb = await getLocalDb();
+      if (!nativeBootMaintenanceApplied()) {
       await bootDb.execute("UPDATE sync_outbox SET status='pending' WHERE status='inflight'");
+      }
       // Case 23: the native wallet write stamps customers.sync_status='pending'
       // inside its own transaction. Re-enqueue those rows here, before the
       // credential gate, so a crash in the enqueue window cannot strand money.

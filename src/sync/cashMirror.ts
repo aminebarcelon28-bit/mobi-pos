@@ -175,7 +175,14 @@ export async function drainAllParkedMovements(sql: SqlDb): Promise<void> {
   );
   for (const r of ready) await drainParkedMovements(sql, r.session_id);
 
-  await sql.execute('UPDATE sync_parked_movements SET attempts = attempts + 1');
+  // Native once boot maintenance ran (fixed literal); renderer SQL is the
+  // fallback for a host without the command.
+  try {
+    const { invokeCommand } = await import('../platform/invoke');
+    await invokeCommand<number>('bump_parked_attempts_command');
+  } catch {
+    await sql.execute('UPDATE sync_parked_movements SET attempts = attempts + 1');
+  }
   const dead = await sql.select<{ id: string; session_id: string }>(
     'SELECT id, session_id FROM sync_parked_movements WHERE attempts >= ?',
     [PARKED_MAX_ATTEMPTS],
