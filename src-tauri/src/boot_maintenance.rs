@@ -155,81 +155,494 @@ pub fn close_duplicate_live_shifts(
     Ok(closed)
 }
 
-/// Result of replaying the captured schema-heal migration.
+/// Exactly which idempotent outcome a statement may produce. Anything not in
+/// this enum is a failure: there is no message-substring escape hatch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum Tolerance {
+    /// "duplicate column name: <col>" — the column is already there.
+    DuplicateColumn,
+    /// "index <name> already exists" — the object is already there.
+    AlreadyExists,
+}
+
+/// A failed statement, with the state needed by the recovery screen.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SchemaHealFailure {
+    pub index: usize,
+    pub sql: String,
+    pub error: String,
+    pub manifest_expected: Option<String>,
+    pub manifest_actual: Option<String>,
+}
+
+impl std::fmt::Display for SchemaHealFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "statement {} failed: {} :: {}", self.index, self.error, self.sql)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct SchemaHealReport {
     pub total: usize,
     pub applied: usize,
     pub tolerated: usize,
-    pub failed: usize,
-    pub first_error: Option<String>,
+    pub manifest_sha256: String,
+    pub backup_path: Option<String>,
+    pub backup_sha256: Option<String>,
+}
+
+/// The migration is a plain value so tests can run a fixture spec through the
+/// exact same fail-closed core.
+pub struct HealSpec<'a> {
+    pub statements: &'a [&'a str],
+    pub hashes: &'a [u64],
+    pub tolerances: &'a [(u64, Tolerance)],
+    pub golden_manifest: &'a str,
 }
 
 static SCHEMA_APPLIED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static SCHEMA_FAILURE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
-/// Replay the renderer's schema heal natively. Every statement is idempotent, so
-/// "duplicate column"/"already exists" is a normal outcome on a healed DB; any
-/// other error is counted and the worst is reported. The flag is only set when
-/// nothing failed, so a partial heal never makes the renderer skip its pass.
-pub fn run_schema_heal(conn: &mut Connection) -> SchemaHealReport {
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SchemaHealStatus {
+    pub applied: bool,
+    pub failed: bool,
+    pub error: Option<String>,
+}
+
+/// Boot status for the renderer / recovery screen. Reads memory only.
+#[tauri::command]
+pub fn schema_heal_status() -> SchemaHealStatus {
+    let error = SCHEMA_FAILURE.lock().ok().and_then(|g| g.clone());
+    SchemaHealStatus {
+        applied: SCHEMA_APPLIED.load(std::sync::atomic::Ordering::SeqCst),
+        failed: error.is_some(),
+        error,
+    }
+}
+
+fn set_failure(msg: String) {
+    if let Ok(mut g) = SCHEMA_FAILURE.lock() {
+        *g = Some(msg);
+    }
+}
+
+fn remember_failure(f: &SchemaHealFailure) {
+    let where_ = if f.index == usize::MAX {
+        "contrôle final".to_string()
+    } else {
+        format!("instruction {}", f.index)
+    };
+    set_failure(format!("Migration du schéma échouée ({where_}): {}", f.error));
+}
+
+fn manifest_sha256(manifest: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(manifest.as_bytes());
+    h.finalize().iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn json_str(s: &str) -> String {
+    serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_string())
+}
+
+/// Canonical manifest, byte-for-byte equal to what the generator produced with
+/// JSON.stringify in insertion order.
+pub fn schema_manifest(conn: &Connection) -> Result<String, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT type, name, tbl_name, sql FROM sqlite_master
+              WHERE name NOT LIKE 'sqlite_%' AND name <> '_sqlx_migrations'
+              AND (sql IS NULL OR sql NOT LIKE 'CREATE VIRTUAL TABLE%')
+              ORDER BY type, name",
+        )
+        .map_err(|e| format!("manifest prepare: {e}"))?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, Option<String>>(3)?,
+            ))
+        })
+        .map_err(|e| format!("manifest query: {e}"))?;
+
+    let mut objects: Vec<String> = Vec::new();
+    for row in rows {
+        let (typ, name, tbl, sql) = row.map_err(|e| format!("manifest row: {e}"))?;
+        let normalized = sql
+            .unwrap_or_default()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .trim_end_matches(';')
+            .to_string();
+        let mut obj = format!(
+            "{{\"type\":{},\"name\":{},\"tbl\":{},\"sql\":{}}}",
+            json_str(&typ),
+            json_str(&name),
+            json_str(&tbl),
+            json_str(&normalized)
+        );
+        let columns: Option<String> = if typ == "table" {
+            let mut cstmt = conn
+                .prepare(&format!("PRAGMA table_xinfo({})", json_str(&name)))
+                .map_err(|e| format!("table_xinfo: {e}"))?;
+            let mut cols = cstmt
+                .query_map([], |c| {
+                    Ok((
+                        c.get::<_, String>(1)?,
+                        c.get::<_, String>(2)?,
+                        c.get::<_, i64>(3)?,
+                        c.get::<_, Option<String>>(4)?,
+                        c.get::<_, i64>(5)?,
+                        c.get::<_, i64>(6)?,
+                    ))
+                })
+                .map_err(|e| format!("table_xinfo query: {e}"))?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| format!("table_xinfo row: {e}"))?;
+            cols.sort_by(|a, b| a.0.cmp(&b.0));
+            Some(format!(
+                "[{}]",
+                cols.iter()
+                    .map(|(n, t, nn, d, pk, hid)| format!(
+                        "{{\"name\":{},\"type\":{},\"notnull\":{},\"dflt\":{},\"pk\":{},\"hidden\":{}}}",
+                        json_str(n),
+                        json_str(t),
+                        nn,
+                        d.as_ref().map(|x| json_str(x)).unwrap_or_else(|| "null".into()),
+                        pk,
+                        hid
+                    ))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ))
+        } else if typ == "index" {
+            let mut istmt = conn
+                .prepare(&format!("PRAGMA index_xinfo({})", json_str(&name)))
+                .map_err(|e| format!("index_xinfo: {e}"))?;
+            let mut cols = istmt
+                .query_map([], |c| {
+                    Ok((
+                        c.get::<_, i64>(0)?,
+                        c.get::<_, i64>(1)?,
+                        c.get::<_, Option<String>>(2)?,
+                        c.get::<_, i64>(3)?,
+                        c.get::<_, Option<String>>(4)?,
+                        c.get::<_, i64>(5)?,
+                    ))
+                })
+                .map_err(|e| format!("index_xinfo query: {e}"))?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| format!("index_xinfo row: {e}"))?;
+            cols.sort_by_key(|c| c.0);
+            Some(format!(
+                "[{}]",
+                cols.iter()
+                    .map(|(seqno, cid, n, desc, coll, key)| format!(
+                        "{{\"seqno\":{},\"cid\":{},\"name\":{},\"desc\":{},\"coll\":{},\"key\":{}}}",
+                        seqno,
+                        cid,
+                        n.as_ref().map(|x| json_str(x)).unwrap_or_else(|| "null".into()),
+                        desc,
+                        coll.as_ref().map(|x| json_str(x)).unwrap_or_else(|| "null".into()),
+                        key
+                    ))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ))
+        } else {
+            None
+        };
+        if let Some(cols) = columns {
+            // Insert before the closing brace to keep key order: …,"sql":"…",
+            obj.pop();
+            obj.push_str(",\"columns\":");
+            obj.push_str(&cols);
+            obj.push('}');
+        }
+        objects.push(obj);
+    }
+    Ok(format!("{{\"version\":1,\"objects\":[{}]}}", objects.join(",")))
+}
+
+fn classify(err: &rusqlite::Error) -> Option<Tolerance> {
+    match err {
+        rusqlite::Error::SqliteFailure(_, Some(msg)) => {
+            let m = msg.to_lowercase();
+            if m.starts_with("duplicate column name:") {
+                Some(Tolerance::DuplicateColumn)
+            } else if m.contains("already exists") {
+                Some(Tolerance::AlreadyExists)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+#[cfg(debug_assertions)]
+fn test_delay() {
+    if let Ok(ms) = std::env::var("POS_SCHEMA_HEAL_DELAY_MS") {
+        if let Ok(ms) = ms.parse::<u64>() {
+            std::thread::sleep(std::time::Duration::from_millis(ms));
+        }
+    }
+    if let Ok(at) = std::env::var("POS_SCHEMA_HEAL_ABORT_AT") {
+        if let Ok(at) = at.parse::<usize>() {
+            if at == usize::MAX {
+                std::process::abort();
+            }
+        }
+    }
+}
+#[cfg(not(debug_assertions))]
+fn test_delay() {}
+
+/// Fail-closed core: one transaction, exact per-statement tolerance, schema
+/// post-condition, integrity checks. Any surprise rolls back and is reported —
+/// the flag is never set on a database that does not match the golden manifest.
+pub fn run_schema_heal_core(
+    conn: &mut Connection,
+    spec: &HealSpec<'_>,
+) -> Result<SchemaHealReport, SchemaHealFailure> {
+    let fail = |index: usize, sql: &str, error: String, expected: Option<String>, actual: Option<String>| {
+        let f = SchemaHealFailure {
+            index,
+            sql: sql.chars().take(160).collect(),
+            error,
+            manifest_expected: expected,
+            manifest_actual: actual,
+        };
+        remember_failure(&f);
+        f
+    };
+
+    // foreign_keys must be changed OUTSIDE a transaction; no statement in the
+    // list requires it to be ON, and leaving it ON would abort table rebuilds.
+    if let Err(e) = conn.pragma_update(None, "foreign_keys", "OFF") {
+        return Err(fail(usize::MAX, "<pragma foreign_keys=OFF>", e.to_string(), None, None));
+    }
+    if let Err(e) = conn.execute_batch("BEGIN IMMEDIATE") {
+        return Err(fail(usize::MAX, "<BEGIN IMMEDIATE>", e.to_string(), None, None));
+    }
+
+    // One-shot injected delay (test): proves the barrier, not a timing race.
+    test_delay();
     let mut report = SchemaHealReport {
-        total: crate::schema_heal_sql::SCHEMA_HEAL_STATEMENTS.len(),
+        total: spec.statements.len(),
         ..Default::default()
     };
-    for sql in crate::schema_heal_sql::SCHEMA_HEAL_STATEMENTS {
+
+    for (index, sql) in spec.statements.iter().enumerate() {
+        #[cfg(debug_assertions)]
+        {
+            if let Ok(at) = std::env::var("POS_SCHEMA_HEAL_ABORT_AT") {
+                if at.parse::<usize>().ok() == Some(index) {
+                    // Simulated crash mid-migration: the transaction is never
+                    // committed; the next boot must converge from the backup state.
+                    std::process::abort();
+                }
+            }
+        }
         match conn.execute_batch(sql) {
             Ok(()) => report.applied += 1,
             Err(e) => {
-                let msg = e.to_string().to_lowercase();
-                // Already applied, or a legacy backfill whose precondition is
-                // absent on this shape (the renderer tolerated these too).
-                // Only outcomes that mean "already applied" are tolerated. A
-                // missing table/column means the base schema is not there yet —
-                // the heal did NOT apply, and the flag must stay off so the
-                // renderer's pass owns that case.
-                if msg.contains("duplicate column")
-                    || msg.contains("already exists")
-                    || msg.contains("has no column named")
-                {
-                    report.tolerated += 1;
-                } else {
-                    report.failed += 1;
-                    if report.first_error.is_none() {
-                        report.first_error = Some(format!("{} :: {}", e, sql.chars().take(80).collect::<String>()));
+                let hash = spec.hashes.get(index).copied().unwrap_or(0);
+                let expected = spec
+                    .tolerances
+                    .iter()
+                    .find(|(h, _)| *h == hash)
+                    .map(|(_, t)| *t);
+                match (expected, classify(&e)) {
+                    (Some(want), Some(got)) if want == got => report.tolerated += 1,
+                    _ => {
+                        let _ = conn.execute_batch("ROLLBACK");
+                        return Err(fail(index, sql, e.to_string(), None, None));
                     }
                 }
             }
         }
     }
-    if report.failed == 0 {
-        SCHEMA_APPLIED.store(true, std::sync::atomic::Ordering::SeqCst);
+
+    // Post-conditions INSIDE the transaction: integrity, foreign keys, and the
+    // schema must equal the golden manifest exactly.
+    let integrity: String = match conn.query_row("PRAGMA integrity_check", [], |r| r.get(0)) {
+        Ok(v) => v,
+        Err(e) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            return Err(fail(usize::MAX, "<integrity_check>", e.to_string(), None, None));
+        }
+    };
+    if integrity != "ok" {
+        let _ = conn.execute_batch("ROLLBACK");
+        return Err(fail(usize::MAX, "<integrity_check>", integrity, None, None));
     }
-    report
+    let fk_violations: i64 = match conn.query_row(
+        "SELECT COUNT(*) FROM pragma_foreign_key_check",
+        [],
+        |r| r.get(0),
+    ) {
+        Ok(v) => v,
+        Err(e) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            return Err(fail(usize::MAX, "<foreign_key_check>", e.to_string(), None, None));
+        }
+    };
+    if fk_violations != 0 {
+        let _ = conn.execute_batch("ROLLBACK");
+        return Err(fail(
+            usize::MAX,
+            "<foreign_key_check>",
+            format!("{fk_violations} violation(s)"),
+            None,
+            None,
+        ));
+    }
+
+    let actual = match schema_manifest(conn) {
+        Ok(m) => m,
+        Err(e) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            return Err(fail(usize::MAX, "<manifest>", e, None, None));
+        }
+    };
+    report.manifest_sha256 = manifest_sha256(&actual);
+    if actual != spec.golden_manifest {
+        let _ = conn.execute_batch("ROLLBACK");
+        return Err(fail(
+            usize::MAX,
+            "<manifest mismatch>",
+            "schema does not match the golden manifest".to_string(),
+            Some(manifest_sha256(spec.golden_manifest)),
+            Some(report.manifest_sha256.clone()),
+        ));
+    }
+
+    if let Err(e) = conn.execute_batch("COMMIT") {
+        return Err(fail(usize::MAX, "<COMMIT>", e.to_string(), None, None));
+    }
+    let _ = conn.pragma_update(None, "foreign_keys", "ON");
+    SCHEMA_APPLIED.store(true, std::sync::atomic::Ordering::SeqCst);
+    if let Ok(mut g) = SCHEMA_FAILURE.lock() {
+        *g = None;
+    }
+    Ok(report)
 }
 
-/// Startup entry: heal an EXISTING database before the WebView. A fresh install has
-/// no file yet (the plugin creates it), so the renderer path still owns first run;
-/// the flag tells it when it can skip.
+fn production_spec() -> HealSpec<'static> {
+    HealSpec {
+        statements: crate::schema_heal_sql::SCHEMA_HEAL_STATEMENTS,
+        hashes: crate::schema_heal_sql::SCHEMA_HEAL_HASHES,
+        tolerances: crate::schema_heal_sql::TOLERANCES,
+        golden_manifest: crate::schema_heal_sql::SCHEMA_MANIFEST,
+    }
+}
+
+/// Production entry: replay the captured heal with the generated spec.
+pub fn run_schema_heal(conn: &mut Connection) -> Result<SchemaHealReport, SchemaHealFailure> {
+    run_schema_heal_core(conn, &production_spec())
+}
+
+fn sha256_file(path: &std::path::Path) -> Result<String, String> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    let mut f = std::fs::File::open(path).map_err(|e| format!("backup read: {e}"))?;
+    let mut h = Sha256::new();
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = f.read(&mut buf).map_err(|e| format!("backup hash: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        h.update(&buf[..n]);
+    }
+    Ok(h.finalize().iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// Online backup of the live DB before the migration, verified by reopening it
+/// and running integrity_check. Keeps the last 3, newest first.
+pub fn backup_before_heal(
+    db_path: &std::path::Path,
+    backup_dir: &std::path::Path,
+) -> Result<(std::path::PathBuf, String), String> {
+    use rusqlite::backup::Backup;
+    use rusqlite::DatabaseName;
+    std::fs::create_dir_all(backup_dir).map_err(|e| format!("backup dir: {e}"))?;
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let dest = backup_dir.join(format!("pre_schema_heal_{stamp}.db"));
+    {
+        let src = Connection::open_with_flags(
+            db_path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .map_err(|e| format!("backup source: {e}"))?;
+        let mut dst = Connection::open(&dest).map_err(|e| format!("backup dest: {e}"))?;
+        let backup = Backup::new(&src, &mut dst).map_err(|e| format!("backup init: {e}"))?;
+        backup
+            .run_to_completion(64, std::time::Duration::from_millis(20), None)
+            .map_err(|e| format!("backup copy: {e}"))?;
+        let _ = DatabaseName::Main;
+    }
+    let sha = sha256_file(&dest)?;
+    {
+        let check = Connection::open(&dest).map_err(|e| format!("backup verify open: {e}"))?;
+        let ok: String = check
+            .query_row("PRAGMA integrity_check", [], |r| r.get(0))
+            .map_err(|e| format!("backup verify: {e}"))?;
+        if ok != "ok" {
+            return Err(format!("backup failed integrity_check: {ok}"));
+        }
+    }
+    // Keep the 3 newest.
+    let mut entries: Vec<_> = std::fs::read_dir(backup_dir)
+        .map_err(|e| format!("backup list: {e}"))?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.starts_with("pre_schema_heal_") && n.ends_with(".db"))
+                .unwrap_or(false)
+        })
+        .collect();
+    entries.sort();
+    while entries.len() > 3 {
+        let old = entries.remove(0);
+        let _ = std::fs::remove_file(old);
+    }
+    Ok((dest, sha))
+}
+
+/// Startup entry: back up, then migrate an EXISTING database before the WebView.
 pub fn run_schema_heal_at_startup(app_dir: &std::path::Path) -> Result<SchemaHealReport, String> {
     let path = crate::e2e::live_db_path(app_dir);
     if !path.exists() {
-        // A fresh install has no base schema yet (the plugin's v1 migration creates
-        // it). Replaying the heal before those tables exist would "succeed" only by
-        // tolerating "no such table" and leave a half-schema DB — measured: it broke
-        // imei_records on the next boot. The renderer path owns first run until a
-        // native BASE migration exists.
         return Err("database not initialised yet".to_string());
     }
+    let backups = app_dir.join("backups");
+    let (backup_path, backup_sha) = backup_before_heal(&path, &backups)?;
     let mut conn = Connection::open(&path).map_err(|e| format!("heal open: {e}"))?;
     conn.busy_timeout(std::time::Duration::from_millis(5000))
         .map_err(|e| format!("heal busy: {e}"))?;
-    conn.pragma_update(None, "foreign_keys", "ON")
-        .map_err(|e| format!("heal fk: {e}"))?;
-    Ok(run_schema_heal(&mut conn))
+    let mut report = run_schema_heal(&mut conn).map_err(|f| f.to_string())?;
+    report.backup_path = Some(backup_path.display().to_string());
+    report.backup_sha256 = Some(backup_sha);
+    Ok(report)
 }
 
-/// Public probe: true when the native schema heal completed with zero failures.
+/// Public probe: true when the native schema heal completed with the golden
+/// schema in place.
 #[tauri::command]
 pub fn schema_heal_applied() -> bool {
     SCHEMA_APPLIED.load(std::sync::atomic::Ordering::SeqCst)
@@ -243,7 +656,8 @@ pub fn run_schema_heal_command(app: tauri::AppHandle) -> Result<SchemaHealReport
         crate::trust_core::capability_policy::Capability::OperationalWrites,
         |_| {
             let mut conn = open_live_db(&app)?;
-            Ok(run_schema_heal(&mut conn))
+            run_schema_heal(&mut conn)
+                .map_err(|f| crate::trust_core::ipc_authorizer::TrustError::op_failed(f.to_string()))
         },
     )
 }
@@ -464,4 +878,203 @@ mod tests {
         assert_eq!(second.inflight_reset, 0);
         assert_eq!(second.debts_repaired, 0);
     }
+
+    // ── fail-closed migration core ──────────────────────────────────────────
+    fn fnv(s: &str) -> u64 {
+        let mut h: u64 = 0xcbf29ce484222325;
+        for b in s.as_bytes() {
+            h ^= *b as u64;
+            h = h.wrapping_mul(0x100000001b3);
+        }
+        h
+    }
+
+    fn tmp_db(tag: &str) -> (std::path::PathBuf, Connection) {
+        let path = std::env::temp_dir().join(format!(
+            "mobi-heal-{}-{}.db",
+            tag,
+            std::process::id()
+        ));
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{}", path.display(), suffix));
+        }
+        let conn = Connection::open(&path).expect("temp db");
+        (path, conn)
+    }
+
+    fn cleanup(path: &std::path::Path) {
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{}", path.display(), suffix));
+        }
+    }
+
+    fn hashes(stmts: &[&str]) -> Vec<u64> {
+        stmts.iter().map(|s| fnv(s)).collect()
+    }
+
+    #[test]
+    fn unexpected_error_rolls_back_the_whole_migration() {
+        let (path, mut conn) = tmp_db("rollback");
+        let stmts = [
+            "CREATE TABLE a (x INTEGER);",
+            "ALTER TABLE missing_table ADD COLUMN y TEXT;",
+        ];
+        let hs = hashes(&stmts);
+        let spec = HealSpec {
+            statements: &stmts,
+            hashes: &hs,
+            tolerances: &[],
+            golden_manifest: "",
+        };
+        let err = run_schema_heal_core(&mut conn, &spec).expect_err("must fail closed");
+        assert_eq!(err.index, 1, "the failing statement is reported: {err}");
+        let created: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name='a'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(created, 0, "statement 0 must be rolled back");
+        cleanup(&path);
+    }
+
+    #[test]
+    fn tolerance_is_exact_and_per_statement() {
+        let (path, mut conn) = tmp_db("tolerance");
+        let stmts = [
+            "CREATE TABLE IF NOT EXISTS t (x INTEGER);",
+            "ALTER TABLE t ADD COLUMN y TEXT;",
+        ];
+        let hs = hashes(&stmts);
+        // reference run to learn the golden schema
+        for sql in stmts {
+            conn.execute_batch(sql).unwrap();
+        }
+        let golden = schema_manifest(&conn).unwrap();
+        let tols = [(hs[1], Tolerance::DuplicateColumn)];
+        let spec = HealSpec {
+            statements: &stmts,
+            hashes: &hs,
+            tolerances: &tols,
+            golden_manifest: &golden,
+        };
+        let report = run_schema_heal_core(&mut conn, &spec).expect("already-applied column tolerated");
+        assert_eq!(report.tolerated, 1);
+        assert_eq!(report.applied, 1);
+        // The SAME error with no tolerance entry must abort.
+        let spec_no_tol = HealSpec {
+            statements: &stmts,
+            hashes: &hs,
+            tolerances: &[],
+            golden_manifest: &golden,
+        };
+        let err = run_schema_heal_core(&mut conn, &spec_no_tol).expect_err("no tolerance, no pass");
+        assert_eq!(err.index, 1);
+        cleanup(&path);
+    }
+
+    #[test]
+    fn manifest_mismatch_rolls_back_and_never_sets_the_flag() {
+        let (path, mut conn) = tmp_db("manifest");
+        let stmts = ["CREATE TABLE only_here (x INTEGER);"];
+        let hs = hashes(&stmts);
+        let golden = "{\"version\":1,\"objects\":[]}";
+        let spec = HealSpec {
+            statements: &stmts,
+            hashes: &hs,
+            tolerances: &[],
+            golden_manifest: golden,
+        };
+        let err = run_schema_heal_core(&mut conn, &spec).expect_err("schema mismatch must fail");
+        assert!(err.manifest_expected.is_some() && err.manifest_actual.is_some());
+        let created: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name='only_here'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(created, 0, "the migration is rolled back");
+        cleanup(&path);
+    }
+
+    #[test]
+    fn crash_midway_converges_and_keeps_data() {
+        let (path, mut conn) = tmp_db("crash");
+        conn.execute_batch("CREATE TABLE ledger (id TEXT PRIMARY KEY, amount INTEGER); INSERT INTO ledger VALUES ('T1', 500);")
+            .unwrap();
+        let stmts = [
+            "CREATE TABLE a (x INTEGER);",
+            "CREATE TABLE b (y INTEGER);",
+            "CREATE INDEX idx_b ON b(y);",
+        ];
+        let hs = hashes(&stmts);
+        // golden = the schema after all statements
+        let scratch = Connection::open_in_memory().unwrap();
+        scratch
+            .execute_batch("CREATE TABLE ledger (id TEXT PRIMARY KEY, amount INTEGER);")
+            .unwrap();
+        for sql in stmts {
+            scratch.execute_batch(sql).unwrap();
+        }
+        let golden = schema_manifest(&scratch).unwrap();
+
+        // Simulated crash: statement 0 executed, transaction never committed.
+        conn.execute_batch("BEGIN IMMEDIATE").unwrap();
+        conn.execute_batch(stmts[0]).unwrap();
+        drop(conn);
+        let mut conn = Connection::open(&path).unwrap();
+        let a_after_crash: i64 = conn
+            .query_row("SELECT COUNT(*) FROM sqlite_master WHERE name='a'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(a_after_crash, 0, "uncommitted DDL must be gone");
+
+        let spec = HealSpec {
+            statements: &stmts,
+            hashes: &hs,
+            tolerances: &[],
+            golden_manifest: &golden,
+        };
+        run_schema_heal_core(&mut conn, &spec).expect("second boot converges");
+        let amount: i64 = conn
+            .query_row("SELECT amount FROM ledger WHERE id='T1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(amount, 500, "no data loss across the retry");
+        cleanup(&path);
+    }
+
+    #[test]
+    fn backup_is_verified_pruned_and_restorable() {
+        let (path, mut conn) = tmp_db("backup");
+        conn.execute_batch("CREATE TABLE t (id INTEGER PRIMARY KEY, k TEXT); INSERT INTO t VALUES (1, 'keep');")
+            .unwrap();
+        drop(conn);
+        let dir = std::env::temp_dir().join(format!("mobi-heal-backups-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        for _ in 0..4 {
+            let (dest, sha) = backup_before_heal(&path, &dir).expect("backup");
+            assert_eq!(sha, sha256_file(&dest).unwrap(), "checksum recorded");
+            assert!(!dest.exists() == false);
+        }
+        let files: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().starts_with("pre_schema_heal_"))
+            .collect();
+        assert_eq!(files.len(), 3, "keeps the last 3");
+        let newest = files
+            .iter()
+            .map(|e| e.path())
+            .max()
+            .expect("newest backup");
+        let restored = Connection::open(&newest).unwrap();
+        let k: String = restored
+            .query_row("SELECT k FROM t WHERE id=1", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(k, "keep", "backup restores the data");
+        let _ = std::fs::remove_dir_all(&dir);
+        cleanup(&path);
+    }
+
 }

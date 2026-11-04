@@ -149,7 +149,9 @@
     "test:technician-recovery": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_technician_recovery.mts",
     "gate:secrets": "node scripts/check-secrets.mjs",
     "sbom": "node scripts/gen-sbom.mjs",
-    "gate:licences": "node scripts/gen-sbom.mjs --check"
+    "gate:licences": "node scripts/gen-sbom.mjs --check",
+    "gate:schema-heal": "node scripts/check-schema-heal-drift.mjs",
+    "gen:schema-heal": "node scripts/gen-schema-heal.mjs"
   },
   "dependencies": {
     "@libsql/client": "^0.18.0",

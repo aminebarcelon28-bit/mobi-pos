@@ -151,10 +151,31 @@ if (import.meta.env.VITE_E2E === '1') {
   };
 }
 
-// Old-Android gate: an outdated system WebView would render a broken UI
-// (Tailwind v4 needs Chrome 111+). Intercept first, offer the Play Store fix.
-if (shouldBlockForWebViewUpdate()) {
-  renderWebViewUpdateScreen(boot)
-} else {
-  boot()
+// SEC-01: a failed native schema migration is a STOP, never a silent fallback.
+// The migration is transactional and verified against a golden manifest; when it
+// fails the DB is untouched and the renderer must not try to heal it (after the
+// read-only flip it cannot, and before it a fallback would hide the failure).
+async function bootWithSchemaGate(): Promise<void> {
+  try {
+    const { invokeCommand } = await import('./platform/invoke');
+    const status = await invokeCommand<{ applied: boolean; failed: boolean; error?: string | null }>(
+      'schema_heal_status',
+    );
+    if (status?.failed) {
+      const { renderSchemaRecovery } = await import('./components/SchemaRecoveryScreen');
+      renderSchemaRecovery(status.error ?? null);
+      return;
+    }
+  } catch {
+    // Web preview / non-Tauri host: no native migration to gate.
+  }
+  // Old-Android gate: an outdated system WebView would render a broken UI
+  // (Tailwind v4 needs Chrome 111+). Intercept first, offer the Play Store fix.
+  if (shouldBlockForWebViewUpdate()) {
+    renderWebViewUpdateScreen(boot);
+  } else {
+    boot();
+  }
 }
+
+void bootWithSchemaGate();

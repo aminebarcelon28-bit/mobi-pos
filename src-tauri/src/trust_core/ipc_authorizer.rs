@@ -478,6 +478,8 @@ static PUBLIC_COMMANDS: &[&str] = &[
     "sqlite_db_maintenance",
     "boot_maintenance_applied",
     "schema_heal_applied",
+    // Read-only boot status (memory only): drives the recovery screen.
+    "schema_heal_status",
 ];
 
 /// Required capability for a command, or `None` when the command is
@@ -1140,6 +1142,7 @@ pub static ALL_COMMAND_FNS_IN_TESTS: &[&str] = &[
     "boot_maintenance_applied",
     "finalize_shift_adoption",
     "schema_heal_applied",
+    "schema_heal_status",
     "run_schema_heal_command",
     "bump_parked_attempts_command",
     "emergency_export_ledger",

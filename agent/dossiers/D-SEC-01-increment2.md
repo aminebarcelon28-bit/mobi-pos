@@ -69,13 +69,55 @@ therefore stays **off unless `POS_SQL_QUERY_ONLY=1`** is set, and the flip trave
 with the write migration (ADR-005 steps 2–4). The boundary gate keeps the debt
 visible and ratcheted at 318 renderer statements (report + ratchet in CI).
 
-## Next, in order
+## Fail-closed rules (2026-11-04, E-0191)
 
-1. Move the schema heal behind a native migration runner (the 120 statements
-   become a versioned native migration, not renderer SQL).
-2. Move settings/session writes (`sync.device_id`, flags) to native commands.
-3. Re-run the 205-statement probe until it reports **0**, then flip the plugin
-   default.
-4. Money paths last: checkout/refund with before/after latency, budget
-   ≤ 10 % p95 regression (baseline measured: checkout 230–750 ms, read lane
-   0.4 ms p50).
+The substring tolerance ("duplicate column" / "has no column named") was the same
+weakness that produced the half-schema failure. Replaced by construction:
+
+- **Exact per-statement tolerance.** The generator replays every statement against a
+  healed reference DB and records the ONLY error each statement may produce, keyed
+  by a stable hash of the statement text (`TOLERANCES`: 55 × `DuplicateColumn` on
+  the reference schema). Any other error aborts the migration.
+- **Golden manifest post-condition.** `schema_manifest()` canonicalises
+  `sqlite_master` + `table_xinfo` + `index_xinfo` (virtual tables excluded because
+  the heal does not manage them). The manifest is compared **inside** the
+  transaction; a mismatch rolls back, sets the failure state and never sets the flag.
+- **One transaction + integrity.** `BEGIN IMMEDIATE` → statements → `integrity_check`
+  → `pragma_foreign_key_check` → manifest → `COMMIT`. `foreign_keys` is switched
+  outside the transaction (no statement needs it ON). No statement forbids a
+  transaction.
+- **Pre-migration backup.** Online backup (rusqlite `Backup`), SHA-256 recorded,
+  reopened and `integrity_check`-verified, last 3 kept. Tested restore reads the
+  data back.
+- **Recovery screen, never a silent fallback.** `schema_heal_status()` (public,
+  memory-only) drives `SchemaRecoveryScreen`; `main.tsx` mounts it instead of the
+  POS when a migration failed. Measured: injecting an extra table made the manifest
+  mismatch, the transaction rolled back, the screen rendered
+  ("Migration de la base interrompue"), and `schema_heal_status` reported
+  `{applied:false, failed:true}`.
+- **Drift gate.** `npm run gate:schema-heal` recomputes the SHA-256 of the TS heal
+  region and fails when it differs from the generated header; it also rejects
+  placeholders/paths/capture markers in the generated statements and requires the
+  capture hook to be `#[cfg(debug_assertions)]` with a release no-op.
+
+## Controls (measured, E-0191)
+
+| Control | Result |
+|---|---|
+| managed boot, `POS_SQL_QUERY_ONLY=1` | **0** refused writes |
+| managed boot + injected 5 s heal delay | **0** refused writes |
+| crash at statement 40 (abort) | session dies; next boot converges, `applied=true`, **0** refused writes, backups stay at 3 |
+| schema mismatch (extra table) | rollback + recovery screen; removing the table lets the next boot converge |
+
+Rust tests (10 in `boot_maintenance`): unexpected error rolls back the whole
+migration; tolerance is exact and per-statement; manifest mismatch rolls back and
+never sets the flag; crash midway converges with no data loss; backup verifies,
+prunes to 3 and restores.
+
+## Remaining (next)
+
+1. **Equivalence** native vs renderer heal on rc-5/rc-6 legacy DBs + fresh + current
+   (normalized schema and row hashes), plus proof the 10 backfills are set-based.
+2. **Barrier** (plugin `load` awaits native completion) and **base-schema port**
+   (v1..current under the same ledger) so fresh installs reach 0.
+3. Then flip, full-suite runtime-refusal gate, money-path latency.

@@ -139,6 +139,9 @@ jobs:
       - name: SQL boundary report (visibility)
         run: node scripts/check-sql-boundary.mjs
 
+      - name: Schema-heal drift gate (generated migration matches its sources)
+        run: npm run gate:schema-heal
+
       - name: Secrets scan (tracked files)
         run: npm run gate:secrets
 
