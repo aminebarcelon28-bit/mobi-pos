@@ -760,7 +760,57 @@ export const transactionAdapter = {
       }
     });
 
+    let voidMirroredNatively = false;
     if (isTauriEnv()) {
+      // Native lane (SEC-01): status flip + IMEI releases + ownership events +
+      // loyalty bundle + money delta in one Rust transaction.
+      const { invokeCommand } = await import('../../platform/invoke');
+      const nowIso = new Date().toISOString();
+      const { loyaltyPatch } = updatedCustomer
+        ? await import('../refundMirrorSql')
+        : { loyaltyPatch: () => ({}) };
+      const moneyCustomerId = String(updatedCustomer?.id ?? '').trim();
+      const creditDelta = Number((voidCustomer as unknown as { creditDeltaDzd?: number })?.creditDeltaDzd ?? 0);
+      const debtDelta = Number((voidCustomer as unknown as { debtDeltaDzd?: number })?.debtDeltaDzd ?? 0);
+      try {
+        await invokeCommand('void_sale_mirror', {
+          request: {
+            transactionId: voidedTransaction.id,
+            nowIso,
+            restoredImeis,
+            imeiStatusAvailable: true,
+            loyalty: updatedCustomer
+              ? {
+                  customerId: updatedCustomer.id,
+                  patchJson: JSON.stringify(loyaltyPatch(updatedCustomer)),
+                  totalSpent:
+                    typeof updatedCustomer.totalSpent === 'number' && Number.isFinite(updatedCustomer.totalSpent)
+                      ? updatedCustomer.totalSpent
+                      : null,
+                  loyaltyPoints:
+                    typeof updatedCustomer.loyaltyPoints === 'number' && Number.isFinite(updatedCustomer.loyaltyPoints)
+                      ? updatedCustomer.loyaltyPoints
+                      : null,
+                  updatedAt: nowIso,
+                  ledgerEntries: ((voidCustomer?.ledgerEntries ?? []) as unknown[]).map((e) => JSON.stringify(e)),
+                }
+              : null,
+            moneyDelta:
+              moneyCustomerId && voidCustomer
+                ? { customerId: moneyCustomerId, creditDelta, debtDelta, nowIso }
+                : null,
+          },
+        });
+        voidMirroredNatively = true;
+      } catch (err) {
+        const msg = String((err as Error)?.message ?? err);
+        if (msg.includes('ALREADY_VOIDED')) throw new Error('ALREADY_VOIDED');
+        if (msg.includes('REFUNDED_TICKET')) throw new Error('REFUNDED_TICKET');
+        if (!/not found|unknown command/i.test(msg)) throw err;
+        // Older host without the command: the renderer lane below is the fallback.
+      }
+    }
+    if (!voidMirroredNatively && isTauriEnv()) {
       await withBusyRetry(
         () =>
           withWriteLock(async () => {
@@ -1064,7 +1114,35 @@ export const transactionAdapter = {
       }
     });
 
+    let refundMirroredNatively = false;
     if (isTauriEnv()) {
+      // Native lane (SEC-01): original-status guard + IMEI releases + events in
+      // one Rust transaction. The read-only prior-refund bound check stays here.
+      const { invokeCommand } = await import('../../platform/invoke');
+      const nowIso = new Date().toISOString();
+      const releases = imeiReleases(restoredImeis, defectiveImeis).map((r) => ({
+        imei: r.imei,
+        status: r.status,
+        kind: r.kind,
+        note: r.note,
+      }));
+      try {
+        await invokeCommand('refund_sale_mirror', {
+          request: {
+            transactionId: refundTransaction.id,
+            originalTransactionId: refundTransaction.originalTransactionId ?? null,
+            nowIso,
+            releases,
+          },
+        });
+        refundMirroredNatively = true;
+      } catch (err) {
+        const msg = String((err as Error)?.message ?? err);
+        if (msg.includes('ORIGINAL_VOIDED')) throw new Error('ORIGINAL_VOIDED');
+        if (!/not found|unknown command/i.test(msg)) throw err;
+      }
+    }
+    if (!refundMirroredNatively && isTauriEnv()) {
       await withBusyRetry(
         () =>
           withWriteLock(async () => {

@@ -31,7 +31,7 @@ export interface RefundMirrorStatement {
 /** Loyalty-only keys the refund may mirror. Money keys are intentionally absent. */
 const LOYALTY_KEYS = ['loyaltyPoints', 'loyaltyTier', 'pointBuckets', 'totalSpent'] as const;
 
-function loyaltyPatch(customer: Customer): Record<string, unknown> {
+export function loyaltyPatch(customer: Customer): Record<string, unknown> {
   const patch: Record<string, unknown> = {};
   for (const key of LOYALTY_KEYS) {
     const value = (customer as unknown as Record<string, unknown>)[key];

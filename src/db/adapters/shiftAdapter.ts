@@ -354,34 +354,22 @@ export const shiftAdapter = {
   async saveStoreExpense(expense: StoreExpense): Promise<void> {
     if (isTauriEnv()) {
       try {
-        const db = await getLocalDb();
+        const { invokeCommand } = await import('../../platform/invoke');
         const payload = JSON.stringify(expense);
-        await db.execute(
-          `INSERT INTO store_expenses (id, category, title, amount, payment_method, paid_to, notes, recorded_by, created_at, json_payload)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-           ON CONFLICT(id) DO UPDATE SET
-             category=excluded.category,
-             title=excluded.title,
-             amount=excluded.amount,
-             payment_method=excluded.payment_method,
-             paid_to=excluded.paid_to,
-             notes=excluded.notes,
-             recorded_by=excluded.recorded_by,
-             json_payload=excluded.json_payload,
-             version=store_expenses.version + 1`,
-          [
-            expense.id,
-            expense.category || 'Général',
-            expense.title || '',
-            expense.amount || 0,
-            expense.paymentMethod || 'Espèces',
-            expense.paidTo || null,
-            expense.notes || null,
-            expense.recordedBy || 'Admin',
-            expense.createdAt || new Date().toISOString(),
-            payload,
-          ],
-        );
+        await invokeCommand<void>('upsert_store_expense', {
+          request: {
+            id: expense.id,
+            category: expense.category || 'Général',
+            title: expense.title || '',
+            amount: expense.amount || 0,
+            paymentMethod: expense.paymentMethod || 'Espèces',
+            paidTo: expense.paidTo || null,
+            notes: expense.notes || null,
+            recordedBy: expense.recordedBy || 'Admin',
+            createdAt: expense.createdAt || new Date().toISOString(),
+            jsonPayload: payload,
+          },
+        });
       } catch (err) {
         console.warn('[shiftAdapter] SQLite saveStoreExpense failed, fallback to Dexie:', err);
       }

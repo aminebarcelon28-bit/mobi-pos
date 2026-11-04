@@ -287,3 +287,21 @@ tests pin them. Refund-spec refusals under a read-only pool fell 133 → 29; the
 remainder is the void/refund mirror (one `BEGIN IMMEDIATE` transaction plus the
 loyalty `json_patch`, parent stub and ledger appends), which is the next lane.
 Money-path p95 under the flag is +2.5 % (1499 → 1537 ms at n=10), inside budget.
+
+### Void/refund mirror is native (2026-11-04)
+
+`db:void` and `db:refund` no longer open a renderer transaction. Six commands
+carry their SQLite effects with fixed literals and one Rust `BEGIN IMMEDIATE`
+each: `void_sale_mirror`, `refund_sale_mirror`, `apply_customer_loyalty_mirror`,
+`upsert_store_expense`, `upsert_customer_debt`, `refresh_customer_debt_cache`.
+The money semantics are pinned by tests: the loyalty bundle and the void status
+flip roll back together; a failing bundle leaves the DB byte-identical; a second
+void is refused with no double ledger append; the debt stub never clobbers a live
+parent; the debt-cache refresh never bumps `version`.
+
+Measured: refund-spec refusals 29 → 1, and the spec is green under the read-only
+flag. The remaining refusal is the product upsert (with its conditional ledger
+adjust / opening batch), which stays named. `fifo:reconcile` now preflights for
+unresolved SHADOW batches and no longer opens an empty transaction; its write
+algorithm remains renderer-side and must be ported before flipping for
+shadow-bearing data. Money p95 at n=200: +0.09 % under the flag.

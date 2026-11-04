@@ -1228,7 +1228,7 @@ export async function ensureBusyTimeout(db: Database, ms = 15000): Promise<void>
 export async function beginImmediate(db: Database, label = 'db'): Promise<boolean> {
   await ensureBusyTimeout(db, 15000);
   try {
-    await db.execute('BEGIN IMMEDIATE;');
+    await db.execute(`/* ${label} */ BEGIN IMMEDIATE;`);
     return true;
   } catch (beginErr) {
     // BUSY = racing lane holds the write lock → outer withBusyRetry.
@@ -3214,15 +3214,30 @@ export async function syncProductsFromSqlToDexie(productIds?: Iterable<string>):
       // projection to the authority too. `version` is deliberately NOT bumped:
       // this is a cache refresh derived from rows that already synced, and
       // bumping it would emit a spurious version/outbox event on every pull.
-      for (const [customerId, debt] of byCustomer) {
-        const projected = Math.max(0, debt);
+      // Native lane (SEC-01): one transaction, changed rows only, no version bump.
+      if (isTauriEnv()) {
         try {
-          await db.execute(
-            'UPDATE customers SET current_debt = ?1 WHERE id = ?2 AND COALESCE(current_debt, -1) <> ?1',
-            [projected, customerId],
-          );
+          const { invokeCommand } = await import('../platform/invoke');
+          await invokeCommand('refresh_customer_debt_cache', {
+            request: [...byCustomer].map(([customerId, debt]) => ({
+              customerId,
+              debt: Math.max(0, debt),
+            })),
+          });
         } catch (writeErr) {
-          console.warn('[reconcileCustomerDebtFromLedger] column refresh failed:', customerId, writeErr);
+          console.warn('[reconcileCustomerDebtFromLedger] column refresh failed:', writeErr);
+        }
+      } else {
+        for (const [customerId, debt] of byCustomer) {
+          const projected = Math.max(0, debt);
+          try {
+            await db.execute(
+              'UPDATE customers SET current_debt = ?1 WHERE id = ?2 AND COALESCE(current_debt, -1) <> ?1',
+              [projected, customerId],
+            );
+          } catch (writeErr) {
+            console.warn('[reconcileCustomerDebtFromLedger] column refresh failed:', customerId, writeErr);
+          }
         }
       }
 
@@ -5579,6 +5594,20 @@ export async function findNegativeStockProducts(): Promise<Array<{ productId: st
 export async function reconcileShadowBatches(targetProductId?: string): Promise<number> {
   return withWriteLock(async () => {
     const db = await getLocalDb();
+    // fifo:reconcile preflight: opening a write transaction when there is no
+    // unresolved SHADOW batch is pure overhead (and, under a read-only pool, a
+    // refused BEGIN for nothing). The reconcile itself is still the renderer
+    // algorithm — when a shadow exists this lane must move native before the
+    // pool can be flipped for shadow-bearing data.
+    const pending = (await db
+      .select(
+        `SELECT COUNT(*) AS n FROM stock_batches
+          WHERE purchase_order_id = 'SHADOW' AND deleted = 0 AND shadow_resolved = 0
+          ${targetProductId ? 'AND product_id = $1' : ''}`,
+        targetProductId ? [targetProductId] : undefined,
+      )
+      .catch(rethrowBusy)) as Array<{ n?: unknown }>;
+    if (Number(pending?.[0]?.n ?? 0) === 0) return 0;
     const deviceId = (await getOrCreateDeviceId(db)) || 'default';
     const now = utcNowIso();
     const useTxn = await beginImmediate(db, 'fifo:reconcile');

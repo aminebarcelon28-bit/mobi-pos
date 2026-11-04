@@ -34,6 +34,7 @@ pub mod settings_lane;
 pub mod shift_lane;
 pub mod sync_lane;
 pub mod customer_lane;
+pub mod void_refund_lane;
 pub mod schema_heal_sql;
 #[cfg(test)] pub mod sql_boundary;
 
@@ -2495,6 +2496,12 @@ pub fn run() {
             sync_lane::enqueue_sync_delete,
             customer_lane::upsert_customer,
             customer_lane::mark_customer_synced,
+            customer_lane::refresh_customer_debt_cache,
+            void_refund_lane::apply_customer_loyalty_mirror,
+            void_refund_lane::upsert_store_expense,
+            void_refund_lane::void_sale_mirror,
+            void_refund_lane::refund_sale_mirror,
+            void_refund_lane::upsert_customer_debt,
             emergency_export::emergency_export_ledger,
             sav_attachments::sav_attachment_write,
             sav_attachments::sav_attachment_read,
@@ -2594,6 +2601,12 @@ pub fn run() {
             sync_lane::enqueue_sync_delete,
             customer_lane::upsert_customer,
             customer_lane::mark_customer_synced,
+            customer_lane::refresh_customer_debt_cache,
+            void_refund_lane::apply_customer_loyalty_mirror,
+            void_refund_lane::upsert_store_expense,
+            void_refund_lane::void_sale_mirror,
+            void_refund_lane::refund_sale_mirror,
+            void_refund_lane::upsert_customer_debt,
             emergency_export::emergency_export_ledger,
             sav_attachments::sav_attachment_write,
             sav_attachments::sav_attachment_read,

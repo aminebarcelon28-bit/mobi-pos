@@ -295,24 +295,37 @@ export const customerAdapter = {
         console.warn('[refund:mirror] huge customer payload - TS mirror skipped (native wrote it)');
         return customer;
       }
-      const statements = buildRefundMirrorStatements(customer, utcNowIso(), newLedgerEntries);
-      for (const statement of statements) {
-        const affected = await db.execute(statement.sql, statement.args);
-        // 0 rows on a ledger append means the row vanished (deleted=0 no longer
-        // matches) or the payload carries a legacy non-array ledger. Silence
-        // would lose the audit row; say so.
-        if (statement.args.length > 2) {
-          const rows = Number(
-            (affected as { rowsAffected?: number } | undefined)?.rowsAffected ?? 0
-          );
-          if (rows === 0) {
-            console.warn(
-              `[refund:mirror] ledger row ${String(statement.args[2])} was not appended to [${customer.id}] ` +
-                '(row deleted or ledger payload is not an array).'
-            );
-          }
-        }
+      // Native lane (SEC-01): patch + ledger appends commit in one transaction,
+      // so the loyalty bundle can never be half-written.
+      const { invokeCommand } = await import('../../platform/invoke');
+      const { loyaltyPatch } = await import('../refundMirrorSql');
+      const mirrorReport = await invokeCommand<{
+        rowsUpdated: number;
+        ledgerAppended: number;
+        ledgerMissing: string[];
+      }>('apply_customer_loyalty_mirror', {
+        request: {
+          customerId: customer.id,
+          patchJson: JSON.stringify(loyaltyPatch(customer)),
+          totalSpent:
+            typeof customer.totalSpent === 'number' && Number.isFinite(customer.totalSpent)
+              ? customer.totalSpent
+              : null,
+          loyaltyPoints:
+            typeof customer.loyaltyPoints === 'number' && Number.isFinite(customer.loyaltyPoints)
+              ? customer.loyaltyPoints
+              : null,
+          updatedAt: utcNowIso(),
+          ledgerEntries: newLedgerEntries.map((entry) => JSON.stringify(entry)),
+        },
+      });
+      for (const missing of mirrorReport.ledgerMissing ?? []) {
+        console.warn(
+          `[refund:mirror] ledger row ${missing} was not appended to [${customer.id}] ` +
+            '(row deleted or ledger payload is not an array).'
+        );
       }
+      void buildRefundMirrorStatements;
       const rows = (await db
         .select(
           'SELECT store_credit, loyalty_points, total_spent, current_debt, json_payload, version, LENGTH(json_payload) AS payload_len FROM customers WHERE id = $1',
@@ -609,35 +622,62 @@ export const customerAdapter = {
       // customer row is the parent in an ON DELETE CASCADE FK, so a debt row
       // for an unknown customer must not strand the write: insert the parent
       // stub first (idempotent), then the debt row.
-      await db.execute(
-        `INSERT INTO customers (id, name, phone, json_payload, updated_at, idempotency_key, created_at)
-         VALUES ($1, $2, $3, $4, $5, 'stub-cust-' || $1, $5)
-         ON CONFLICT(id) DO NOTHING`,
-        [debt.customerId, debt.customerName || 'Client', '', JSON.stringify({ id: debt.customerId, name: debt.customerName || 'Client' }), utcNowIso()],
-      );
-      await db.execute(
-        `INSERT INTO customer_debts (id, customer_id, customer_name, type, amount, balance_after,
-           receipt_number, payment_method, notes, recorded_by, created_at, json_payload, version, updated_at, deleted,
-             due_date, kind, origin)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 0, $15, $16, $17)
-         ON CONFLICT(id) DO UPDATE SET customer_id=excluded.customer_id, customer_name=excluded.customer_name,
-           type=excluded.type, amount=excluded.amount, balance_after=excluded.balance_after,
-           receipt_number=excluded.receipt_number, payment_method=excluded.payment_method,
-           notes=excluded.notes, recorded_by=excluded.recorded_by, created_at=excluded.created_at,
-           json_payload=excluded.json_payload, updated_at=excluded.updated_at, deleted=0,
-           due_date=excluded.due_date, kind=excluded.kind,
-           origin=excluded.origin, version = excluded.version
-         WHERE excluded.version >= customer_debts.version`,
-        [
-          debt.id, debt.customerId, debt.customerName || 'Client', debt.type,
-          Number(debt.amount || 0), Number(debt.balanceAfter || 0),
-          debt.receiptNumber || null, debt.paymentMethod || null,
-          debt.notes || null, debt.recordedBy || null, debt.createdAt,
-          JSON.stringify(debtWithVersion), nextVersion, utcNowIso(),
-          debt.dueDate ?? null, debt.kind || '',
-          debtWithVersion.origin,
-        ],
-      );
+      // Native lane (SEC-01): idempotent parent stub + version-guarded debt
+      // row commit in one Rust transaction.
+      if (isTauriEnv()) {
+        const { invokeCommand } = await import('../../platform/invoke');
+        await invokeCommand('upsert_customer_debt', {
+          request: {
+            id: debt.id,
+            customerId: debt.customerId,
+            customerName: debt.customerName || 'Client',
+            type: debt.type,
+            amount: Number(debt.amount || 0),
+            balanceAfter: Number(debt.balanceAfter || 0),
+            receiptNumber: debt.receiptNumber || null,
+            paymentMethod: debt.paymentMethod || null,
+            notes: debt.notes || null,
+            recordedBy: debt.recordedBy || null,
+            createdAt: debt.createdAt,
+            jsonPayload: JSON.stringify(debtWithVersion),
+            version: nextVersion,
+            updatedAt: utcNowIso(),
+            dueDate: debt.dueDate ?? null,
+            kind: debt.kind || '',
+            origin: debtWithVersion.origin,
+          },
+        });
+      } else {
+        await db.execute(
+          `INSERT INTO customers (id, name, phone, json_payload, updated_at, idempotency_key, created_at)
+           VALUES ($1, $2, $3, $4, $5, 'stub-cust-' || $1, $5)
+           ON CONFLICT(id) DO NOTHING`,
+          [debt.customerId, debt.customerName || 'Client', '', JSON.stringify({ id: debt.customerId, name: debt.customerName || 'Client' }), utcNowIso()],
+        );
+        await db.execute(
+          `INSERT INTO customer_debts (id, customer_id, customer_name, type, amount, balance_after,
+             receipt_number, payment_method, notes, recorded_by, created_at, json_payload, version, updated_at, deleted,
+               due_date, kind, origin)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 0, $15, $16, $17)
+           ON CONFLICT(id) DO UPDATE SET customer_id=excluded.customer_id, customer_name=excluded.customer_name,
+             type=excluded.type, amount=excluded.amount, balance_after=excluded.balance_after,
+             receipt_number=excluded.receipt_number, payment_method=excluded.payment_method,
+             notes=excluded.notes, recorded_by=excluded.recorded_by, created_at=excluded.created_at,
+             json_payload=excluded.json_payload, updated_at=excluded.updated_at, deleted=0,
+             due_date=excluded.due_date, kind=excluded.kind,
+             origin=excluded.origin, version = excluded.version
+           WHERE excluded.version >= customer_debts.version`,
+          [
+            debt.id, debt.customerId, debt.customerName || 'Client', debt.type,
+            Number(debt.amount || 0), Number(debt.balanceAfter || 0),
+            debt.receiptNumber || null, debt.paymentMethod || null,
+            debt.notes || null, debt.recordedBy || null, debt.createdAt,
+            JSON.stringify(debtWithVersion), nextVersion, utcNowIso(),
+            debt.dueDate ?? null, debt.kind || '',
+            debtWithVersion.origin,
+          ],
+        );
+      }
     } catch (err) {
       // I9 (UPGRADE-11): distinguish web mode from real authority failures —
       // a Tauri write failure must never look like "web mode" (local SQLite

@@ -375,12 +375,64 @@ runs N real checkouts through the UI and prints p50/p95. n=10, same machine:
 p95 regression = **+2.5 %**, inside the ≤ 10 % budget. (n=10 is the probe's default
 smoke size; the final number for the tag will use n ≥ 200 per the ruling.)
 
+## Void/refund mirror lane (2026-11-04, E-0200)
+
+The last renderer writes on the refund path moved native, and `30-ref-refunds` is
+now **green under `POS_SQL_QUERY_ONLY=1`** (12/12) with **1** refused write left
+(down from 29).
+
+**New commands** (`src-tauri/src/void_refund_lane.rs`, 12 pinning tests):
+
+| Command | Replaces | Contract pinned |
+|---|---|---|
+| `apply_customer_loyalty_mirror` | the refund loyalty `json_patch` + ledger appends | patch + ledger commit or roll back together; ledger idempotent per entry id; legacy non-array ledger refused, payload untouched |
+| `void_sale_mirror` | `db:void`'s renderer `BEGIN IMMEDIATE` | status flip + IMEI releases + events + loyalty + money delta in one transaction; a failing loyalty bundle rolls the status flip and IMEI release back; a second void is `ALREADY_VOIDED` with no double ledger append |
+| `refund_sale_mirror` | `db:refund`'s renderer `BEGIN IMMEDIATE` | `ORIGINAL_VOIDED` refuses before any write; releases are idempotent; one ownership event per (kind, order, imei) |
+| `upsert_store_expense` | `saveStoreExpense` | idempotent upsert, version bumped |
+| `upsert_customer_debt` | the debt stub + debt row | stub is idempotent and never clobbers a live parent; the debt row is version-guarded |
+| `refresh_customer_debt_cache` | `reconcileCustomerDebtFromLedger` column refresh | changed rows only, never bumps `version` (derived cache) |
+
+**Measured, same spec:**
+
+| State | Refused renderer writes | Spec |
+|---|---|---|
+| before this lane | 29 | RED 8/12 |
+| after void/refund mirror + expense + loyalty | 15 | RED 8/12 |
+| after customer-debt lane | 20 | **GREEN 12/12** |
+| after debt-cache lane + FIFO preflight | **1** | **GREEN 12/12** |
+
+Normal mode stays green: `30-ref-refunds` 12/12, `10-mny-money` 14/14,
+`40-shf-shifts` 12/12.
+
+**The one refusal left** is `syncProductUpsertBulk`'s products upsert
+(`INSERT INTO products (… 24 columns …) ON CONFLICT … version=excluded.version`, SQL
+shown in the violation log). It is a complete lane, not a one-liner: the same
+function conditionally writes a manual `inventory_ledger` ADJUST row, recomputes
+`products.stock` from the ledger, and inserts an opening `stock_batches` row.
+Porting only the upsert would leave the companions refusing under a read-only
+pool, so it is named rather than half-migrated.
+
+**FIFO reconcile.** The 15 `/* fifo:reconcile */ BEGIN IMMEDIATE` refusals were a
+no-op transaction: no unresolved `SHADOW` batch existed, so the 360-line COGS
+algorithm opened a write transaction for nothing. It now preflights the count
+(read-only) and returns 0 when there is no work. **The reconcile writes themselves
+are still renderer-side**: with a real unresolved shadow the lane must be ported
+natively before the pool can be flipped for shadow-bearing data. That is a named
+flip residual, not a silent skip.
+
+**Latency, n=200** (same machine, warmup inside the probe):
+
+| Mode | p50 | p95 | min | max |
+|---|---|---|---|---|
+| normal | 1097 ms | 1132 ms | 1056 ms | 1539 ms |
+| `POS_SQL_QUERY_ONLY=1` | 1096 ms | 1133 ms | 1059 ms | 1528 ms |
+
+p95 regression **+0.09 %**, far inside the ≤ 10 % budget.
+
 ## Next, in order
 
-1. **Void/refund mirror lane** — the last 29 refusals: one native command that
-   runs the loyalty `json_patch`, ledger appends, parent stub and their guards in
-   the same transaction as the status update, replacing `db:void`/`db:refund`'s
-   renderer `BEGIN IMMEDIATE`.
-2. store_expenses + the seed-only product insert.
-3. Full suite under the flag to 0; re-run the latency probe at n ≥ 200.
-4. Concurrent same-entity case; clean-worktree floor; tag.
+1. `upsert_product` lane (upsert + ledger ADJUST + stock recompute + opening
+   batch, one transaction) — removes the last measured refusal.
+2. Native FIFO reconcile (`fifo:reconcile`) for shadow-bearing data, with
+   row-level COGS golden tests (do **not** port the math blind).
+3. Full suite under the flag to 0; clean-worktree floor; tag.

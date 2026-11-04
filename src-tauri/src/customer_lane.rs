@@ -169,6 +169,62 @@ pub fn mark_customer_synced(
     )
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DebtCacheEntry {
+    pub customer_id: String,
+    pub debt: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct DebtCacheReport {
+    pub changed: usize,
+}
+
+/// Reconcile the `customers.current_debt` cache from the ledger projection.
+/// Writes only rows whose value actually changes and never bumps `version`
+/// (this is a derived cache, not a user edit — bumping would emit a spurious
+/// sync event on every pull).
+pub fn refresh_customer_debt_cache_core(
+    conn: &mut Connection,
+    entries: &[DebtCacheEntry],
+) -> Result<DebtCacheReport, String> {
+    let tx = conn.transaction().map_err(|e| format!("debt cache tx: {e}"))?;
+    let mut report = DebtCacheReport::default();
+    for e in entries {
+        if e.customer_id.trim().is_empty() {
+            continue;
+        }
+        let projected = e.debt.max(0);
+        let changed = tx
+            .execute(
+                "UPDATE customers SET current_debt = ?1
+                  WHERE id = ?2 AND COALESCE(current_debt, -1) <> ?1",
+                rusqlite::params![projected, e.customer_id],
+            )
+            .map_err(|err| format!("debt cache {}: {err}", e.customer_id))?;
+        report.changed += changed;
+    }
+    tx.commit().map_err(|e| format!("debt cache commit: {e}"))?;
+    Ok(report)
+}
+
+#[tauri::command]
+pub fn refresh_customer_debt_cache(
+    app: tauri::AppHandle,
+    request: Vec<DebtCacheEntry>,
+) -> Result<DebtCacheReport, TrustError> {
+    crate::trust_core::ipc_authorizer::authorize_and_execute(
+        "refresh_customer_debt_cache",
+        crate::trust_core::capability_policy::Capability::OperationalWrites,
+        |_| {
+            let mut conn = open_db(&app)?;
+            refresh_customer_debt_cache_core(&mut conn, &request).map_err(TrustError::op_failed)
+        },
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -207,6 +263,41 @@ mod tests {
             idempotency_key: "cust-C-1".to_string(),
             guarded: false,
         }
+    }
+
+    #[test]
+    fn debt_cache_writes_only_changed_rows_and_never_bumps_version() {
+        let mut conn = seeded();
+        conn.execute(
+            "INSERT INTO customers (id, name, phone, json_payload, updated_at, version, current_debt)
+             VALUES ('C1', 'Ali', '0550', '{}', '2026-11-01', 7, 0)",
+            [],
+        )
+        .unwrap();
+        let report = refresh_customer_debt_cache_core(
+            &mut conn,
+            &[
+                DebtCacheEntry { customer_id: "C1".to_string(), debt: 300 },
+                DebtCacheEntry { customer_id: "MISSING".to_string(), debt: 100 },
+            ],
+        )
+        .expect("refresh");
+        assert_eq!(report.changed, 1, "only the live row changes");
+        let (debt, version): (i64, i64) = conn
+            .query_row("SELECT current_debt, version FROM customers WHERE id='C1'", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(debt, 300);
+        assert_eq!(version, 7, "a derived cache refresh never bumps the clock");
+
+        // Same value again: no write, no event.
+        let again = refresh_customer_debt_cache_core(
+            &mut conn,
+            &[DebtCacheEntry { customer_id: "C1".to_string(), debt: 300 }],
+        )
+        .expect("refresh");
+        assert_eq!(again.changed, 0);
     }
 
     #[test]
