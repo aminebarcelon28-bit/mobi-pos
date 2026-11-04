@@ -1177,6 +1177,18 @@ export async function healPoisonedInventoryBaselines(db: Database): Promise<{ he
   }
 }
 
+/**
+ * SEC-01 increment 2: set when the native `boot_maintenance` command applied the
+ * boot maintenance (outbox purge/reset, debt cache, live-shift index) in one
+ * native transaction. When true the renderer skips exactly those statements; the
+ * SQL schema heal still runs (it is not yet migrated). If the native pass fails,
+ * everything falls back to the old renderer paths.
+ */
+let nativeBootMaintenance = false;
+export function nativeBootMaintenanceApplied(): boolean {
+  return nativeBootMaintenance;
+}
+
 let dbInitPromise: Promise<Database> | null = null;
 
 /**
@@ -1257,9 +1269,46 @@ export function getLocalDb(): Promise<Database> {
       await cached.execute('PRAGMA busy_timeout = 15000;');
       await cached.execute('PRAGMA foreign_keys = ON;');
       await cached.execute('PRAGMA auto_vacuum = INCREMENTAL;').catch(() => {});
-      await cached.execute("DELETE FROM sync_outbox WHERE status = 'synced';").catch(() => {});
+      try {
+        const { invokeCommand } = await import('../platform/invoke');
+        // Native runs the pass in setup, before the WebView exists. Read its flag
+        // first; only call the command when the startup pass did not run (older
+        // binary, or a host that skipped it).
+        let applied = false;
+        try {
+          applied = (await invokeCommand<boolean>('boot_maintenance_applied')) === true;
+        } catch {
+          applied = false;
+        }
+        if (!applied) {
+          await invokeCommand<Record<string, unknown>>('boot_maintenance');
+          applied = true;
+        }
+        nativeBootMaintenance = applied;
+        (globalThis as unknown as { __bootDiag?: unknown }).__bootDiag = {
+          applied,
+          native: nativeBootMaintenance,
+        };
+        markBoot('db:native-boot');
+        console.info('[boot] native maintenance applied =', applied);
+      } catch (e) {
+        // Native unavailable (web preview / old binary): the renderer paths below
+        // remain the fallback, and this is logged rather than hidden.
+        console.warn('[boot] native maintenance unavailable; renderer fallback', e);
+        (globalThis as unknown as { __bootDiag?: unknown }).__bootDiag = {
+          applied: false,
+          error: String((e as Error)?.message ?? e).slice(0, 300),
+        };
+      }
+      if (!nativeBootMaintenance) {
+        await cached.execute("DELETE FROM sync_outbox WHERE status = 'synced';").catch(() => {});
+      }
     }
     if (!columnsEnsured) {
+      // Always run the renderer heal: the native pass replaced only the four
+      // maintenance statements, and an upgraded DB may still be missing
+      // TS-owned columns/tables. Migrating this heal behind native commands is
+      // required before the pool can be read-only (ADR-005, item 4).
       await ensureLocalSyncColumns(cached);
       columnsEnsured = true;
       markBoot('db:heal');

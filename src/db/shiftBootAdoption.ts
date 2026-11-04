@@ -1,6 +1,7 @@
 import { fireSync } from './adapters/base';
 import { db as dexieDb } from './database';
-import { getLocalDb, getSyncDeviceId } from './sqlPluginAdapter';
+import { getLocalDb, getSyncDeviceId, nativeBootMaintenanceApplied } from './sqlPluginAdapter';
+import { invokeCommand } from '../platform/invoke';
 import { adoptSessionIntoSqlite } from './adapters/shiftSqlite';
 import { drainAllParkedMovements } from '../sync/cashMirror';
 import type { CashSession } from '../types/pos';
@@ -113,22 +114,36 @@ async function adopt(): Promise<BootAdoptionReport> {
       report.dexieDemoted.push(s.id);
     }
 
-    // 5. Demote SQLite losers
-    const res = await sql.execute(
-      `UPDATE cash_sessions
-          SET status = 'CLOSED',
-              closed_at = COALESCE(closed_at, ?),
-              closing_note = CASE WHEN closing_note IS NULL OR closing_note = ''
-                                  THEN 'AUTO_CLOSED_DUPLICATE_LIVE_SHIFT'
-                                  ELSE closing_note || ' | AUTO_CLOSED_DUPLICATE_LIVE_SHIFT' END,
-              json_payload = CASE WHEN json_valid(json_payload)
-                                  THEN json_set(json_payload, '$.status', 'CLOSED')
-                                  ELSE json_payload END,
-              updated_at = ?,
-              version = version + 1
-        WHERE device_id = ? AND status IN ('OPEN','CLOSING') AND id <> ?`,
-      [now, now, deviceId, keep.id],
-    );
+    // 5. Demote SQLite losers — native once boot maintenance has run (fixed
+    // literal, same transaction policy), renderer SQL only as the fallback.
+    const demoteSqliteLosers = (): Promise<{ rowsAffected: number }> =>
+      sql.execute(
+        `UPDATE cash_sessions
+           SET status = 'CLOSED',
+               closed_at = COALESCE(closed_at, ?),
+               closing_note = CASE WHEN closing_note IS NULL OR closing_note = ''
+                                   THEN 'AUTO_CLOSED_DUPLICATE_LIVE_SHIFT'
+                                   ELSE closing_note || ' | AUTO_CLOSED_DUPLICATE_LIVE_SHIFT' END,
+               json_payload = CASE WHEN json_valid(json_payload)
+                                   THEN json_set(json_payload, '$.status', 'CLOSED')
+                                   ELSE json_payload END,
+               updated_at = ?,
+               version = version + 1
+         WHERE device_id = ? AND status IN ('OPEN','CLOSING') AND id <> ?`,
+        [now, now, deviceId, keep.id],
+      ) as Promise<{ rowsAffected: number }>;
+
+    let res: { rowsAffected: number };
+    if (nativeBootMaintenanceApplied()) {
+      try {
+        res = { rowsAffected: await invokeCommand<number>('finalize_shift_adoption', { deviceId, keepId: keep.id, nowIso: now }) };
+      } catch (e) {
+        console.warn('[SHIFT-BOOT] native finalize refused; renderer fallback', e);
+        res = await demoteSqliteLosers();
+      }
+    } else {
+      res = await demoteSqliteLosers();
+    }
     report.sqliteDemoted = res.rowsAffected;
 
     // 6. Adopt the survivor if it is in Dexie but absent from SQLite
@@ -147,13 +162,18 @@ async function adopt(): Promise<BootAdoptionReport> {
   );
   report.duplicateLiveRemaining = dups.length;
 
-  // 8. Create invariant index if clean
+  // 8. Create invariant index if clean (native owns DDL once boot_maintenance ran)
   if (dups.length === 0) {
-    await sql.execute(
-      `CREATE UNIQUE INDEX IF NOT EXISTS uq_one_live_shift_per_device
-         ON cash_sessions(device_id) WHERE status IN ('OPEN','CLOSING')`,
-    );
-    report.indexCreated = true;
+    if (nativeBootMaintenanceApplied()) {
+      // Native maintenance (and finalize_shift_adoption) created it.
+      report.indexCreated = true;
+    } else {
+      await sql.execute(
+        `CREATE UNIQUE INDEX IF NOT EXISTS uq_one_live_shift_per_device
+           ON cash_sessions(device_id) WHERE status IN ('OPEN','CLOSING')`,
+      );
+      report.indexCreated = true;
+    }
   } else {
     console.error('[SHIFT-BOOT] duplicate live shifts remain; unique index NOT created', dups);
   }

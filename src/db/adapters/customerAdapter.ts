@@ -358,7 +358,11 @@ export const customerAdapter = {
   async healDebtCacheFromLedger(): Promise<number> {
     if (!isTauriEnv()) return 0;
     try {
-      const { getLocalDb } = await import('../sqlPluginAdapter');
+      const { getLocalDb, nativeBootMaintenanceApplied } = await import('../sqlPluginAdapter');
+      if (nativeBootMaintenanceApplied()) {
+        // Boot maintenance already reconciled the cache in the native transaction.
+        return 0;
+      }
       const db = await getLocalDb();
       const res = (await db.execute(
         `UPDATE customers

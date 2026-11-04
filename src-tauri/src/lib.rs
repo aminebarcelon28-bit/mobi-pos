@@ -29,6 +29,7 @@ pub mod trust_core;
 // only on the same cfg — production binaries expose no `e2e_*` IPC.
 pub mod e2e; pub mod import;
 pub mod sql_ro;
+pub mod boot_maintenance;
 #[cfg(test)] pub mod sql_boundary;
 
 use crate::trust_core::{
@@ -2385,6 +2386,12 @@ pub fn run() {
                 // from the authenticated snapshot (absent -> UNACTIVATED,
                 // verification failure -> CORRUPTED). Never blocks startup;
                 // the kernel is fail-closed by construction.
+                // SEC-01 increment 2: boot maintenance is native (the renderer
+                // pool is read-only). Failures fall back to the renderer path.
+                match crate::boot_maintenance::run_at_startup(&app_dir) {
+                    Ok(r) => eprintln!("[boot] native maintenance: {r:?}"),
+                    Err(e) => eprintln!("[boot] native maintenance skipped: {e}"),
+                }
                 trust_core::ipc_authorizer::resolve_at_startup(&app_dir);
                 // Phase 4.5: boot audit head-check in the background (O(1)
                 // count+terminal vs keystore head; full verify runs at export
@@ -2450,6 +2457,9 @@ pub fn run() {
             sqlite_check_db_version,
             sqlite_db_maintenance,
             sql_ro::sql_select_ro,
+            boot_maintenance::boot_maintenance,
+            boot_maintenance::finalize_shift_adoption,
+            boot_maintenance::boot_maintenance_applied,
             emergency_export::emergency_export_ledger,
             sav_attachments::sav_attachment_write,
             sav_attachments::sav_attachment_read,
@@ -2531,6 +2541,9 @@ pub fn run() {
             sqlite_check_db_version,
             sqlite_db_maintenance,
             sql_ro::sql_select_ro,
+            boot_maintenance::boot_maintenance,
+            boot_maintenance::finalize_shift_adoption,
+            boot_maintenance::boot_maintenance_applied,
             emergency_export::emergency_export_ledger,
             sav_attachments::sav_attachment_write,
             sav_attachments::sav_attachment_read,

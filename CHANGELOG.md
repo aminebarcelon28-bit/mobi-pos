@@ -43,6 +43,16 @@ gate table is recorded in the same ledger.
 - Zero-tax gate converted to content anchors over all of `src-tauri/src`
   (23/23) — a moved line no longer fails, an edited or new one does.
 
+## [Unreleased] — after c01-rc-11
+
+### Changed
+- **Native boot maintenance (SEC-01 step 2):** outbox purge/inflight reset, debt
+  cache reconcile, duplicate live-shift close and the one-live-shift index run in
+  one native transaction at startup; the renderer skips those statements.
+- **Measured the read-only flip surface:** 205 refused renderer statements under
+  `POS_SQL_QUERY_ONLY=1` (schema heal, settings, sync, maintenance). The switch
+  stays opt-in until that surface is migrated (ADR-005).
+
 ## [c01-rc-10] — 2026-11-03 (`4dd4d0e`)
 
 - **SEC-01 increment 2 step 2a:** native `sql_select_ro` — own connection with

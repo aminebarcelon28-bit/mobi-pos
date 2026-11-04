@@ -457,6 +457,10 @@ static COMMAND_REGISTRY: &[(&str, Capability)] = &[
     ("import_commit_batch", Capability::OperationalWrites),
     ("import_get_staged_batch", Capability::ReadOperationalData),
     ("import_list_batches", Capability::ReadOperationalData),
+    // SEC-01 increment 2: boot maintenance moved out of the renderer pool
+    // (fixed literals, one transaction, capability + role checked).
+    ("boot_maintenance", Capability::OperationalWrites),
+    ("finalize_shift_adoption", Capability::OperationalWrites),
     // SEC-01 increment 2: native read-only query lane (query_only on its own
     // connection; writes are refused by SQLite).
     ("sql_select_ro", Capability::ReadOperationalData),
@@ -470,6 +474,7 @@ static PUBLIC_COMMANDS: &[&str] = &[
     "session_lock",
     "sqlite_check_db_version",
     "sqlite_db_maintenance",
+    "boot_maintenance_applied",
 ];
 
 /// Required capability for a command, or `None` when the command is
@@ -1128,6 +1133,9 @@ pub static ALL_COMMAND_FNS_IN_TESTS: &[&str] = &[
     "sqlite_check_db_version",
     "sqlite_db_maintenance",
     "sql_select_ro",
+    "boot_maintenance",
+    "boot_maintenance_applied",
+    "finalize_shift_adoption",
     "emergency_export_ledger",
     "launch_dialer",
     "launch_call",

@@ -192,16 +192,26 @@ entirely, so it subsumes steps 3–4 of B.
   merchant practice this repo already implements with manager PINs; SEC-01 moves
   the check to the native boundary.
 
-### Gate and current status (2026-11-03)
+### Gate and current status (2026-11-04)
 
 - **Gate:** `node scripts/check-sql-boundary.mjs` lists every renderer write
-  statement in `src/` (currently **318**), with `--ratchet` failing on any new
-  one and `--fail` reserved for the end state (zero). CI runs the ratchet and the
-  report. The baseline (`scripts/sql-boundary-baseline.json`) may only shrink.
-- **Landed:** the native read-only lane (`src/sql_ro.rs`) with read-only open
-  flags, an authorizer allowlist, single-statement enforcement, row/time caps and
-  credential-table denial; 9 Rust tests and 11 app-path probes.
-- **Not landed:** flipping the renderer pool itself. Boot writes through it, so the
-  switch travels with the migration (the gate is the punch list). Money-path
-  migration stays gated on the latency budget: checkout p95 regression <= 10%,
-  measured on the same machine before/after.
+  statement in `src/` (**318**), `--ratchet` fails on any new one, `--fail` is
+  reserved for the end state. CI runs the ratchet and the report. The baseline may
+  only shrink (it did not grow when the boot writes moved).
+- **Landed (step 2, partial — E-0188):** native `boot_maintenance`
+  (`src-tauri/src/boot_maintenance.rs`) runs in `.setup()` before the WebView and
+  in one transaction: purge synced outbox, reset inflight, reconcile the customer
+  debt cache, close duplicate live shifts (on adoption) and create the
+  one-live-shift index. Fixed literals, capability/role checked, 5 Rust tests.
+  The renderer skips exactly those statements and keeps its SQL as an explicit
+  fallback.
+- **Still blocks the flip (measured — E-0189):** running `50-sec-authorization`
+  with `POS_SQL_QUERY_ONLY=1` refused **205** renderer statements — ~120 from the
+  schema heal (DDL/backfills/latches), the rest from settings/session
+  (`sync.device_id`, sync flags), sync rescue and maintenance. A first-boot flip
+  would brick the app, so the plugin switch stays opt-in until that surface is
+  migrated.
+- **Order:** schema heal → a native versioned migration runner; settings/session
+  writes → native commands; re-measure until **0**; then flip the default; money
+  paths last with before/after latency (budget: checkout p95 ≤ 10 % regression;
+  baseline 230–750 ms, read lane 0.4 ms p50).

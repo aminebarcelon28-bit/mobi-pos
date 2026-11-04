@@ -24,6 +24,24 @@ use crate::LastInsertId;
 
 use sqlx::sqlite::SqlitePoolOptions;
 
+/// SEC-01 diagnostic (dev builds only): with `POS_SQL_QUERY_ONLY=1` the renderer
+/// pool is read-only; a refused write names its SQL here so the boot-write
+/// migration has an exact list instead of a guess.
+#[cfg(debug_assertions)]
+fn record_write_violation(query: &str, err: &str) {
+    if std::env::var("POS_SQL_QUERY_ONLY").ok().as_deref() != Some("1") {
+        return;
+    }
+    let path = std::env::temp_dir().join("mobi-sql-readonly-violations.log");
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(f, "{}\t{}", err.replace('\n', " "), query.replace('\n', " "));
+    }
+}
+
+#[cfg(not(debug_assertions))]
+fn record_write_violation(_query: &str, _err: &str) {}
+
 pub enum DbPool {
     #[cfg(feature = "sqlite")]
     Sqlite(Pool<Sqlite>),
@@ -94,7 +112,14 @@ impl DbPool {
                 if !Sqlite::database_exists(conn_url).await.unwrap_or(false) {
                     Sqlite::create_database(conn_url).await?;
                 }
-                Ok(Self::Sqlite(SqlitePoolOptions::new().max_connections(1).connect(conn_url).await?))
+                let pool = SqlitePoolOptions::new().max_connections(1).connect(conn_url).await?;
+                // SEC-01 diagnostic: with POS_SQL_QUERY_ONLY=1 the renderer pool is
+                // read-only and every refused write is logged (see
+                // record_write_violation) so the migration list is measured.
+                if std::env::var("POS_SQL_QUERY_ONLY").ok().as_deref() == Some("1") {
+                    sqlx::query("PRAGMA query_only = 1").execute(&pool).await?;
+                }
+                Ok(Self::Sqlite(pool))
             }
             #[cfg(feature = "mysql")]
             "mysql" => {
@@ -168,7 +193,13 @@ impl DbPool {
                         BoundValue::Json(j) => query = query.bind(j),
                     }
                 }
-                let result = pool.execute(query).await?;
+                let result = match pool.execute(query).await {
+                Ok(r) => r,
+                Err(e) => {
+                    record_write_violation(&_query, &format!("{e:?}"));
+                    return Err(e.into());
+                }
+            };
                 (
                     result.rows_affected(),
                     LastInsertId::Sqlite(result.last_insert_rowid()),
