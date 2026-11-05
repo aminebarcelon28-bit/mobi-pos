@@ -20,7 +20,7 @@ import path from 'node:path';
 import BetterSqlite3 from 'better-sqlite3';
 import { $, browser, expect } from '@wdio/globals';
 import { DB_PATH } from '../lib/env';
-import { all, count, one, openDb, scalar, waitForSchemaSettled } from '../lib/db';
+import { all, count, one, openDb, run, scalar, waitForSchemaSettled } from '../lib/db';
 import { invoke, invokeRaw } from '../lib/invoke';
 import {
   addSku,
@@ -172,19 +172,23 @@ describe('DAT batch 20 — data integrity / durability (P0)', () => {
   it('[DAT-05] PRAGMA foreign_keys is ON on the WebView connection and rejects an orphan', async () => {
     const fk = await pluginSelect('PRAGMA foreign_keys');
     const fkOn = Number(fk[0]?.foreign_keys ?? 0);
+    // The orphan probe's subject is SCHEMA enforcement, not the renderer lane:
+    // after the read-only flip the pool cannot write at all, so running the
+    // insert there would measure "readonly database" instead of the FK. The
+    // host connection opens with foreign_keys=ON on the same file, so the
+    // constraint under test is identical.
     let err = '';
     try {
-      await invoke('plugin:sql|execute', {
-        db: 'sqlite:mobi_pos.db',
-        query:
-          "INSERT INTO inventory_ledger (id, product_id, delta, reason, ref_type, ref_id, device_id, idempotency_key, sync_status, created_at, updated_at, deleted, version) VALUES ('DAT05-ORPHAN', 'NO-SUCH-PRODUCT', 1, 'ADJUST', 'probe', 'DAT05-ORPHAN', 'probe', 'dat05-orphan', 'pending', datetime('now','utc'), datetime('now','utc'), 0, 1)",
-        values: [],
-      });
+      run(
+        "INSERT INTO inventory_ledger (id, product_id, delta, reason, ref_type, ref_id, device_id, idempotency_key, sync_status, created_at, updated_at, deleted, version) VALUES ('DAT05-ORPHAN', 'NO-SUCH-PRODUCT', 1, 'ADJUST', 'probe', 'DAT05-ORPHAN', 'probe', 'dat05-orphan', 'pending', datetime('now','utc'), datetime('now','utc'), 0, 1)",
+      );
     } catch (e) {
       err = String((e as Error)?.message ?? e);
     }
     const orphan = Number(count('inventory_ledger', "id = 'DAT05-ORPHAN'"));
-    console.log(`[DAT-05] pluginForeignKeys=${fkOn} orphanInsertError=${JSON.stringify(err.slice(0, 200))} orphanRows=${orphan}`);
+    console.log(
+      `[DAT-05] pluginForeignKeys=${fkOn} hostForeignKeys=${Number(scalar('PRAGMA foreign_keys'))} orphanInsertError=${JSON.stringify(err.slice(0, 200))} orphanRows=${orphan}`,
+    );
     expect(fkOn).toBe(1);
     expect(err).toContain('FOREIGN KEY constraint failed');
     expect(orphan).toBe(0);
@@ -372,16 +376,11 @@ describe('DAT batch 20 — data integrity / durability (P0)', () => {
     const p0 = Number(count('products', "id = 'DAT-DEL-P' AND deleted = 0"));
     const c0 = Number(count('customers', "id = 'DAT-DEL-C' AND deleted = 0"));
     await browser.execute(() => undefined);
-    const runSql = async (sql: string) => {
-      const r = await invokeRaw('plugin:sql|execute', {
-        db: 'sqlite:mobi_pos.db',
-        query: sql,
-        values: [],
-      });
-      if (!r.ok) throw new Error(r.error);
-    };
-    await runSql("UPDATE products SET deleted = 1 WHERE id = 'DAT-DEL-P'");
-    await runSql("UPDATE customers SET deleted = 1 WHERE id = 'DAT-DEL-C'");
+    // Soft-delete through the host connection: the row state is what DAT-19
+    // measures (purge/retention), and the renderer pool is read-only after the
+    // flip. Same file, same WAL, same rows.
+    run("UPDATE products SET deleted = 1 WHERE id = 'DAT-DEL-P'");
+    run("UPDATE customers SET deleted = 1 WHERE id = 'DAT-DEL-C'");
     await browser.pause(1200);
     const p1 = Number(count('products', "id = 'DAT-DEL-P' AND deleted = 1"));
     const c1 = Number(count('customers', "id = 'DAT-DEL-C' AND deleted = 1"));

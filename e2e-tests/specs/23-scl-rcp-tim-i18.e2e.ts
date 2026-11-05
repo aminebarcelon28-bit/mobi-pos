@@ -713,12 +713,22 @@ describe('SCL/RCP/TIM/I18 — batch 23 functional', () => {
       db().exec("CREATE VIRTUAL TABLE IF NOT EXISTS temp.scl79_ft_db USING fts5(x, tokenize='trigram')");
       trigramDb = true;
     } catch { /* feature absent */ }
-    const appStrict = await sqlExec(
-      'CREATE TEMP TABLE IF NOT EXISTS scl79_strict_app(id INTEGER PRIMARY KEY) STRICT',
-    );
-    const appReturning = await sqlSelect<{ id: number }>(
-      'INSERT INTO scl79_strict_app(id) VALUES (1) RETURNING id',
-    ).catch((e) => [{ id: -1, err: String(e) } as unknown as { id: number }]);
+    // The renderer lane cannot execute DDL once the pool is read-only — that is
+    // the flip. The engine's STRICT/RETURNING support is asserted on the host
+    // connection above; the app-side probes are diagnostics, so they are
+    // reported as skipped rather than attempted (an attempt would just record a
+    // refused write with no extra evidence).
+    const readOnlyPool = process.env.POS_SQL_QUERY_ONLY === '1';
+    const appStrict = readOnlyPool
+      ? { ok: false, error: 'skipped: renderer pool is read-only (POS_SQL_QUERY_ONLY=1)' }
+      : await sqlExec(
+          'CREATE TEMP TABLE IF NOT EXISTS scl79_strict_app(id INTEGER PRIMARY KEY) STRICT',
+        );
+    const appReturning = readOnlyPool
+      ? [{ id: -1, err: 'skipped: renderer pool is read-only' } as unknown as { id: number }]
+      : await sqlSelect<{ id: number }>(
+          'INSERT INTO scl79_strict_app(id) VALUES (1) RETURNING id',
+        ).catch((e) => [{ id: -1, err: String(e) } as unknown as { id: number }]);
     const guard = await tryInvokeRaw<string>('sqlite_check_db_version');
     const selfTest = grepSrc(/sqlite_version|compile_options|feature.?matrix|startup.*self.?test/i);
     console.log(

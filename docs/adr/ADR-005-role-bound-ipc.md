@@ -375,3 +375,24 @@ functions and the flag exposed the difference), and `savePurchaseOrder` moved
 native. Result: `80-tin-tradein` and `82-inv-inventory` are at zero refused writes in
 both modes, and `TIN-10` — which had only failed under the flag — passes again,
 proving that failure was the product refusal rather than the spec.
+
+### Probe writes move host-side (2026-11-05)
+
+The last runtime refusals in the sweep were not application lanes: they were
+negative controls whose subject is SQLite itself (a temp table, a missing table, a
+literal-delete row, a bare `BEGIN`/`ROLLBACK`) and one spec that measured the
+renderer pool's transaction hygiene. They moved to the host connection or were
+re-pointed at the native layer:
+
+* DAT-05's orphan insert now runs on the host connection (same file, `foreign_keys=ON`),
+  so it still proves the FK constraint rather than "readonly database";
+* DAT-59 now proves the **native** connection is not left in a transaction after a
+  failing command (five invalid native calls, then a real native write + read-back),
+  which is stricter than the old two-`BEGIN` probe;
+* SCL-79's app-side DDL diagnostics are skipped with the reason recorded; its
+  asserted contract lives on the host connection.
+
+**Separate finding, recorded here because it blocks the gate:** chaining the
+10 000 043-row scale fixture into the sweep makes the next spec unable to boot
+within 180 s, with or without `POS_SQL_QUERY_ONLY`. That is boot cost at data scale,
+not a refusal, and must be triaged before a single-process 48-spec run can be green.

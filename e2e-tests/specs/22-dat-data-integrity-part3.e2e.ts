@@ -188,16 +188,32 @@ describe('DAT-59…DAT-89 — data integrity, part 3', () => {
       errors.push(r.ok ? 'OK_UNEXPECTED' : r.error.slice(0, 120));
     }
     const sale = await runStressBatch(P59, 1, 1000);
-    const begin1 = await sqlExec('BEGIN IMMEDIATE');
-    const bad = await sqlExec('SELECT * FROM dat59_no_such_table');
-    const begin2 = await sqlExec('BEGIN IMMEDIATE');
+    // Transactions live on the native side after the flip, so hygiene is
+    // measured there: a failed command must not leave the native connection in
+    // an open transaction. A leaked BEGIN shows up as this write failing with
+    // "cannot start a transaction within a transaction" (or being refused).
+    const probeId = `DAT59-PROBE-${Date.now()}`;
+    const writeAfter = await tryInvokeRaw('upsert_store_expense', {
+      request: {
+        id: probeId,
+        category: 'Test',
+        title: 'DAT-59 hygiene probe',
+        amount: 1,
+        paymentMethod: 'Espèces',
+        paidTo: null,
+        notes: null,
+        recordedBy: 'e2e',
+        createdAt: new Date().toISOString(),
+        jsonPayload: JSON.stringify({ id: probeId }),
+      },
+    });
     const selectAfter = await sqlSelect('SELECT 1 AS one');
-    if (begin2.ok) await sqlExec('ROLLBACK');
-    if (begin1.ok && !begin2.ok) await sqlExec('ROLLBACK');
-    await sqlExec('ROLLBACK');
-    const leaked = begin2.ok === false;
+    const wrote = Number(count('store_expenses', 'id = ?', probeId));
+    if (wrote > 0) run('DELETE FROM store_expenses WHERE id = ?', probeId);
+    const leaked = !writeAfter.ok || wrote !== 1;
     console.log(
-      `[DAT-59] invalidCalls=5 errors=${JSON.stringify(errors)} validSaleOk=${sale.ok} saleMs=${Math.round(sale.ms)} begin1=${begin1.ok} bad=${bad.ok ? 'OK' : 'ERR'} begin2=${begin2.ok ? 'OK' : JSON.stringify(begin2)} selectAfter=${JSON.stringify(selectAfter)} leaked=${leaked}`,
+      `[DAT-59] invalidCalls=5 errors=${JSON.stringify(errors)} validSaleOk=${sale.ok} saleMs=${Math.round(sale.ms)} ` +
+        `writeAfterFailures=${JSON.stringify(writeAfter)} probeRows=${wrote} selectAfter=${JSON.stringify(selectAfter)} leaked=${leaked}`,
     );
     expect(leaked).toBe(false);
     expect(sale.ok).toBe(true);

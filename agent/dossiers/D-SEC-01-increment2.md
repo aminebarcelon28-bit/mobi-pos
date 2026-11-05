@@ -654,11 +654,60 @@ native commands.
 scale-WAL spec around the 38-minute mark. That needs triage (scale batch + read-only
 pool, or sandbox memory) before the "full suite at 0" claim and any tag.
 
+## Probe writes migrated; scale-fixture instability (2026-11-05, E-0207)
+
+**Attribution first.** Each probe-bearing spec was run alone under the flag with a
+fresh violation log, which turned the 21 aggregate refusals into an exact map:
+
+| Spec | Refusals | Statement | Nature |
+|---|---|---|---|
+| `20-dat-data-integrity-part1` | 6 | `UPDATE products … DAT-DEL-P` ×3, `INSERT INTO inventory_ledger` ×3 | harness write through the pool |
+| `22-dat-data-integrity-part3` | 12 | `BEGIN IMMEDIATE` ×6, `ROLLBACK` ×3, `SELECT * FROM dat59_no_such_table` ×3 | DAT-59 pool-hygiene probe |
+| `23-scl-rcp-tim-i18` | 3 | `CREATE TEMP TABLE … STRICT` ×3 | SCL-79 app-engine diagnostic (asserts nothing) |
+| `01-invariant-negative-controls`, `21-dat-data-integrity-part2` | 0 | — | already host-side |
+
+**Migrated, assertions intact:**
+
+* `20-dat`: DAT-05's orphan insert moved to the host connection (which also opens
+  with `foreign_keys=ON` on the same file, so the constraint under test is
+  identical) and DAT-19's soft-deletes moved to `run()`. DAT-05 now logs both
+  `pluginForeignKeys` and `hostForeignKeys`.
+* `22-dat`: DAT-59 measured **the wrong layer** after the flip — transactions live
+  natively now, so the case now injects five failing native calls and then proves
+  the native connection is not left in a transaction by performing a real native
+  write (`upsert_store_expense`) and reading it back. `leaked` is
+  `!write.ok || probeRows !== 1`, i.e. stricter than the old boolean.
+* `23-scl-rcp-tim-i18`: the two app-side DDL calls assert nothing (they are
+  diagnostics) and cannot run against a read-only pool; they are now reported as
+  skipped with the reason, while the STRICT/RETURNING/trigram contract stays
+  asserted on the host connection.
+
+**Measured after migration (both modes):**
+
+| Spec | Normal | Flag |
+|---|---|---|
+| `20-dat` | 22/29, 0 refusals | **22/29, 0 refusals** (was 21/29 with 6) |
+| `22-dat` | 23/29, 0 refusals | **23/29, 0 refusals** (was 22/29 with 12) |
+| `23-scl-rcp-tim-i18` | 6/17, 0 refusals | **6/17, 0 refusals** (was 6/17 with 3) |
+
+**Scale-fixture instability (the real blocker, triaged twice).**
+`23-scl-scale-wal` run alone is identical in both modes — 1 000 000 rows, 92 MB
+WAL, boot 1 100 ms, **0 refusals** — and fails only its documented `progressbar`
+assertion (its baseline verdict is FAIL). But chained in the full sweep, the run
+dies right after `23-scl-scale-db` seeds **10 000 043** ledger rows: the next spec's
+boot gate times out (`no boot screen mounted`, after `Timed out receiving message
+from renderer: 300.000`). Reproduced in two consecutive full runs (dying at specs
+`23-scl-scale-wal` and `23-scl-scale-ledger`). The full run reached spec 13 with
+**0 refusals** before the death.
+
+That is a data-scale/boot-cost problem in the sandbox, identical with and without
+the flag, not a boundary refusal. It needs its own triage (boot maintenance cost
+against a 10M-row ledger) before a single-process 48-spec run can be green; the
+suite has to be measured as batches until then.
+
 ## Next, in order
 
-1. Triage the scale-WAL renderer death (does it reproduce without the flag? is it
-   the 2 100-row seeds or memory?).
-2. Migrate the DAT/INVARIANT probes (temp table, no_such_table, DAT-DEL-P, ROLLBACK,
-   bare BEGIN) and the seed/campaign `inventory_ledger` writes to host-side
-   connections.
-3. Re-run the 48-spec sweep; then FIFO reconcile; n>=200 latency; clean floor; tag.
+1. Triage boot cost with a 10M-row `inventory_ledger` (boot maintenance / index /
+   debt repair) — the sweep blocker.
+2. Re-run the 48-spec sweep (or documented batches) at 0 refusals.
+3. FIFO reconcile; n>=200 latency; clean-worktree floor; tag.
