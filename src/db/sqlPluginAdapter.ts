@@ -4512,10 +4512,33 @@ export async function restituteStockBatches(
   // writes run inside restituteStockBatchesInner's transaction; the Dexie
   // mirror stays outside the lock (Dexie I/O must never hold the SQLite
   // writer chain).
-  const productIds = await withBusyRetry(
-    () => withWriteLock(() => restituteStockBatchesInner(allocations, opts)),
-    { attempts: 8, baseDelayMs: 120, label: 'restitute' }
-  );
+  // Native lane (SEC-01): every allocation restores (or mints a REFUND batch)
+  // in one Rust transaction, with the same OCC guard and deterministic seed.
+  let productIds: string[] = [];
+  if (isTauriEnv()) {
+    const { invokeCommand } = await import('../platform/invoke');
+    const nativeDb = await getLocalDb();
+    const device = (await getOrCreateDeviceId(nativeDb)) || 'default';
+    const report = await invokeCommand<{ productIds: string[] }>('restitute_stock_batches', {
+      request: {
+        allocations: allocations.map((a) => ({
+          batchId: a.batchId ?? null,
+          productId: a.productId,
+          quantity: a.quantity,
+          unitCost: a.unitCost,
+        })),
+        seed: opts?.batchKeySeed ?? null,
+        deviceId: device,
+        now: utcNowIso(),
+      },
+    });
+    productIds = report?.productIds ?? [];
+  } else {
+    productIds = await withBusyRetry(
+      () => withWriteLock(() => restituteStockBatchesInner(allocations, opts)),
+      { attempts: 8, baseDelayMs: 120, label: 'restitute' }
+    );
+  }
   if (productIds.length > 0) {
     try {
       const db = await getLocalDb();

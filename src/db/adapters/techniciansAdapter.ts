@@ -249,13 +249,17 @@ export async function startTimeLog(
 ): Promise<string | null> {
   if (!isTauriEnv() || !repairId || !technicianId) return null;
   try {
-    const { db, utcNowIso } = await pluginDb();
+    const { utcNowIso } = await pluginDb();
     const id = newId('tlog');
-    await db.execute(
-      `INSERT INTO technician_time_log (id, repair_id, technician_id, kind, started_at, ended_at)
-       VALUES ($1, $2, $3, $4, $5, NULL)`,
-      [id, repairId, technicianId, kind, utcNowIso()]
-    );
+    // Native lane (SEC-01): the session row is written without the pool.
+    const { invokeCommand } = await import('../../platform/invoke');
+    await invokeCommand<{ changes: number }>('start_time_log', {
+      id,
+      repairId,
+      technicianId,
+      kind,
+      startedAt: utcNowIso(),
+    });
     return id;
   } catch (err) {
     console.error('startTimeLog failed:', err);
@@ -267,14 +271,12 @@ export async function startTimeLog(
 export async function closeOpenTimeLogsForRepair(repairId: string, endedAtIso: string): Promise<number> {
   if (!isTauriEnv() || !repairId) return 0;
   try {
-    const { db } = await pluginDb();
-    const res = (await db.execute(
-      `UPDATE technician_time_log SET ended_at = $2 WHERE repair_id = $1 AND ended_at IS NULL`,
-      [repairId, endedAtIso]
-    )) as { rowsAffected?: number } | undefined;
-    // sqlx reports affected rows; fall back to 1 for older shapes.
-    const affected = typeof res?.rowsAffected === 'number' ? res.rowsAffected : 1;
-    return affected;
+    // Native lane (SEC-01): closes every running session of the repair.
+    const { invokeCommand } = await import('../../platform/invoke');
+    return await invokeCommand<number>('close_open_time_logs', {
+      repairId,
+      endedAt: endedAtIso,
+    });
   } catch (err) {
     console.error(`closeOpenTimeLogsForRepair failed [${repairId}]:`, err);
     return 0;

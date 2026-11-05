@@ -447,28 +447,18 @@ export async function openWarrantyClaimIfRework(order: {
 }): Promise<string | null> {
   if (!isTauriEnv() || !order?.reworkOfRepairId || !order?.id) return null;
   try {
-    const { db, utcNowIso } = await pluginDb();
-    const existing = (await db.select(
-      `SELECT id FROM warranty_claims WHERE rework_repair_id = $1 LIMIT 1`,
-      [order.id]
-    )) as Array<{ id: string }>;
-    if (existing && existing.length > 0) return String(existing[0].id);
+    const { utcNowIso } = await pluginDb();
+    // Native lane (SEC-01): one claim per redo, the existing id converges.
+    const { invokeCommand } = await import('../../platform/invoke');
     const id = newId('wclaim');
     const now = utcNowIso();
-    await db.execute(
-      `INSERT INTO warranty_claims (id, original_repair_id, rework_repair_id, status,
-                                    labor_basis, parts_basis, rma_id, notes,
-                                    opened_at, created_at, updated_at)
-       VALUES ($1, $2, $3, 'open', 0, 0, NULL, $4, $5, $5, $5)`,
-      [
-        id,
-        order.reworkOfRepairId,
-        order.id,
-        `Reprise garantie — ticket d'origine ${order.reworkOfTicketNumber ?? order.reworkOfRepairId}`,
-        now,
-      ]
-    );
-    return id;
+    return await invokeCommand<string | null>('open_warranty_claim', {
+      id,
+      originalRepairId: order.reworkOfRepairId,
+      reworkRepairId: order.id,
+      notes: `Reprise garantie - ticket d'origine ${order.reworkOfTicketNumber ?? order.reworkOfRepairId}`,
+      now,
+    });
   } catch (err) {
     console.error('openWarrantyClaimIfRework failed:', err);
     return null;
@@ -486,29 +476,21 @@ export async function closeWarrantyClaimForRework(
 ): Promise<boolean> {
   if (!isTauriEnv() || !reworkRepairId) return false;
   try {
-    const { db } = await pluginDb();
-    await db.execute(
-      `UPDATE warranty_claims
-       SET status = 'closed',
-           labor_basis = $2,
-           parts_basis = $3,
-           closed_at = $4,
-           updated_at = $4
-       WHERE rework_repair_id = $1 AND status = 'open'`,
-      [
-        reworkRepairId,
-        Math.max(0, Math.round(Number(bases.laborBasis) || 0)),
-        Math.max(0, Math.round(Number(bases.partsBasis) || 0)),
-        bases.closedAt,
-      ]
-    );
-    return true;
+    // Native lane (SEC-01): only an open claim closes, and only once.
+    const { invokeCommand } = await import('../../platform/invoke');
+    return await invokeCommand<boolean>('close_warranty_claim', {
+      reworkRepairId,
+      laborBasis: Math.max(0, Math.round(Number(bases.laborBasis) || 0)),
+      partsBasis: Math.max(0, Math.round(Number(bases.partsBasis) || 0)),
+      closedAt: bases.closedAt,
+    });
   } catch (err) {
-    console.error(`closeWarrantyClaimForRework failed [${reworkRepairId}]:`, err);
+    console.error('closeWarrantyClaimForRework failed:', err);
     return false;
   }
 }
 
+/** Attach (or detach with null) the parts RMA a claim's defective part went into. */
 export async function listWarrantyClaims(): Promise<WarrantyClaimRecord[]> {
   if (!isTauriEnv()) return [];
   try {

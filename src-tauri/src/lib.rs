@@ -42,6 +42,8 @@ pub mod operations_lane;
 pub mod receiving_lane;
 pub mod order_lane;
 pub mod kredy_lane;
+pub mod restitute_lane;
+pub mod repair_lane;
 pub mod shadow_event_lane;
 pub mod schema_heal_sql;
 #[cfg(test)] pub mod sql_boundary;
@@ -2526,10 +2528,15 @@ pub fn run() {
             operations_lane::append_imei_event,
             operations_lane::save_purchase_order,
             operations_lane::save_repair_order,
+            repair_lane::close_warranty_claim,
+            repair_lane::open_warranty_claim,
+            repair_lane::close_open_time_logs,
+            repair_lane::start_time_log,
             kredy_lane::save_debt_plan,
             kredy_lane::pay_debt_plan_entries,
             kredy_lane::close_debt_plan,
             order_lane::sync_order_status,
+            restitute_lane::restitute_stock_batches,
             receiving_lane::insert_stock_batch,
             receiving_lane::insert_supplier_price_rows,
             shadow_event_lane::record_shadow_event,
@@ -2654,10 +2661,15 @@ pub fn run() {
             operations_lane::append_imei_event,
             operations_lane::save_purchase_order,
             operations_lane::save_repair_order,
+            repair_lane::close_warranty_claim,
+            repair_lane::open_warranty_claim,
+            repair_lane::close_open_time_logs,
+            repair_lane::start_time_log,
             kredy_lane::save_debt_plan,
             kredy_lane::pay_debt_plan_entries,
             kredy_lane::close_debt_plan,
             order_lane::sync_order_status,
+            restitute_lane::restitute_stock_batches,
             receiving_lane::insert_stock_batch,
             receiving_lane::insert_supplier_price_rows,
             shadow_event_lane::record_shadow_event,

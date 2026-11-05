@@ -427,3 +427,25 @@ to `generate_handler!`, so the renderer would have swallowed "unknown command" a
 fallen back to SQL. The runtime refusals would have stayed while the tests looked
 green. The ad-hoc allowlist↔handler diff caught it; that diff belongs in the gate
 set, not in a human's head.
+
+### Restitution is native (2026-11-05)
+
+`restitute_stock_batches` is the refund/void restock: live batch restore under an
+OCC version guard, or a `REFUND` batch at the allocation's original unit cost when
+the row is a shadow marker, tombstoned or missing. The seed makes batch ids and
+envelope keys deterministic so a racing peer converges. Row-level goldens pin the
+cost basis (the original batch's cost wins over the caller's; the shadow marker's
+cost never transfers), the phantom-row rule, and the rollback when the envelope
+cannot be written.
+
+`repair_lane.rs` covers the two repair-side writes the spec reached: the technician
+time log (idempotent close) and the rework warranty claim (one per redo, single
+close). With these, `31`, `32` and `84` all measure **zero refused writes in both
+modes**.
+
+Two splice hazards are recorded here because they cost time and both were caught by
+gates rather than review: a template literal with backticks inside a generator
+script broke the file after the handler list had been edited (cargo caught the
+dangling handler names), and a line-range replacement deleted the read function
+`listWarrantyClaims` (tsc caught the orphaned mapper). Line-range splicing needs a
+post-edit diff check, not just a green test run.

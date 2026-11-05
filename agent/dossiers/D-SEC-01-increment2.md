@@ -790,10 +790,54 @@ Two things worth recording:
 reconcile 687 · cargo 542/542 · registry 111 · sql-boundary **306** (down from 307) ·
 drift OK · secrets/licences clean.
 
+## Restitute + repair-side lanes (2026-11-05, E-0210)
+
+**Restitution is native.** `restitute_stock_batches` mirrors the renderer's
+transaction statement-for-statement: live batch → `quantity_remaining + qty`,
+`version + 1`, guarded by the version it read (one re-read on a lost race, then a
+retryable `RESTITUTE_VERSION_CONFLICT`); shadow marker / tombstoned / missing batch
+→ mint a `REFUND` batch at the allocation's unit cost with a seed-derived id, so a
+retry converges instead of minting twins. Five row-level goldens pin the COGS
+effects:
+
+| Test | Asserted row effect |
+|---|---|
+| restore onto the original batch | qty 2→3, **unit_cost stays 700** even though the caller passed 999, version 3→4, envelope carries version 4 |
+| shadow marker | phantom row stays 0; REFUND batch carries the **allocation's** 700, not the marker's 10 |
+| tombstoned batch | row is not resurrected; REFUND batch minted instead |
+| same seed twice | one batch, one envelope |
+| envelope write fails | the whole restock rolls back (qty unchanged) |
+
+**Repair-side lanes** (`repair_lane.rs`, 2 tests): `start_time_log` /
+`close_open_time_logs` (a second close reports 0 and cannot rewrite the first end
+time) and `open_warranty_claim` / `close_warranty_claim` (one claim per redo, close
+is a claim on `status='open'` so the parts basis cannot be absorbed twice).
+
+**Measured (both modes):**
+
+| Spec | Normal | Flag |
+|---|---|---|
+| `31-ref-refunds-part2` | 15/15, **0** | 15/15, **0** (was 2) |
+| `32-ref-refunds-part3` | 15/15, **0** | 15/15, **0** |
+| `84-rep-repair` | 9/24, **0** | 9/24, **0** (was 16) |
+
+`84` is 9/24 in **both** modes, so its failures are not flag-induced.
+
+**Two process notes.** (1) A generator script failed on backticks inside a JS
+template after the handler list had already been edited, producing a binary that
+referenced commands that did not exist — caught by `cargo test`, fixed by moving the
+lanes into their own module. (2) A line-range splice deleted the read function
+`listWarrantyClaims`; `tsc` caught the now-unused mapper and it was restored. Reads
+stay renderer-side by design, so a delete like that is a functional loss, not a
+boundary win.
+
+**Gates:** money 65/0 · zero-tax 23/0 · cash-terms 32/0 · tsc 0 · lint 0 · selftest OK ·
+reconcile 687 · cargo 549/549 · registry 116 · sql-boundary **303** (from 306) ·
+drift OK · secrets/licences clean.
+
 ## Next, in order
 
-1. `db:restitute` lane (FIFO restock at original cost; REFUND batch) — needs
-   row-level COGS goldens, the same bar as the FIFO reconcile.
-2. `technician_time_log` + `warranty_claims` lanes (repair spec).
-3. Re-run the flag sweep per half (documented 10M-fixture exclusion), then FIFO
-   reconcile, n>=200 latency, clean floor, tag.
+1. Re-run the flag sweep (43 non-scale specs) → expect 0; document the 10M fixture
+   exclusion with the measured seed/boot numbers.
+2. FIFO reconcile port (row-level goldens) — the last renderer money algorithm.
+3. n>=200 latency on the current tree; clean floor; tag.
