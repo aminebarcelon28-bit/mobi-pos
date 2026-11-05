@@ -99,6 +99,33 @@ jobs:
   # Release hygiene: the SQL capture hook must not exist in a release
   # build. Source-level cfg review is not enough — this builds the patched
   # plugin in release and greps the artifact for the capture markers.
+  lane-contracts:
+    name: Native lane concurrency contracts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Desktop build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libudev-dev
+
+      - name: Single-claim / duplicate-void / CAS contracts
+        # The concurrency contracts that bracket the read-only flip: held-order
+        # single claim (two recalls -> one winner), duplicate void refused with no
+        # double ledger append, and the version-guarded writes that must change
+        # zero rows when stale.
+        run: |
+          cargo test -p mobi-pos --lib held_order_lane
+          cargo test -p mobi-pos --lib shift_lane
+          cargo test -p mobi-pos --lib void_refund_lane
+          cargo test -p mobi-pos --lib customer_lane
+          cargo test -p mobi-pos --lib sync_lane
+
   capture-release:
     name: Release build ships no SQL capture path
     runs-on: ubuntu-latest
