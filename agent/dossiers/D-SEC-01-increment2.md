@@ -619,8 +619,46 @@ writes whose subject is SQLite behaviour) and the FIFO reconcile algorithm. No a
 lane is left in the measured inventory for the specs exercised so far; the full
 48-spec sweep is what confirms that across every spec.
 
+## First-half flag sweep: only probes refused (2026-11-05, E-0206)
+
+The full 48-spec sweep was attempted twice. Run 4 got through specs 00–23 before the
+sandbox WebView died (`23-scl-scale-wal` "before all" hook: *no boot screen mounted*,
+preceded by `Timed out receiving message from renderer: 300.000`), so it is a
+partial measurement, not a full one. The refusal log up to that point is the useful
+part:
+
+```
+total = 21
+x6  BEGIN IMMEDIATE                                            ← probe
+x3  ROLLBACK                                                   ← probe
+x3  CREATE TEMP TABLE IF NOT EXISTS scl79_strict_app … STRICT   ← probe
+x3  SELECT * FROM dat59_no_such_table                           ← probe
+x3  UPDATE products SET deleted = 1 WHERE id = 'DAT-DEL-P'      ← probe
+x3  INSERT INTO inventory_ledger (…)                            ← harness seed
+```
+
+Every one is a harness write, not an app lane:
+
+* the temp table, `no_such_table`, `DAT-DEL-P` and `ROLLBACK` statements are the
+  DAT/INVARIANT negative controls whose **subject is SQLite behaviour** — they must
+  move to host-side writable connections (the same treatment spec 92 got);
+* the `inventory_ledger` rows come from `e2e-tests/lib/seed.ts` and
+  `e2e-tests/lib/campaign.ts`, i.e. harness seeding through the pool;
+* the six bare `BEGIN IMMEDIATE` are spec-level transaction probes.
+
+So across the first 24 specs **no application lane refused a write** under
+`POS_SQL_QUERY_ONLY=1`. The remaining work is the harness-probe migration, not more
+native commands.
+
+**Open blocker:** the sweep is not full-suite green because the renderer died in the
+scale-WAL spec around the 38-minute mark. That needs triage (scale batch + read-only
+pool, or sandbox memory) before the "full suite at 0" claim and any tag.
+
 ## Next, in order
 
-1. Migrate the DAT/INVARIANT probe writes to host-side writable connections.
-2. Full 48-spec sweep under the flag; address whatever it still finds.
-3. FIFO reconcile port (row-level COGS goldens); n>=200 latency; clean floor; tag.
+1. Triage the scale-WAL renderer death (does it reproduce without the flag? is it
+   the 2 100-row seeds or memory?).
+2. Migrate the DAT/INVARIANT probes (temp table, no_such_table, DAT-DEL-P, ROLLBACK,
+   bare BEGIN) and the seed/campaign `inventory_ledger` writes to host-side
+   connections.
+3. Re-run the 48-spec sweep; then FIFO reconcile; n>=200 latency; clean floor; tag.
