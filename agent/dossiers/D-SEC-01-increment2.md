@@ -705,9 +705,62 @@ the flag, not a boundary refusal. It needs its own triage (boot maintenance cost
 against a 10M-row ledger) before a single-process 48-spec run can be green; the
 suite has to be measured as batches until then.
 
+## Boot triage: the fixture, not boot (2026-11-05, E-0208)
+
+**The scale death is not boot cost.** Measured directly at the fixture size
+(`e2e-tests/results/boot-scale-probe.e2e.ts`, 10 000 000 ledger rows for one product):
+
+```
+3M rows  : seed 23 518 ms      boot 1 123 ms
+10M rows : seed 253 941 ms     boot 2 141 ms
+           host SUM(product)   8 729 ms
+           host COUNT(*)       9 633 ms
+           negative-stock scan   687 ms
+```
+
+Boot is 2.1 s with ten million rows. What takes four minutes is the **host seed**
+(10M inserts maintaining three indexes). At the default 300 s mocha timeout the
+scale spec times out mid-fixture, wdio tears the session down, and every later
+spec's `unlockIfNeeded` reports *no boot screen mounted*. The repo already
+documents the knob for this (`WDIO_MOCHA_TIMEOUT`, "opt in per run" in
+`wdio.conf.ts`), and the runs above used it.
+
+**Full-suite attempts (all under `POS_SQL_QUERY_ONLY=1`):**
+
+| Attempt | Reached | Refusals at death |
+|---|---|---|
+| #4 (default timeout) | spec 23 | 0 |
+| #5 (default timeout) | spec 14 | 0 |
+| #6 (900 s timeout) | spec 14 | 0 |
+
+All three die the same way: after `23-scl-scale-db`/−`ledger` seed ten million
+rows, the app session is gone and every subsequent spec fails its boot gate. That
+is a harness/session limit at this fixture size on this box, reproducible
+regardless of the flag.
+
+**The residual app lanes, measured on everything else.** Running the 43 non-scale
+specs in one process under the flag gives the exact remaining list:
+
+```
+SUITE45 refusals=11
+x4  INSERT INTO repair_orders (…)                        ← repair lane
+x2  /* db:restitute */ BEGIN IMMEDIATE                   ← restitution transaction
+x2  /* sync:order */ BEGIN IMMEDIATE                     ← order status flip transaction
+x1  INSERT INTO stock_batches (…)                         ← restitution REFUND batch
+x1  UPDATE stock_batches SET quantity_remaining = …       ← restitution restock
+x1  INSERT INTO debt_plan_entries (…)                     ← installment plan
+```
+
+The earlier batch C (specs 24–48 minus scale) measured **0 refusals**, so the
+remainder is entirely these four lanes: `repair_orders`, `db:restitute`,
+`sync:order`, `debt_plan_entries`.
+
 ## Next, in order
 
-1. Triage boot cost with a 10M-row `inventory_ledger` (boot maintenance / index /
-   debt repair) — the sweep blocker.
-2. Re-run the 48-spec sweep (or documented batches) at 0 refusals.
-3. FIFO reconcile; n>=200 latency; clean-worktree floor; tag.
+1. `sync_order_status` lane (status flip + version bump + envelope; ALREADY_VOIDED
+   refusal) and `debt_plan_entries` — both small, same shape as the shift lane.
+2. `repair_orders` lane (insert/update, version bump).
+3. `db:restitute` lane — FIFO restock at original cost; needs row-level COGS
+   goldens, same bar as the FIFO reconcile.
+4. Then the flag sweep on everything but the 10M fixture (documented), FIFO
+   reconcile, n>=200 latency, clean floor, tag.

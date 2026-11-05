@@ -396,3 +396,18 @@ re-pointed at the native layer:
 10 000 043-row scale fixture into the sweep makes the next spec unable to boot
 within 180 s, with or without `POS_SQL_QUERY_ONLY`. That is boot cost at data scale,
 not a refusal, and must be triaged before a single-process 48-spec run can be green.
+
+### Boot is not the scale bottleneck (2026-11-05)
+
+The full-suite runs kept dying after the ten-million-row ledger fixture, and the
+obvious reading — "boot scans the ledger" — was wrong. Measured: boot with 10M
+ledger rows is **2 141 ms** (3M: 1 123 ms); the four-minute cost is the *host seed*
+maintaining three indexes. At the default 300 s mocha timeout that seed times the
+spec out, wdio tears down the session, and later specs see "no boot screen". The
+supported `WDIO_MOCHA_TIMEOUT` per-run option is the fix for measurement; it is not
+a gate change.
+
+Running the 43 non-scale specs in one process under the flag produced the exact
+residual app lanes (11 refusals): `repair_orders` (4), `db:restitute` (BEGIN + batch
+insert + restock update), `sync:order` (BEGIN ×2), `debt_plan_entries` (1). Everything
+else in that set is at zero.
