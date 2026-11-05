@@ -835,9 +835,43 @@ boundary win.
 reconcile 687 · cargo 549/549 · registry 116 · sql-boundary **303** (from 306) ·
 drift OK · secrets/licences clean.
 
+## 43-spec flag sweep completes: 3 refusals (2026-11-05, E-0211)
+
+For the first time the non-scale suite **finished** under
+`POS_SQL_QUERY_ONLY=1` (the three earlier attempts died at the 10M fixture):
+
+```
+duration 6013.6s   passing 271   failing 94   skipped 0   cases 335
+SWEEP43 refusals=3
+```
+
+Down from 11 in the previous 43-spec run. The three are one coherent surface —
+**product deletion**:
+
+| # | Statement (verbatim prefix) | Writer |
+|---|---|---|
+| 1 | `UPDATE products SET deleted=1, version=version+1, updated_at=$1, sync_status='pending' WHERE id=$2` | `sqlPluginAdapter.ts:4116` (`syncProductDelete`) |
+| 2 | `INSERT INTO sync_outbox (…) VALUES ($1,'product',$2,'DELETE',…)` | `sqlPluginAdapter.ts:4121` (same lane's tombstone envelope) |
+| 3 | `UPDATE stock_batches SET deleted = 1, version = version + 1, updated_at = $1, sync_status = 'pending' WHERE product_id = $2 AND deleted = 0` | `createCatalogSlice.ts:231` (batch tombstone on product delete) |
+
+So the remaining renderer writes on this suite are exactly one lane:
+**delete a product** → tombstone the product, tombstone its live batches, enqueue the
+product DELETE and per-batch UPSERT envelopes, and record the `product_deleted`
+shadow event — all of which belong in one native transaction
+(`delete_product`), the same shape as the other lanes.
+
+The 94 failing cases are the suite's normal baseline set (335 cases here; the
+committed baseline records hundreds of FAIL/N/A rows); the metric this run exists to
+prove is the refusal count, which is now 3.
+
+**Note on run cost:** the suite takes ~100 minutes with the raised mocha timeout on
+this box, and the 10M-fixture specs still cannot share a process (documented in
+E-0208: 10M boot 2 141 ms vs 254 s host seed).
+
 ## Next, in order
 
-1. Re-run the flag sweep (43 non-scale specs) → expect 0; document the 10M fixture
-   exclusion with the measured seed/boot numbers.
-2. FIFO reconcile port (row-level goldens) — the last renderer money algorithm.
-3. n>=200 latency on the current tree; clean floor; tag.
+1. `delete_product` lane (product + batch tombstones + envelopes + shadow event in
+   one transaction), with a test that a second delete is idempotent and a stale
+   echo cannot resurrect the row.
+2. Re-run the 43-spec sweep → expect 0 refusals.
+3. FIFO reconcile port; n>=200 latency on the current tree; clean floor; tag.
