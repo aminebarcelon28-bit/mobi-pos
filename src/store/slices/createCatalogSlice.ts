@@ -219,55 +219,18 @@ export const createCatalogSlice: StateCreator<PosState, [], [], CatalogSlice> = 
       // products LEFT JOIN) as phantom unsellable assets. Tombstone them
       // here (best-effort, never fails the delete) and audit the write-off.
       try {
-        const { getLocalDb } = await import('../../db/sqlPluginAdapter');
-        const db = await getLocalDb();
-        const live = (await db
-          .select('SELECT batch_id FROM stock_batches WHERE product_id = $1 AND deleted = 0', [id])
-          .catch(() => [])) as Array<{ batch_id: string }>;
-        const batchIds = [...new Set((live ?? []).map((r) => String(r.batch_id)).filter(Boolean))];
+        // Native lane (SEC-01): the batch tombstones and their envelopes commit
+        // in one transaction with the product tombstone (idempotent: stable keys).
+        const { invokeCommand } = await import('../../platform/invoke');
+        const report = await invokeCommand<{ batchesTombstoned: number }>('delete_product', {
+          request: { productId: id, deviceId: 'local', now: new Date().toISOString() },
+        });
+        const batchIds = report?.batchesTombstoned ? [id] : [];
         if (batchIds.length > 0) {
-          const now = new Date().toISOString();
-          await db.execute(
-            `UPDATE stock_batches SET deleted = 1, version = version + 1, updated_at = $1, sync_status = 'pending' WHERE product_id = $2 AND deleted = 0`,
-            [now, id]
-          );
-          // Tombstone version discipline (H27 pattern): the remote version guard
-          // checks excluded.version, so the payload MUST carry the post-UPDATE
-          // clock. A version-less payload pushes as v1 and loses to ANY
-          // previously-synced remote row -> 10 wasted retries -> quarantine
-          // badge. Never enqueue version-less: the repair lane re-enqueues from
-          // the authority row (with version) if this read-back fails.
-          const versed = (await db
-            .select('SELECT batch_id, version FROM stock_batches WHERE product_id = $1 AND deleted = 1', [id])
-            .catch(() => [])) as Array<{ batch_id: string; version: number }>;
-          const versionByBatch = new Map(
-            (versed ?? []).map((r) => [String(r.batch_id), Number(r.version)])
-          );
-          for (const bid of batchIds) {
-            const bv = versionByBatch.get(bid);
-            if (!Number.isFinite(bv)) {
-              console.warn(
-                `[catalog:delete] Skipping version-less tombstone for batch [${bid}] — repair lane re-enqueues from authority.`
-              );
-              continue;
-            }
-            await db
-              .execute(
-                `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
-                 VALUES ($1, 'stock_batches', $2, 'UPSERT', $3, 'pending')
-                 ON CONFLICT(idempotency_key) DO UPDATE SET payload_json=excluded.payload_json, status='pending', retry_count=0, next_retry_at=NULL, last_error=NULL, updated_at=$4`,
-                [
-                  `sb-${bid}-tombstone`,
-                  bid,
-                  JSON.stringify({ batch_id: bid, product_id: id, deleted: 1, version: bv, updated_at: now }),
-                  now,
-                ]
-              )
-              .catch(() => {});
-          }
           try {
-            const { mirrorStockBatchesToDexie } = await import('../../db/sqlPluginAdapter');
-            await mirrorStockBatchesToDexie(db as never, [id]);
+            const { getLocalDb, mirrorStockBatchesToDexie } = await import('../../db/sqlPluginAdapter');
+            const db2 = await getLocalDb();
+            await mirrorStockBatchesToDexie(db2 as never, [id]);
           } catch {
             // Mirror heals on next mutation/boot.
           }

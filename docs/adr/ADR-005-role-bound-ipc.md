@@ -449,3 +449,21 @@ script broke the file after the handler list had been edited (cargo caught the
 dangling handler names), and a line-range replacement deleted the read function
 `listWarrantyClaims` (tsc caught the orphaned mapper). Line-range splicing needs a
 post-edit diff check, not just a green test run.
+
+### Product deletion is native (2026-11-05)
+
+`delete_product` replaces the last renderer write on the suite: the product
+tombstone, its `DELETE` envelope, the tombstone of every live `stock_batches` row
+with one UPSERT envelope per batch, and the `product_deleted` shadow event — one
+transaction, with the product snapshot taken before the tombstone so the envelope
+carries what the remote needs even if it never saw the row.
+
+The version discipline is the point: the tombstone is `pre-delete + 1` and that
+value goes into the payload, because the pull guard accepts equal versions and a
+stale echo would otherwise resurrect a deleted product and make it buyable again.
+Keys are stable (`legacy-<id>` when the row had none, `sb-<batch>-tombstone`), so a
+second delete converges: the device probe shows 3 envelopes before and after the
+second call, and 0 batches tombstoned the second time.
+
+With this lane the 43-spec flag sweep's measured refusals (11 → 3) should reach 0;
+the confirming sweep is the next run, not an inference.

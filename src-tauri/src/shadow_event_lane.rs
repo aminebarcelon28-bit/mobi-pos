@@ -60,6 +60,17 @@ fn round(value: &serde_json::Value) -> i64 {
         .unwrap_or(0)
 }
 
+/// Mint a fresh envelope id (same `AUD-<millis>-<8hex>` shape the audit lane
+/// uses), so a caller that does not have one can still record a shadow event.
+pub fn mint_event_id() -> String {
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let tail = uuid::Uuid::new_v4().to_string();
+    format!("AUD-{millis}-{}", &tail[..8])
+}
+
 fn text<'a>(data: &'a serde_json::Value, key: &str) -> &'a str {
     data.get(key).and_then(|v| v.as_str()).unwrap_or("")
 }

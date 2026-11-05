@@ -4093,23 +4093,34 @@ export async function syncProductUpsertBulk(products: ProductSyncInput[]): Promi
 }
 
 /** Product delete sync: soft-delete locally + tombstone outbox op (full snapshot
- *  payload so the remote can upsert-then-tombstone even if it never saw the row). */
+ *  payload so the remote can upsert-then-tombstone even if it never saw the row).
+ *
+ *  Native lane (SEC-01): product tombstone, its DELETE envelope, every live
+ *  batch tombstone with its UPSERT envelope, and the `product_deleted` shadow
+ *  event, in one Rust transaction. Non-Tauri hosts keep the SQL path. */
 export function syncProductDelete(id: string): Promise<void> {
   return withWriteLock(async () => {
-    const db = await getLocalDb();
-    const now = utcNowIso();
     const safeId = String(id || '');
     if (!safeId) return;
+    if (isTauriEnv()) {
+      const db = await getLocalDb();
+      const deviceId = (await getOrCreateDeviceId(db)) || 'default';
+      const { invokeCommand } = await import('../platform/invoke');
+      try {
+        await invokeCommand<{ productVersion: number }>('delete_product', {
+          request: { productId: safeId, deviceId, now: utcNowIso() },
+        });
+      } catch (err) {
+        const msg = String((err as Error)?.message ?? err);
+        if (!/not found|unknown command/i.test(msg)) throw err;
+      }
+      return;
+    }
+    const db = await getLocalDb();
+    const now = utcNowIso();
     const rows = (await db.select('SELECT * FROM products WHERE id=$1', [safeId]).catch(() => [])) as Array<Record<string, unknown>>;
     const pkey = (rows?.[0]?.idempotency_key as string) || `legacy-${safeId}`;
     // H18b: the tombstone must carry a version strictly above the pre-delete row.
-    // The pull guard is `WHERE excluded.version >= products.version`; without a
-    // bump the local row stays at vN and a stale same-version echo (vN, deleted=0)
-    // pulled before the tombstone is pushed satisfies vN >= vN and lands
-    // deleted=0 — silently resurrecting the merchant's deleted product and making
-    // it buyable again at the till. Bump the clock, like upsertProduct does
-    // (H15), and stamp the bumped value into the payload so the remote DELETE
-    // guard also sees a strictly-newer tombstone.
     const tombstoneVersion = Number(rows?.[0]?.version ?? 0) + 1;
     const snapshot = { ...(rows?.[0] ?? { id: safeId }), deleted: 1, updated_at: now, version: tombstoneVersion };
     await db.execute(
@@ -4123,22 +4134,6 @@ export function syncProductDelete(id: string): Promise<void> {
        ON CONFLICT(idempotency_key) DO UPDATE SET operation='DELETE', payload_json=excluded.payload_json, status='pending', retry_count=0, next_retry_at=NULL, last_error=NULL, updated_at=$4`,
       [pkey, safeId, toBoundedSyncJson(snapshot), now],
     );
-
-    // Phase P1 Shadow Event Interceptor: Record product deletion
-    try {
-      const deviceId = (await getOrCreateDeviceId(db)) || 'default';
-      await recordShadowEvent(
-        db,
-        {
-          type: 'product_deleted',
-          data: { id: safeId },
-        },
-        `product:${safeId}`,
-        deviceId
-      );
-    } catch (shadowErr) {
-      console.warn('[syncProductDelete] Shadow event recording non-fatal error:', shadowErr);
-    }
   });
 }
 

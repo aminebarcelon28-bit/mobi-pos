@@ -868,10 +868,41 @@ prove is the refusal count, which is now 3.
 this box, and the 10M-fixture specs still cannot share a process (documented in
 E-0208: 10M boot 2 141 ms vs 254 s host seed).
 
+## Product delete is native (2026-11-05, E-0212)
+
+The three refusals left by the 43-spec sweep were one lane: deleting a product. It is
+now `delete_product` (`src-tauri/src/delete_lane.rs`, 5 tests), one transaction:
+
+1. read the product (key, version) **before** the tombstone;
+2. tombstone it with `version + 1` (H18b: the pull guard is
+   `excluded.version >= row`, so a stale same-version echo must lose);
+3. enqueue the product `DELETE` with the **full snapshot** at the bumped clock;
+4. tombstone every live `stock_batches` row of the product, then enqueue one
+   UPSERT per batch at its committed version (`sb-<batch>-tombstone`, so a retry
+   converges);
+5. record the `product_deleted` shadow event after the commit (best-effort,
+   exactly like the renderer did).
+
+The `createCatalogSlice` batch block now calls the same command instead of doing its
+own UPDATE + per-batch envelopes.
+
+**Device probe (real app, invoke → host read-back):**
+
+```
+first  : OK {"productChanged":true,"productVersion":5,"batchesTombstoned":2,"idempotencyKey":"pk-DEL-P"}
+second : OK {"productChanged":true,"productVersion":6,"batchesTombstoned":0,"idempotencyKey":"pk-DEL-P"}
+product: deleted=1 version=5
+batches: DEL-B1 deleted=1 v3 · DEL-B2 deleted=1 v6
+envelopes: product/pk-DEL-P/DELETE · sb-DEL-B1-tombstone/UPSERT · sb-DEL-B2-tombstone/UPSERT
+envCount 3 -> envCountAfter 3   (a second delete converges, it does not multiply)
+```
+
+**Gates:** money 65/0 · zero-tax 23/0 · cash-terms 32/0 · tsc 0 · lint 0 · selftest OK ·
+reconcile 687 · cargo **554**/554 · registry **117** · sql-boundary **301** (from 303) ·
+drift OK · secrets/licences clean.
+
 ## Next, in order
 
-1. `delete_product` lane (product + batch tombstones + envelopes + shadow event in
-   one transaction), with a test that a second delete is idempotent and a stale
-   echo cannot resurrect the row.
-2. Re-run the 43-spec sweep → expect 0 refusals.
-3. FIFO reconcile port; n>=200 latency on the current tree; clean floor; tag.
+1. Re-run the 43-spec flag sweep → expect **0** refusals (takes ~100 min).
+2. FIFO reconcile port (row-level goldens).
+3. n>=200 latency on the current tree; clean floor; tag.
