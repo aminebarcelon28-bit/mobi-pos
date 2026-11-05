@@ -13,6 +13,47 @@ use crate::trust_core::ipc_authorizer::TrustError;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
+/// Insert a minimal product stub when a batch references an unknown product
+/// (parent-row FK safety). Idempotent: an existing row is never touched.
+pub fn ensure_product_stub_core(
+    conn: &Connection,
+    id: &str,
+    now: &str,
+) -> Result<usize, String> {
+    if id.trim().is_empty() {
+        return Err("ensure_product_stub: id required".to_string());
+    }
+    conn.execute(
+        "INSERT OR IGNORE INTO products (id, sku, barcode, title, brand, category, price,
+            wholesale_price, cost_price, stock, json_payload, device_id, idempotency_key,
+            sync_status, created_at, updated_at, deleted)
+         VALUES (?1,'','','', 'Autre','Tous les produits',0, 0,0,0,?2,'local',?3,'pending',?4,?4,0)",
+        rusqlite::params![
+            id,
+            serde_json::json!({ "id": id, "stub": true }).to_string(),
+            format!("stub-{id}"),
+            now
+        ],
+    )
+    .map_err(|e| format!("ensure_product_stub: {e}"))
+}
+
+#[tauri::command]
+pub fn ensure_product_stub(
+    app: tauri::AppHandle,
+    id: String,
+    now: String,
+) -> Result<usize, TrustError> {
+    crate::trust_core::ipc_authorizer::authorize_and_execute(
+        "ensure_product_stub",
+        crate::trust_core::capability_policy::Capability::OperationalWrites,
+        |_| {
+            let conn = open_db(&app)?;
+            ensure_product_stub_core(&conn, &id, &now).map_err(TrustError::op_failed)
+        },
+    )
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OpeningBatch {
@@ -316,6 +357,179 @@ pub fn upsert_product(
     )
 }
 
+// ── inventory deltas ───────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InventoryDelta {
+    pub id: Option<String>,
+    pub idempotency_key: Option<String>,
+    pub product_id: String,
+    pub delta: i64,
+    pub reason: String,
+    pub ref_type: Option<String>,
+    pub ref_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct InventoryDeltaReport {
+    pub ledger_rows: usize,
+    pub touched_products: usize,
+    pub device_id: String,
+}
+
+fn row_json(row: &rusqlite::Row<'_>, names: &[String]) -> Result<serde_json::Value, String> {
+    use rusqlite::types::Value as SqlValue;
+    let mut obj = serde_json::Map::new();
+    for (i, name) in names.iter().enumerate() {
+        let v: SqlValue = row.get(i).map_err(|e| format!("row value: {e}"))?;
+        let j = match v {
+            SqlValue::Null => serde_json::Value::Null,
+            SqlValue::Integer(n) => serde_json::json!(n),
+            SqlValue::Real(f) => serde_json::json!(f),
+            SqlValue::Text(t) => serde_json::Value::String(t),
+            SqlValue::Blob(_) => serde_json::Value::Null,
+        };
+        obj.insert(name.clone(), j);
+    }
+    Ok(serde_json::Value::Object(obj))
+}
+
+/// Append ledger deltas, recompute stock and emit the ledger/product envelopes in
+/// one transaction (the renderer used to do five writes per product).
+pub fn append_inventory_deltas_core(
+    conn: &mut Connection,
+    deltas: &[InventoryDelta],
+    device_id: &str,
+) -> Result<InventoryDeltaReport, String> {
+    let tx = conn.transaction().map_err(|e| format!("deltas tx: {e}"))?;
+    let now = crate::trust_core::time_anchor::iso_utc_ms(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0),
+    );
+    let mut report = InventoryDeltaReport {
+        device_id: device_id.to_string(),
+        ..Default::default()
+    };
+
+    for d in deltas {
+        let ledger_id = d
+            .id
+            .clone()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let ledger_key = d
+            .idempotency_key
+            .clone()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| ledger_id.clone());
+        let inserted = tx
+            .execute(
+                "INSERT INTO inventory_ledger (id, product_id, delta, reason, ref_type, ref_id, device_id,
+                    idempotency_key, sync_status, created_at, updated_at, deleted)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,'pending',?9,?9,0)
+                 ON CONFLICT(id) DO NOTHING",
+                rusqlite::params![
+                    ledger_id,
+                    d.product_id,
+                    d.delta,
+                    d.reason,
+                    d.ref_type,
+                    d.ref_id,
+                    device_id,
+                    ledger_key,
+                    now
+                ],
+            )
+            .map_err(|e| format!("delta ledger: {e}"))?;
+        report.ledger_rows += inserted;
+        let payload = serde_json::json!({
+            "id": ledger_id,
+            "product_id": d.product_id,
+            "delta": d.delta,
+            "reason": d.reason,
+            "ref_type": d.ref_type,
+            "ref_id": d.ref_id,
+            "device_id": device_id,
+            "idempotency_key": ledger_key,
+        })
+        .to_string();
+        tx.execute(
+            "INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
+             VALUES (?1,'ledger',?2,'UPSERT',?3,'pending') ON CONFLICT(idempotency_key) DO NOTHING",
+            rusqlite::params![ledger_key, ledger_id, payload],
+        )
+        .map_err(|e| format!("delta ledger outbox: {e}"))?;
+    }
+
+    let mut touched: Vec<String> = Vec::new();
+    for d in deltas {
+        if !d.product_id.is_empty() && !touched.contains(&d.product_id) {
+            touched.push(d.product_id.clone());
+        }
+    }
+    for pid in &touched {
+        tx.execute(
+            "UPDATE products SET stock = COALESCE((SELECT SUM(delta) FROM inventory_ledger WHERE product_id=?1 AND deleted=0), stock),
+                updated_at=?2, sync_status='pending' WHERE id=?1",
+            rusqlite::params![pid, now],
+        )
+        .map_err(|e| format!("delta stock recompute: {e}"))?;
+    }
+    for pid in &touched {
+        let mut stmt = tx
+            .prepare("SELECT * FROM products WHERE id = ?1")
+            .map_err(|e| format!("delta product read: {e}"))?;
+        let names: Vec<String> = stmt.column_names().iter().map(|n| n.to_string()).collect();
+        let mut rows = stmt.query(rusqlite::params![pid]).map_err(|e| format!("delta product query: {e}"))?;
+        if let Some(row) = rows.next().map_err(|e| format!("delta product row: {e}"))? {
+            let value = row_json(row, &names)?;
+            let key = value
+                .get("idempotency_key")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| format!("stub-{pid}"));
+            let payload = value.to_string();
+            if payload.len() > 256 * 1024 {
+                return Err("delta product payload oversized".to_string());
+            }
+            tx.execute(
+                "INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
+                 VALUES (?1,'product',?2,'UPSERT',?3,'pending')
+                 ON CONFLICT(idempotency_key) DO UPDATE SET payload_json=excluded.payload_json, updated_at=?4",
+                rusqlite::params![key, pid, payload, now],
+            )
+            .map_err(|e| format!("delta product outbox: {e}"))?;
+        }
+    }
+    tx.commit().map_err(|e| format!("delta commit: {e}"))?;
+    report.touched_products = touched.len();
+    Ok(report)
+}
+
+#[tauri::command]
+pub fn append_inventory_deltas(
+    app: tauri::AppHandle,
+    deltas: Vec<InventoryDelta>,
+    device_id: String,
+) -> Result<InventoryDeltaReport, TrustError> {
+    crate::trust_core::ipc_authorizer::authorize_and_execute(
+        "append_inventory_deltas",
+        crate::trust_core::capability_policy::Capability::OperationalWrites,
+        |_| {
+            if deltas.len() > 500 {
+                return Err(TrustError::op_failed("append_inventory_deltas: batch too large"));
+            }
+            let mut conn = open_db(&app)?;
+            append_inventory_deltas_core(&mut conn, &deltas, &device_id).map_err(TrustError::op_failed)
+        },
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -331,14 +545,15 @@ mod tests {
                 json_payload TEXT, device_id TEXT, idempotency_key TEXT, sync_status TEXT,
                 created_at TEXT, updated_at TEXT, deleted INTEGER DEFAULT 0,
                 version INTEGER NOT NULL DEFAULT 1);
-             CREATE TABLE inventory_ledger (id TEXT PRIMARY KEY, product_id TEXT, delta INTEGER,
-                reason TEXT, ref_type TEXT, ref_id TEXT, device_id TEXT, idempotency_key TEXT,
-                sync_status TEXT, created_at TEXT, updated_at TEXT, deleted INTEGER DEFAULT 0);
+
              CREATE TABLE stock_batches (batch_id TEXT PRIMARY KEY, product_id TEXT,
                 quantity_remaining INTEGER, unit_cost REAL, freight_per_unit REAL, received_at TEXT,
                 purchase_order_id TEXT, device_id TEXT, idempotency_key TEXT, sync_status TEXT,
                 version INTEGER NOT NULL DEFAULT 1, created_at TEXT, updated_at TEXT,
                 deleted INTEGER DEFAULT 0);
+             CREATE TABLE inventory_ledger (id TEXT PRIMARY KEY, product_id TEXT, delta INTEGER,
+                reason TEXT, ref_type TEXT, ref_id TEXT, device_id TEXT, idempotency_key TEXT,
+                sync_status TEXT, created_at TEXT, updated_at TEXT, deleted INTEGER DEFAULT 0);
              CREATE TABLE sync_outbox (id INTEGER PRIMARY KEY AUTOINCREMENT,
                 idempotency_key TEXT NOT NULL UNIQUE, entity_type TEXT NOT NULL, entity_id TEXT NOT NULL,
                 operation TEXT NOT NULL, payload_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
@@ -376,6 +591,90 @@ mod tests {
             ledger_adjust: None,
             opening_batch: None,
         }
+    }
+
+    #[test]
+    fn product_stub_is_idempotent_and_never_overwrites() {
+        let conn = seeded();
+        assert_eq!(ensure_product_stub_core(&conn, "PX", "2026-11-05T10:00:00Z").unwrap(), 1);
+        assert_eq!(ensure_product_stub_core(&conn, "PX", "2026-11-05T10:00:01Z").unwrap(), 0);
+        let (title, key): (String, String) = conn
+            .query_row("SELECT title, idempotency_key FROM products WHERE id='PX'", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(title, "");
+        assert_eq!(key, "stub-PX");
+    }
+
+    #[test]
+    fn inventory_deltas_commit_with_stock_and_envelopes() {
+        let mut conn = seeded();
+        conn.execute_batch(
+            "INSERT INTO products (id, sku, barcode, title, brand, category, price, stock, json_payload, updated_at, idempotency_key, version)
+             VALUES ('P1', 'S', 'B', 'T', 'Br', 'C', 10, 5, '{}', '2026-11-01', 'pk-P1', 2)",
+        )
+        .unwrap();
+        let report = append_inventory_deltas_core(
+            &mut conn,
+            &[
+                InventoryDelta {
+                    id: Some("L1".to_string()),
+                    idempotency_key: None,
+                    product_id: "P1".to_string(),
+                    delta: 3,
+                    reason: "ADJUST".to_string(),
+                    ref_type: None,
+                    ref_id: None,
+                },
+                InventoryDelta {
+                    id: Some("L2".to_string()),
+                    idempotency_key: None,
+                    product_id: "P1".to_string(),
+                    delta: -1,
+                    reason: "SALE".to_string(),
+                    ref_type: Some("order".to_string()),
+                    ref_id: Some("T1".to_string()),
+                },
+            ],
+            "dev",
+        )
+        .expect("deltas");
+        assert_eq!(report.ledger_rows, 2);
+        assert_eq!(report.touched_products, 1);
+        let stock: i64 = conn
+            .query_row("SELECT stock FROM products WHERE id='P1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(stock, 2, "the ledger is the truth: 3 - 1");
+        let entities: Vec<String> = conn
+            .prepare("SELECT DISTINCT entity_type FROM sync_outbox ORDER BY entity_type")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(entities, vec!["ledger".to_string(), "product".to_string()]);
+    }
+
+    #[test]
+    fn a_duplicate_delta_id_is_a_noop() {
+        let mut conn = seeded();
+        let d = InventoryDelta {
+            id: Some("L1".to_string()),
+            idempotency_key: None,
+            product_id: "P1".to_string(),
+            delta: 2,
+            reason: "ADJUST".to_string(),
+            ref_type: None,
+            ref_id: None,
+        };
+        append_inventory_deltas_core(&mut conn, &[d.clone()], "dev").unwrap();
+        let again = append_inventory_deltas_core(&mut conn, &[d], "dev").unwrap();
+        assert_eq!(again.ledger_rows, 0, "ON CONFLICT DO NOTHING");
+        let rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM inventory_ledger", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows, 1);
     }
 
     #[test]

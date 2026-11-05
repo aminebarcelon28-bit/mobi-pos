@@ -549,16 +549,13 @@ export const customerAdapter = {
   async deleteCustomer(id: string): Promise<boolean> {
     if (isTauriEnv()) {
       try {
-        const { getLocalDb, utcNowIso } = await import('../sqlPluginAdapter');
-        const db = await getLocalDb();
-        const verRows = (await db
-          .select('SELECT version FROM customers WHERE id=$1', [id])
-          .catch(() => [])) as Array<{ version: number }>;
-        const nextVersion = (verRows?.length ?? 0) > 0 ? Number(verRows[0].version) + 1 : 1;
-        await db.execute(
-          'UPDATE customers SET deleted = 1, version = $1, updated_at = $2 WHERE id = $3',
-          [nextVersion, utcNowIso(), id],
-        );
+        // Native lane (SEC-01): the tombstone and its version bump commit
+        // atomically; a stale same-version echo cannot resurrect the row.
+        const { invokeCommand } = await import('../../platform/invoke');
+        await invokeCommand<number>('tombstone_customer', {
+          id,
+          now: new Date().toISOString(),
+        });
       } catch (err) {
         console.error(`[customerAdapter] SQLite tombstone FAILED for customer [${id}]:`, err);
         return false;

@@ -3474,55 +3474,75 @@ async function appendInventoryDeltasInner(
   const deviceId = (await getOrCreateDeviceId(db)) || 'default';
   const now = utcNowIso();
 
-  let began = false;
-  began = await beginImmediate(db, 'appendInventoryDeltas');
-
-  try {
-    for (const d of deltas) {
-      const ledgerId = String(d.id || newIdempotencyKey());
-      const ledgerKey = String(d.idempotencyKey || d.id || newIdempotencyKey());
-      const prodId = String(d.productId || 'unknown');
-      await db.execute(
-        `INSERT INTO inventory_ledger (id, product_id, delta, reason, ref_type, ref_id, device_id,
-          idempotency_key, sync_status, created_at, updated_at, deleted)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'pending',$9,$9,0)
-          ON CONFLICT(id) DO NOTHING`,
-        [ledgerId, prodId, Number(d.delta ?? 0), String(d.reason ?? 'ADJUST'), d.refType ? String(d.refType) : null, d.refId ? String(d.refId) : null, deviceId, ledgerKey, now],
-      );
-      await db.execute(
-        `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
-         VALUES ($1,'ledger',$2,'UPSERT',$3,'pending') ON CONFLICT(idempotency_key) DO NOTHING`,
-        [
-          ledgerKey, ledgerId,
-          JSON.stringify({ id: ledgerId, product_id: prodId, delta: Number(d.delta ?? 0), reason: String(d.reason ?? 'ADJUST'), ref_type: d.refType ?? null, ref_id: d.refId ?? null, device_id: deviceId, idempotency_key: ledgerKey }),
-        ],
-      );
+  // Native lane (SEC-01): ledger rows + stock recompute + envelopes in
+  // one Rust transaction. Shadow events stay here, after the commit.
+  if (isTauriEnv()) {
+    const { invokeCommand } = await import('../platform/invoke');
+    const ledgerRows = deltas.map((d) => ({
+      id: d.id ?? null,
+      idempotencyKey: (d as unknown as { idempotencyKey?: string }).idempotencyKey ?? null,
+      productId: String(d.productId ?? 'unknown'),
+      delta: Number(d.delta ?? 0),
+      reason: String(d.reason ?? 'ADJUST'),
+      refType: d.refType ? String(d.refType) : null,
+      refId: d.refId ? String(d.refId) : null,
+    }));
+    await invokeCommand<{ ledgerRows: number }>('append_inventory_deltas', {
+      deltas: ledgerRows,
+      deviceId,
+    });
+  } else {
+    let began = false;
+    began = await beginImmediate(db, 'appendInventoryDeltas');
+  
+    try {
+      for (const d of deltas) {
+        const ledgerId = String(d.id || newIdempotencyKey());
+        const ledgerKey = String(d.idempotencyKey || d.id || newIdempotencyKey());
+        const prodId = String(d.productId || 'unknown');
+        await db.execute(
+          `INSERT INTO inventory_ledger (id, product_id, delta, reason, ref_type, ref_id, device_id,
+            idempotency_key, sync_status, created_at, updated_at, deleted)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'pending',$9,$9,0)
+            ON CONFLICT(id) DO NOTHING`,
+          [ledgerId, prodId, Number(d.delta ?? 0), String(d.reason ?? 'ADJUST'), d.refType ? String(d.refType) : null, d.refId ? String(d.refId) : null, deviceId, ledgerKey, now],
+        );
+        await db.execute(
+          `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
+           VALUES ($1,'ledger',$2,'UPSERT',$3,'pending') ON CONFLICT(idempotency_key) DO NOTHING`,
+          [
+            ledgerKey, ledgerId,
+            JSON.stringify({ id: ledgerId, product_id: prodId, delta: Number(d.delta ?? 0), reason: String(d.reason ?? 'ADJUST'), ref_type: d.refType ?? null, ref_id: d.refId ?? null, device_id: deviceId, idempotency_key: ledgerKey }),
+          ],
+        );
+      }
+      const touched = [...new Set(deltas.map((d) => String(d.productId || '')).filter(Boolean))];
+      for (const pid of touched) {
+        await db.execute(
+          `UPDATE products SET stock = COALESCE((SELECT SUM(delta) FROM inventory_ledger WHERE product_id=$1 AND deleted=0), stock),
+            updated_at=$2, sync_status='pending' WHERE id=$1`,
+          [pid, now],
+        );
+      }
+      for (const pid of touched) {
+        const rows = (await db.select('SELECT * FROM products WHERE id=$1', [pid]).catch(() => [])) as Array<Record<string, unknown>>;
+        const prow = rows?.[0];
+        if (!prow) continue;
+        const pkey = (prow.idempotency_key as string) || `stub-${pid}`;
+        await db.execute(
+          `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
+           VALUES ($1,'product',$2,'UPSERT',$3,'pending')
+           ON CONFLICT(idempotency_key) DO UPDATE SET payload_json=excluded.payload_json, updated_at=$4`,
+          [pkey, pid, toBoundedSyncJson(prow), now],
+        );
+      }
+      if (began) await db.execute('COMMIT;');
+    } catch (err) {
+      if (began) await db.execute('ROLLBACK;').catch(() => {});
+      console.error('[appendInventoryDeltas] Failed to append deltas:', err);
+      throw err;
     }
-    const touched = [...new Set(deltas.map((d) => String(d.productId || '')).filter(Boolean))];
-    for (const pid of touched) {
-      await db.execute(
-        `UPDATE products SET stock = COALESCE((SELECT SUM(delta) FROM inventory_ledger WHERE product_id=$1 AND deleted=0), stock),
-          updated_at=$2, sync_status='pending' WHERE id=$1`,
-        [pid, now],
-      );
-    }
-    for (const pid of touched) {
-      const rows = (await db.select('SELECT * FROM products WHERE id=$1', [pid]).catch(() => [])) as Array<Record<string, unknown>>;
-      const prow = rows?.[0];
-      if (!prow) continue;
-      const pkey = (prow.idempotency_key as string) || `stub-${pid}`;
-      await db.execute(
-        `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
-         VALUES ($1,'product',$2,'UPSERT',$3,'pending')
-         ON CONFLICT(idempotency_key) DO UPDATE SET payload_json=excluded.payload_json, updated_at=$4`,
-        [pkey, pid, toBoundedSyncJson(prow), now],
-      );
-    }
-    if (began) await db.execute('COMMIT;');
-  } catch (err) {
-    if (began) await db.execute('ROLLBACK;').catch(() => {});
-    console.error('[appendInventoryDeltas] Failed to append deltas:', err);
-    throw err;
+  
   }
 
   // Phase P1 Shadow Event Interceptor (best-effort, outside the money txn):
@@ -6428,16 +6448,11 @@ export async function ensureProductParents(productIds: Iterable<string>): Promis
   try {
     const list = [...new Set((productIds ? Array.from(productIds) : []).map(p => String(p ?? '')).filter(Boolean))];
     if (list.length === 0) return;
-    const db = await getLocalDb();
     const now = utcNowIso();
     for (const p of list) {
-      await db.execute(
-        `INSERT OR IGNORE INTO products (id, sku, barcode, title, brand, category, price,
-          wholesale_price, cost_price, stock, json_payload, device_id, idempotency_key,
-          sync_status, created_at, updated_at, deleted)
-         VALUES ($1,'','','', 'Autre','Tous les produits',0, 0,0,0,$2,'local',$3,'pending',$4,$4,0)`,
-        [p, JSON.stringify({ id: p, stub: true }), `stub-${p}`, now]
-      ).catch(() => {});
+      // Native lane (SEC-01): idempotent parent stub, never overwrites.
+      const { invokeCommand } = await import('../platform/invoke');
+      await invokeCommand<number>('ensure_product_stub', { id: p, now }).catch(() => {});
     }
   } catch (e) {
     console.warn('[batches:parents] Product stub bridge skipped:', e);

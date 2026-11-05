@@ -329,3 +329,13 @@ green under the flag with **zero** refusals. Spec 92's controls now write throug
 the native lane and its cap seed runs out-of-band, so the spec still proves the
 database is writable without writing through the pool that the flip makes
 read-only.
+
+### Inventory deltas are native (2026-11-05)
+
+`append_inventory_deltas` owns the ledger rows, the per-product stock recompute and
+both envelopes in one transaction; duplicate ids are a no-op, and the stock value
+is the ledger's signed sum. `tombstone_customer` and `ensure_product_stub` close
+the two remaining single-statement admin writes. The first 48-spec flag sweep
+measured 30 refusals: ~11 app lanes (these three now removed) and ~19 deliberate
+harness probes in the DAT/INVARIANT specs, which must move to host-side writable
+connections because their subject is SQLite behaviour, not the renderer lane.

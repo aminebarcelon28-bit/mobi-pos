@@ -504,8 +504,37 @@ only as the non-Tauri fallback). The heal drift gate was regenerated through its
 generator after a line shift; only `SOURCE_SHA256` changed (statements and
 manifest byte-identical), and the equivalence gate is unaffected.
 
+## Inventory deltas + small lanes (2026-11-05, E-0203)
+
+The first full-suite flag sweep (154 cases, 949 s) produced the exact residual
+inventory: **30 refusals**, split into ~11 real app lanes and ~19 harness probes
+(the DAT/INVARIANT specs deliberately write through the pool to test SQLite
+behaviour). This increment removes three of the app lanes:
+
+| Lane | Replaces | Tests |
+|---|---|---|
+| `append_inventory_deltas` | `appendInventoryDeltasInner` (labelled BEGIN + per-product ledger/stock/outbox writes) | 2: ledger + stock recompute + both envelopes; duplicate id is a no-op |
+| `tombstone_customer` | `deleteCustomer`'s UPDATE | 1: version bump, repeatable, missing id writes nothing |
+| `ensure_product_stub` | `ensureProductParents`' INSERT OR IGNORE | 1: idempotent, never overwrites |
+
+The delta lane keeps the shadow events in TS after the commit (best-effort, as
+before); the stock value is the ledger's signed sum (the ledger is the truth), and
+the product envelope is the committed row snapshot.
+
+**Measured after the lanes:** `30-ref-refunds` and `40-shf-shifts` are 12/12 in
+**both** modes with **0 refusals**; cargo 519; sql-boundary **314** (down from 315).
+
+Remaining from the sweep: `credit_vouchers` update ×2, `trade_ins`, `imei_records`,
+`imei_events`, the ~19 harness probes (temp tables, `no_such_table` SELECT,
+ROLLBACK, literal `DAT-DEL-P` delete, plain BEGINs), and the FIFO reconcile writes.
+
+Operational note: the volume hit **0 bytes free** mid-sweep (the Rust target tree
+was 49.4 GB). `cargo clean` removed only regenerable build output (114 083 files,
+49.4 GiB), restoring 39.3 GB; no source or user data was touched, and the next
+build is consequently a full rebuild.
+
 ## Next, in order
 
-1. Full suite under `POS_SQL_QUERY_ONLY=1` — the remaining DoD measurement.
-2. Native FIFO reconcile for shadow-bearing data (still renderer-side).
-3. Clean-worktree floor; tag.
+1. `credit_vouchers` + trade-in (`trade_ins`/`imei_records`/`imei_events`) lanes.
+2. Migrate the DAT/INVARIANT probe writes to host-side writable connections.
+3. Re-run the 48-spec sweep under the flag; then FIFO reconcile; clean floor; tag.

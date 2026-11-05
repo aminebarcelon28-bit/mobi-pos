@@ -169,6 +169,40 @@ pub fn mark_customer_synced(
     )
 }
 
+/// Soft-delete a customer: bump the version clock so a stale same-version
+/// echo can never resurrect the row through the guarded upsert.
+pub fn tombstone_customer_core(
+    conn: &Connection,
+    id: &str,
+    now: &str,
+) -> Result<usize, String> {
+    if id.trim().is_empty() {
+        return Err("tombstone_customer: id required".to_string());
+    }
+    conn.execute(
+        "UPDATE customers SET deleted = 1, version = COALESCE(version, 1) + 1, updated_at = ?2
+          WHERE id = ?1",
+        rusqlite::params![id, now],
+    )
+    .map_err(|e| format!("tombstone_customer: {e}"))
+}
+
+#[tauri::command]
+pub fn tombstone_customer(
+    app: tauri::AppHandle,
+    id: String,
+    now: String,
+) -> Result<usize, TrustError> {
+    crate::trust_core::ipc_authorizer::authorize_and_execute(
+        "tombstone_customer",
+        crate::trust_core::capability_policy::Capability::OperationalWrites,
+        |_| {
+            let conn = open_db(&app)?;
+            tombstone_customer_core(&conn, &id, &now).map_err(TrustError::op_failed)
+        },
+    )
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DebtCacheEntry {
@@ -298,6 +332,27 @@ mod tests {
         )
         .expect("refresh");
         assert_eq!(again.changed, 0);
+    }
+
+    #[test]
+    fn tombstone_bumps_the_clock_and_is_repeatable() {
+        let conn = seeded();
+        conn.execute(
+            "INSERT INTO customers (id, name, phone, json_payload, updated_at, version)
+             VALUES ('C9', 'Ali', '0550', '{}', '2026-11-01', 4)",
+            [],
+        )
+        .unwrap();
+        assert_eq!(tombstone_customer_core(&conn, "C9", "2026-11-05T10:00:00Z").unwrap(), 1);
+        let (deleted, version): (i64, i64) = conn
+            .query_row("SELECT deleted, version FROM customers WHERE id='C9'", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(deleted, 1);
+        assert_eq!(version, 5);
+        assert_eq!(tombstone_customer_core(&conn, "C9", "2026-11-05T10:00:01Z").unwrap(), 1);
+        assert_eq!(tombstone_customer_core(&conn, "MISSING", "2026-11-05T10:00:02Z").unwrap(), 0);
     }
 
     #[test]
