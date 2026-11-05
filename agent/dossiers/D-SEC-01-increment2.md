@@ -473,11 +473,39 @@ seed/cleanup of products) — they exist to prove the database is writable throu
 the pool. After the flip the writable path is native, so those controls must be
 re-pointed at a native command (e.g. `upsert_store_expense`) rather than deleted.
 
+## Held orders + drawer movements (2026-11-05, E-0202)
+
+Two more lanes, and the remaining measurable refusals in the shift spec are gone.
+
+| Command | Replaces | Contract |
+|---|---|---|
+| `save_held_order` | the held-sale upsert | version bumped on update, revived from tombstone |
+| `delete_held_order` | tombstone | same statement, no live predicate (repeat delete bumps) |
+| `claim_held_order` | `HELD_ORDER_CLAIM_SQL` | **single-claim CAS**: two recalls → 1 then 0 |
+| `release_held_order` | release | only a claimed row resurrects |
+| `log_cash_movement` | movement insert + parking fallback | guarded by an OPEN session; when it does not land the movement is parked in the same transaction |
+
+**Measured:**
+
+| Spec | Normal | Flag | Refusals |
+|---|---|---|---|
+| `40-shf-shifts` | **12/12** | **12/12** | **0** (was 10/12, 3) |
+| `92-sql-readonly-app` | 1/1 | **1/1** | **0** (was RED, 5) |
+
+Spec 92's writable controls now prove writability through the **native** lane
+(`upsert_store_expense` write + pool read-back) instead of writing through the
+pool under test, and its 2 100-row cap seed runs out-of-band (host
+better-sqlite3) — a harness concern, not an app write. The control was not
+deleted: it still proves the database is writable, just through the path that
+remains writable after the flip.
+
+Static boundary: **315** (down from 317; held-order SQL removed, movement SQL kept
+only as the non-Tauri fallback). The heal drift gate was regenerated through its
+generator after a line shift; only `SOURCE_SHA256` changed (statements and
+manifest byte-identical), and the equivalence gate is unaffected.
+
 ## Next, in order
 
-1. `cash_movements` + `held_orders` lanes (three refusals above) — small, same
-   pattern as the expense lane.
-2. Re-point spec 92's writable controls at a native lane.
-3. Native FIFO reconcile for shadow-bearing data (still renderer-side; preflight
-   only suppresses the no-work transaction).
-4. Full suite under the flag; clean-worktree floor; tag.
+1. Full suite under `POS_SQL_QUERY_ONLY=1` — the remaining DoD measurement.
+2. Native FIFO reconcile for shadow-bearing data (still renderer-side).
+3. Clean-worktree floor; tag.

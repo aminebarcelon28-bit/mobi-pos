@@ -317,3 +317,15 @@ run green under `POS_SQL_QUERY_ONLY=1` with **zero** refused writes, and
 renderer writes left (`held_orders` insert/delete, `cash_movements` insert), and
 spec 92's five are its own writable-pool controls that must move to a native
 command now that the native lanes are the writable path.
+
+### Held orders and drawer movements are native (2026-11-05)
+
+`save_held_order`, `delete_held_order`, `claim_held_order`, `release_held_order`
+and `log_cash_movement` carry the last renderer writes the shift spec reached.
+The single-claim CAS is pinned by a test (two recalls → 1 then 0, release is the
+inverse); the movement insert keeps the OPEN-session guard and parks in the same
+transaction when it does not land. `40-shf-shifts` and `92-sql-readonly-app` are
+green under the flag with **zero** refusals. Spec 92's controls now write through
+the native lane and its cap seed runs out-of-band, so the spec still proves the
+database is writable without writing through the pool that the flip makes
+read-only.

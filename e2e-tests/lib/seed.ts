@@ -27,6 +27,29 @@ export interface SeedCustomer {
   phone: string;
 }
 
+/**
+ * Bulk catalogue rows for the read-lane row-cap probe. Executed out-of-band
+ * (host better-sqlite3), so seeding never depends on the renderer pool — which
+ * matters once that pool is read-only.
+ */
+export function seedBulkProducts(count: number, prefix = 'SEC2-B-'): void {
+  tx((d) => {
+    const ins = d.prepare(
+      `INSERT INTO products (id, sku, barcode, title, brand, category, price, stock, json_payload, updated_at, idempotency_key)
+       VALUES (?, ?, ?, ?, 'Bulk', 'Test', 100, 0, '{}', datetime('now','utc'), ?)
+       ON CONFLICT(id) DO NOTHING`,
+    );
+    for (let x = 1; x <= count; x += 1) {
+      const id = `${prefix}${x}`;
+      ins.run(id, id, `SEC2B${x}`, `Bulk ${x}`, `e2e-bulk-${id}`);
+    }
+  });
+}
+
+export function deleteBulkProducts(prefix = 'SEC2-B-'): number {
+  return run('DELETE FROM products WHERE id LIKE ?', `${prefix}%`).changes;
+}
+
 export function seedProducts(products: SeedProduct[]): void {
   tx((d) => {
     const insProd = d.prepare(

@@ -36,6 +36,7 @@ pub mod sync_lane;
 pub mod customer_lane;
 pub mod void_refund_lane;
 pub mod product_lane;
+pub mod held_order_lane;
 pub mod schema_heal_sql;
 #[cfg(test)] pub mod sql_boundary;
 
@@ -2494,6 +2495,7 @@ pub fn run() {
             shift_lane::open_shift,
             shift_lane::set_shift_cashier,
             shift_lane::close_shift,
+            shift_lane::log_cash_movement,
             sync_lane::enqueue_sync_upsert,
             sync_lane::enqueue_sync_delete,
             customer_lane::upsert_customer,
@@ -2505,6 +2507,10 @@ pub fn run() {
             void_refund_lane::refund_sale_mirror,
             void_refund_lane::upsert_customer_debt,
             product_lane::upsert_product,
+            held_order_lane::save_held_order,
+            held_order_lane::delete_held_order,
+            held_order_lane::claim_held_order,
+            held_order_lane::release_held_order,
             emergency_export::emergency_export_ledger,
             sav_attachments::sav_attachment_write,
             sav_attachments::sav_attachment_read,
@@ -2601,6 +2607,7 @@ pub fn run() {
             shift_lane::open_shift,
             shift_lane::set_shift_cashier,
             shift_lane::close_shift,
+            shift_lane::log_cash_movement,
             sync_lane::enqueue_sync_upsert,
             sync_lane::enqueue_sync_delete,
             customer_lane::upsert_customer,
@@ -2612,6 +2619,10 @@ pub fn run() {
             void_refund_lane::refund_sale_mirror,
             void_refund_lane::upsert_customer_debt,
             product_lane::upsert_product,
+            held_order_lane::save_held_order,
+            held_order_lane::delete_held_order,
+            held_order_lane::claim_held_order,
+            held_order_lane::release_held_order,
             emergency_export::emergency_export_ledger,
             sav_attachments::sav_attachment_write,
             sav_attachments::sav_attachment_read,

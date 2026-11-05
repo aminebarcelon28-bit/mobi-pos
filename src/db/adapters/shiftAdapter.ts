@@ -640,6 +640,29 @@ export const shiftAdapter = {
         console.warn('[logExpense] ensureSessionInSqlite warning:', err);
       }
 
+      // Native lane (SEC-01): the guarded insert and its parking fallback
+      // commit together, so a movement can never be lost between them.
+      let movementHandledNatively = false;
+      try {
+        const { invokeCommand } = await import('../../platform/invoke');
+        await invokeCommand<{ parked: boolean }>('log_cash_movement', {
+          request: {
+            id: movement.id,
+            sessionId: movement.sessionId,
+            type: movement.type,
+            amount: movement.amount,
+            reason: movement.reason,
+            cashierName: movement.cashierName,
+            createdAt: movement.createdAt,
+            jsonPayload: JSON.stringify(movement),
+          },
+        });
+        movementHandledNatively = true;
+      } catch (err) {
+        const msg = String((err as Error)?.message ?? err);
+        if (!/not found|unknown command/i.test(msg)) throw err;
+      }
+      if (!movementHandledNatively) {
       const res = await sql.execute(INSERT_MOVEMENT_SQL, [
         movement.id,
         movement.sessionId,
@@ -671,6 +694,7 @@ export const shiftAdapter = {
       }
     }
 
+    }
     await dexieDb.cashMovements.put(movement);
     void fireSync('cash_movement', movement.id, movement);
     return movement;

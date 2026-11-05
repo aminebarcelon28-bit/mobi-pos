@@ -481,6 +481,11 @@ static COMMAND_REGISTRY: &[(&str, Capability)] = &[
     ("refund_sale_mirror", Capability::OperationalWrites),
     ("upsert_customer_debt", Capability::OperationalWrites),
     ("upsert_product", Capability::OperationalWrites),
+    ("log_cash_movement", Capability::OperationalWrites),
+    ("release_held_order", Capability::OperationalWrites),
+    ("claim_held_order", Capability::OperationalWrites),
+    ("delete_held_order", Capability::OperationalWrites),
+    ("save_held_order", Capability::OperationalWrites),
     ("finalize_shift_adoption", Capability::OperationalWrites),
     // SEC-01 increment 2: native read-only query lane (query_only on its own
     // connection; writes are refused by SQLite).
@@ -1183,6 +1188,11 @@ pub static ALL_COMMAND_FNS_IN_TESTS: &[&str] = &[
     "refund_sale_mirror",
     "upsert_customer_debt",
     "upsert_product",
+    "log_cash_movement",
+    "release_held_order",
+    "claim_held_order",
+    "delete_held_order",
+    "save_held_order",
     "emergency_export_ledger",
     "launch_dialer",
     "launch_call",

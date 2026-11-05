@@ -517,6 +517,90 @@ pub fn close_shift(
     )
 }
 
+/// Drawer movement write. The INSERT is guarded by an OPEN session (exactly
+/// like `INSERT_MOVEMENT_SQL`); when it does not land, the movement is parked in
+/// the v113 envelope shape instead — both in one transaction, so a movement is
+/// never lost between the two paths.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CashMovementRequest {
+    pub id: String,
+    pub session_id: String,
+    #[serde(rename = "type")]
+    pub movement_type: String,
+    pub amount: i64,
+    pub reason: String,
+    pub cashier_name: String,
+    pub created_at: String,
+    pub json_payload: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CashMovementReport {
+    pub inserted: usize,
+    pub parked: bool,
+}
+
+pub fn log_cash_movement_core(
+    conn: &mut Connection,
+    req: &CashMovementRequest,
+) -> Result<CashMovementReport, String> {
+    if req.id.trim().is_empty() || req.session_id.trim().is_empty() {
+        return Err("log_cash_movement: id and session_id required".to_string());
+    }
+    let tx = conn.transaction().map_err(|e| format!("movement tx: {e}"))?;
+    let inserted = tx
+        .execute(
+            "INSERT INTO cash_movements (
+                id, session_id, type, amount, reason, cashier_name, created_at, json_payload, version
+             )
+             SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1
+             WHERE EXISTS (SELECT 1 FROM cash_sessions WHERE id = ?2 AND status = 'OPEN')
+             ON CONFLICT(id) DO NOTHING",
+            rusqlite::params![
+                req.id,
+                req.session_id,
+                req.movement_type,
+                req.amount,
+                req.reason,
+                req.cashier_name,
+                req.created_at,
+                req.json_payload
+            ],
+        )
+        .map_err(|e| format!("movement insert: {e}"))?;
+
+    let mut parked = false;
+    if inserted == 0 {
+        tx.execute(
+            "INSERT INTO sync_parked_movements (id, session_id, data_json, row_version, parked_at, attempts)
+             VALUES (?1, ?2, ?3, 1, ?4, 0)
+             ON CONFLICT(id) DO UPDATE SET data_json = excluded.data_json, row_version = excluded.row_version",
+            rusqlite::params![req.id, req.session_id, req.json_payload, req.created_at],
+        )
+        .map_err(|e| format!("movement park: {e}"))?;
+        parked = true;
+    }
+    tx.commit().map_err(|e| format!("movement commit: {e}"))?;
+    Ok(CashMovementReport { inserted, parked })
+}
+
+#[tauri::command]
+pub fn log_cash_movement(
+    app: tauri::AppHandle,
+    request: CashMovementRequest,
+) -> Result<CashMovementReport, TrustError> {
+    crate::trust_core::ipc_authorizer::authorize_and_execute(
+        "log_cash_movement",
+        crate::trust_core::capability_policy::Capability::OperationalWrites,
+        |_| {
+            let mut conn = open_db(&app)?;
+            log_cash_movement_core(&mut conn, &request).map_err(TrustError::op_failed)
+        },
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -559,6 +643,78 @@ mod tests {
             json_payload: "{\"id\":\"SHIFT-T1\",\"deviceId\":\"SPOOFED\",\"status\":\"OPEN\"}"
                 .to_string(),
         }
+    }
+
+    #[test]
+    fn movement_writes_when_the_session_is_open() {
+        let mut conn = seeded();
+        conn.execute_batch(
+            "CREATE TABLE cash_movements (id TEXT PRIMARY KEY, session_id TEXT, type TEXT,
+                amount INTEGER, reason TEXT, cashier_name TEXT, created_at TEXT,
+                json_payload TEXT, version INTEGER NOT NULL DEFAULT 1);
+             CREATE TABLE sync_parked_movements (id TEXT PRIMARY KEY, session_id TEXT,
+                data_json TEXT, row_version INTEGER, parked_at TEXT, attempts INTEGER);",
+        )
+        .unwrap();
+        open_shift_core(&mut conn, &request()).expect("open");
+        let rep = log_cash_movement_core(
+            &mut conn,
+            &CashMovementRequest {
+                id: "M1".to_string(),
+                session_id: "SHIFT-T1".to_string(),
+                movement_type: "EXPENSE".to_string(),
+                amount: 500,
+                reason: "carburant".to_string(),
+                cashier_name: "Ali".to_string(),
+                created_at: "2026-11-05T09:00:00.000Z".to_string(),
+                json_payload: "{\"id\":\"M1\"}".to_string(),
+            },
+        )
+        .expect("movement");
+        assert_eq!(rep.inserted, 1);
+        assert!(!rep.parked);
+        let parked: i64 = conn
+            .query_row("SELECT COUNT(*) FROM sync_parked_movements", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(parked, 0);
+    }
+
+    #[test]
+    fn movement_parks_when_no_session_is_open() {
+        let mut conn = seeded();
+        conn.execute_batch(
+            "CREATE TABLE cash_movements (id TEXT PRIMARY KEY, session_id TEXT, type TEXT,
+                amount INTEGER, reason TEXT, cashier_name TEXT, created_at TEXT,
+                json_payload TEXT, version INTEGER NOT NULL DEFAULT 1);
+             CREATE TABLE sync_parked_movements (id TEXT PRIMARY KEY, session_id TEXT,
+                data_json TEXT, row_version INTEGER, parked_at TEXT, attempts INTEGER);",
+        )
+        .unwrap();
+        let rep = log_cash_movement_core(
+            &mut conn,
+            &CashMovementRequest {
+                id: "M2".to_string(),
+                session_id: "SHIFT-NONE".to_string(),
+                movement_type: "MANUAL_DEPOSIT".to_string(),
+                amount: 1000,
+                reason: "apport".to_string(),
+                cashier_name: "Ali".to_string(),
+                created_at: "2026-11-05T09:00:00.000Z".to_string(),
+                json_payload: "{\"id\":\"M2\"}".to_string(),
+            },
+        )
+        .expect("park");
+        assert_eq!(rep.inserted, 0);
+        assert!(rep.parked);
+        let (json, attempts): (String, i64) = conn
+            .query_row(
+                "SELECT data_json, attempts FROM sync_parked_movements WHERE id='M2'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert!(json.contains("M2"));
+        assert_eq!(attempts, 0);
     }
 
     #[test]

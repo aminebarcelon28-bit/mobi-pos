@@ -60,7 +60,6 @@ import {
   CCT_TASK_BY_ID_SQL,
   buildLastCountedSql,
 } from './cycleCountSql';
-import { HELD_ORDER_CLAIM_SQL, HELD_ORDER_RELEASE_SQL } from './heldOrdersSql';
 import { toIntDzd } from '../utils/kredyEngine';
 import {
   buildKredyDunningByCustomersSql,
@@ -6448,7 +6447,6 @@ export async function ensureProductParents(productIds: Iterable<string>): Promis
 export async function saveHeldOrder(held: HeldSale): Promise<void> {
   if (!isTauriEnv()) return;
   try {
-    const db = await getLocalDb();
     const now = utcNowIso();
     const itemsCount = (held.items || []).reduce((s, i) => s + (i.quantity || 0), 0);
     const totalAmount = (held.items || []).reduce(
@@ -6459,26 +6457,19 @@ export async function saveHeldOrder(held: HeldSale): Promise<void> {
     const customerName = held.customer?.name ?? null;
     const payload = JSON.stringify(held);
 
-    await withBusyRetry(
-      () =>
-        db.execute(
-          `INSERT INTO held_orders (
-            id, customer_id, customer_name, items_count, total_amount, json_payload,
-            device_id, idempotency_key, sync_status, version, created_at, updated_at, deleted
-          ) VALUES ($1, $2, $3, $4, $5, $6, 'local', $1, 'pending', 1, $7, $7, 0)
-          ON CONFLICT(id) DO UPDATE SET
-            customer_id = excluded.customer_id,
-            customer_name = excluded.customer_name,
-            items_count = excluded.items_count,
-            total_amount = excluded.total_amount,
-            json_payload = excluded.json_payload,
-            updated_at = excluded.updated_at,
-            version = held_orders.version + 1,
-            deleted = 0;`,
-          [held.id, customerId, customerName, itemsCount, totalAmount, payload, now]
-        ),
-      { attempts: 3, baseDelayMs: 50, label: 'save-held-order' }
-    );
+    // Native lane (SEC-01): fixed literal, same upsert/version semantics.
+    const { invokeCommand } = await import('../platform/invoke');
+    await invokeCommand<{ changes: number }>('save_held_order', {
+      request: {
+        id: held.id,
+        customerId,
+        customerName,
+        itemsCount,
+        totalAmount,
+        jsonPayload: payload,
+        createdAt: now,
+      },
+    });
   } catch (e) {
     console.warn('[held_orders] Failed to save held order:', e);
   }
@@ -6487,16 +6478,10 @@ export async function saveHeldOrder(held: HeldSale): Promise<void> {
 export async function deleteHeldOrder(id: string): Promise<void> {
   if (!isTauriEnv()) return;
   try {
-    const db = await getLocalDb();
     const now = utcNowIso();
-    await withBusyRetry(
-      () =>
-        db.execute(
-          `UPDATE held_orders SET deleted = 1, updated_at = $1, version = version + 1 WHERE id = $2;`,
-          [now, id]
-        ),
-      { attempts: 3, baseDelayMs: 50, label: 'delete-held-order' }
-    );
+    // Native lane (SEC-01).
+    const { invokeCommand } = await import('../platform/invoke');
+    await invokeCommand<{ changes: number }>('delete_held_order', { id, now });
   } catch (e) {
     console.warn('[held_orders] Failed to delete held order:', e);
   }
@@ -6527,13 +6512,11 @@ export type HeldOrderClaimOutcome = 'claimed' | 'already_claimed' | 'claim_faile
 export async function claimHeldOrder(id: string): Promise<HeldOrderClaimOutcome> {
   if (!isTauriEnv()) return 'claimed';
   try {
-    const db = await getLocalDb();
     const now = utcNowIso();
-    const res = await withBusyRetry(
-      () => db.execute(HELD_ORDER_CLAIM_SQL, [now, id]),
-      { attempts: 3, baseDelayMs: 50, label: 'claim-held-order' }
-    );
-    return Number(res?.rowsAffected ?? 0) === 1 ? 'claimed' : 'already_claimed';
+    // Native CAS (SEC-01): the single-claim law is the same predicate.
+    const { invokeCommand } = await import('../platform/invoke');
+    const res = await invokeCommand<{ changes: number }>('claim_held_order', { id, now });
+    return Number(res?.changes ?? 0) === 1 ? 'claimed' : 'already_claimed';
   } catch (e) {
     console.warn('[held_orders] Failed to claim held order:', e);
     return 'claim_failed';
@@ -6549,12 +6532,10 @@ export async function claimHeldOrder(id: string): Promise<HeldOrderClaimOutcome>
 export async function releaseHeldOrderClaim(id: string): Promise<void> {
   if (!isTauriEnv()) return;
   try {
-    const db = await getLocalDb();
     const now = utcNowIso();
-    await withBusyRetry(
-      () => db.execute(HELD_ORDER_RELEASE_SQL, [now, id]),
-      { attempts: 3, baseDelayMs: 50, label: 'release-held-order-claim' }
-    );
+    // Native inverse-of-claim (SEC-01).
+    const { invokeCommand } = await import('../platform/invoke');
+    await invokeCommand<{ changes: number }>('release_held_order', { id, now });
   } catch (e) {
     console.warn('[held_orders] Failed to release held order claim:', e);
   }

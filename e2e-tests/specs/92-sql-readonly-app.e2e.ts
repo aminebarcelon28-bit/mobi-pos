@@ -18,7 +18,7 @@
  */
 import { browser, expect } from '@wdio/globals';
 import { APP_PIN, addSku, clearWebMirrors, ensureShiftOpen, payExactFlow, tid, unlockIfNeeded } from '../lib/pos';
-import { resetData, seedProducts } from '../lib/seed';
+    import { deleteBulkProducts, resetData, seedBulkProducts, seedProducts } from '../lib/seed';
 
 type Call = { ok: true; value: unknown } | { ok: false; error: string };
 
@@ -106,20 +106,40 @@ describe('SEC-01 increment 2 — hardened read-only lane', () => {
     const effects = leftover.ok ? JSON.stringify(leftover.value) : 'probe-failed';
     const noEffect = leftover.ok && effects.includes('"settings":0') && effects.includes('"tx":0');
 
-    // 5. control: the database is writable through the normal lane, so every
-    //    refusal above is the lane, not a broken/locked file
-    const controlCreate = await plugin('CREATE TABLE IF NOT EXISTS sec2_control (x INTEGER)');
-    const controlInsert = await plugin('INSERT INTO sec2_control (x) VALUES (1)');
-    const controlDrop = await plugin('DROP TABLE sec2_control');
-    const controlOk = controlCreate.ok && controlInsert.ok && controlDrop.ok;
+    // 5. control: the database itself is writable, so every refusal above is
+    //    the lane, not a broken/locked file. The writable path is the NATIVE
+    //    lane (the renderer pool is the thing under test): write through a
+    //    role-bound command, then read it back through the pool.
+    const controlId = `sec2-control-${Date.now()}`;
+    const controlWrite = await invoke('upsert_store_expense', {
+      request: {
+        id: controlId,
+        category: 'Test',
+        title: 'sec2 control',
+        amount: 1,
+        paymentMethod: 'Espèces',
+        paidTo: null,
+        notes: null,
+        recordedBy: 'e2e',
+        createdAt: new Date().toISOString(),
+        jsonPayload: JSON.stringify({ id: controlId }),
+      },
+    });
+    const controlRead = await pluginSelect(
+      `SELECT COUNT(*) AS n FROM store_expenses WHERE id = '${controlId}'`,
+    );
+    const controlRows =
+      controlRead.ok && Array.isArray(controlRead.value)
+        ? Number((controlRead.value as Array<{ n?: unknown }>)[0]?.n ?? 0)
+        : -1;
+    const controlOk = controlWrite.ok && controlRows === 1;
 
     // 6. row cap, exercised on an ALLOWLISTED table (products): seed 2 100
     //    catalogue rows through the normal lane, read them, then clean up.
-    const bulkSeed = await plugin(
-      "WITH RECURSIVE seq(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM seq WHERE x < 2100) " +
-        "INSERT INTO products (id, sku, barcode, title, brand, category, price, stock, json_payload, updated_at, idempotency_key) " +
-        "SELECT 'SEC2-B-' || x, 'SEC2-B-' || x, 'SEC2B' || x, 'Bulk ' || x, 'Bulk', 'Test', 100, 0, '{}', datetime('now'), 'SEC2-B-' || x FROM seq",
-    );
+    // Seed out-of-band (host better-sqlite3): the pool under test is read-only,
+    // and row seeding is a harness concern, not an app write.
+    seedBulkProducts(2100);
+    const bulkSeed = { ok: true, error: '' };
     // The WebDriver wrapper erases the engine message, so assert the cap by
     // behaviour: a read of >cap rows must not return more than the cap (and the
     // lane must still work afterwards). The exact "row limit exceeded" wording is
@@ -129,7 +149,7 @@ describe('SEC-01 increment 2 — hardened read-only lane', () => {
     const returnedRows = capped.ok && Array.isArray(capped.value) ? (capped.value as unknown[]).length : -1;
     const capHeld = afterCap.ok && (!capped.ok || (returnedRows >= 0 && returnedRows <= 2000));
     if (!capHeld) console.log(`[SEC2B] row-cap probe unexpected: ok=${capped.ok} rows=${returnedRows} after=${afterCap.ok}`);
-    await plugin("DELETE FROM products WHERE id LIKE 'SEC2-B-%'");
+    deleteBulkProducts();
 
     // 7. latency (200 samples each) and a real checkout
     const bench = (cmd: string, args: Record<string, unknown>) =>
