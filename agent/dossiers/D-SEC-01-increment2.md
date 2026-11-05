@@ -755,12 +755,45 @@ The earlier batch C (specs 24–48 minus scale) measured **0 refusals**, so the
 remainder is entirely these four lanes: `repair_orders`, `db:restitute`,
 `sync:order`, `debt_plan_entries`.
 
+## Three more lanes: order status, repairs, kredy (2026-11-05, E-0209)
+
+The 43-spec run named 11 refusals; three of those lanes are now native and the
+refunds/repair specs confirm it.
+
+| Command | Replaces | Tests |
+|---|---|---|
+| `sync_order_status` | `enqueueOrderSync` (status flip + version bump + order envelope in a renderer `BEGIN IMMEDIATE`) | 4: flip stamps row and envelope with the bumped clock; second VOIDED is `ALREADY_VOIDED` with no extra row; missing row enqueues a `legacy-` key; a spoofed payload version/key is overwritten |
+| `save_repair_order` | `saveRepairOrder` upsert | 1: version bumped, costs kept, one row |
+| `save_debt_plan` / `pay_debt_plan_entries` / `close_debt_plan` | kredy plan create, payment fill, close claim | 4: entries+header commit together and a retry converges; a failed header rolls the entries back (no orphan schedule); `paid_at` only when settled; close is a single claim |
+
+**Measured (both modes):**
+
+| Spec | Normal | Flag |
+|---|---|---|
+| `31-ref-refunds-part2` | 15/15, 0 refusals | **15/15, 2 refusals** (`db:restitute` BEGIN + its batch update) |
+| `32-ref-refunds-part3` | 15/15, 0 | **15/15, 0 refusals** |
+| `84-rep-repair` | 9/24, 0 | 9/24, 16 refusals (`technician_time_log` ×9, `db:restitute` ×3 + batches ×3, `warranty_claims` ×1) |
+
+Two things worth recording:
+
+* `sync_order_status` was allowlisted but initially **not** in the invoke handler.
+  The ad-hoc parity diff caught it before the run; without the handler the renderer
+  would have fallen back to SQL and the refusals would have stayed. `check-handler-parity`
+  now reports 111 production commands.
+* `84-rep-repair` is 9/24 in **both** modes, so its 15 failures are not flag-induced;
+  but the flag run exposed three more write lanes that the 43-spec sweep never
+  reached (it stopped earlier): `technician_time_log`, `warranty_claims`, and the
+  restitute transaction. The measured inventory therefore grows with coverage — the
+  honest reading is that "0 refusals" must be re-measured per spec before the tag.
+
+**Gates:** money 65/0 · zero-tax 23/0 · cash-terms 32/0 · tsc 0 · lint 0 · selftest OK ·
+reconcile 687 · cargo 542/542 · registry 111 · sql-boundary **306** (down from 307) ·
+drift OK · secrets/licences clean.
+
 ## Next, in order
 
-1. `sync_order_status` lane (status flip + version bump + envelope; ALREADY_VOIDED
-   refusal) and `debt_plan_entries` — both small, same shape as the shift lane.
-2. `repair_orders` lane (insert/update, version bump).
-3. `db:restitute` lane — FIFO restock at original cost; needs row-level COGS
-   goldens, same bar as the FIFO reconcile.
-4. Then the flag sweep on everything but the 10M fixture (documented), FIFO
+1. `db:restitute` lane (FIFO restock at original cost; REFUND batch) — needs
+   row-level COGS goldens, the same bar as the FIFO reconcile.
+2. `technician_time_log` + `warranty_claims` lanes (repair spec).
+3. Re-run the flag sweep per half (documented 10M-fixture exclusion), then FIFO
    reconcile, n>=200 latency, clean floor, tag.

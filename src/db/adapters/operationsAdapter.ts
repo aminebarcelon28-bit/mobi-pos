@@ -65,56 +65,34 @@ export const operationsAdapter = {
   async saveRepairOrder(repair: RepairOrder): Promise<void> {
     if (isTauriEnv()) {
       try {
-        const db = await getLocalDb();
         const payload = JSON.stringify(repair);
-        await db.execute(
-          `INSERT INTO repair_orders (id, ticket_number, customer_name, customer_phone, customer_id, device_model, imei, status, labor_cost, parts_cost, total_cost, deposit_amount, parts_cost_basis, costing_model, rework_of_repair_id, created_at, updated_at, json_payload)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
-           ON CONFLICT(id) DO UPDATE SET
-             ticket_number=excluded.ticket_number,
-             customer_name=excluded.customer_name,
-             customer_phone=excluded.customer_phone,
-             customer_id=excluded.customer_id,
-             device_model=excluded.device_model,
-             imei=excluded.imei,
-             status=excluded.status,
-             labor_cost=excluded.labor_cost,
-             parts_cost=excluded.parts_cost,
-             total_cost=excluded.total_cost,
-             deposit_amount=excluded.deposit_amount,
-             parts_cost_basis=excluded.parts_cost_basis,
-             costing_model=excluded.costing_model,
-             rework_of_repair_id=excluded.rework_of_repair_id,
-             updated_at=excluded.updated_at,
-             json_payload=excluded.json_payload,
-             version=repair_orders.version + 1`,
-          [
-            repair.id,
-            repair.ticketNumber || '',
-            repair.customerName || '',
-            repair.customerPhone || '',
-            repair.customerId || null,
-            repair.deviceModel || '',
-            repair.imei || null,
-            repair.status || 'En attente',
-            repair.laborCost || 0,
-            repair.partsCost || 0,
-            repair.totalCost || 0,
-            repair.depositAmount || 0,
-            // UPGRADE-06 mirrors of the json_payload fields. NULL on tickets
-            // whose parts were consumed before the basis existed — SQL readers
-            // treat NULL as "base inconnue", never as zero (the json_payload
-            // stays authoritative; these columns serve SQL-side reporting).
-            typeof repair.partsCostBasis === 'number' && Number.isFinite(repair.partsCostBasis)
-              ? repair.partsCostBasis
-              : null,
-            repair.costingModel || null,
-            repair.reworkOfRepairId || null,
-            repair.createdAt || new Date().toISOString(),
-            repair.updatedAt || new Date().toISOString(),
-            payload,
-          ],
-        );
+        // Native lane (SEC-01): same upsert, version bumped on conflict.
+        const { invokeCommand } = await import('../../platform/invoke');
+        await invokeCommand<{ changes: number }>('save_repair_order', {
+          request: {
+            id: repair.id,
+            ticketNumber: repair.ticketNumber || '',
+            customerName: repair.customerName || '',
+            customerPhone: repair.customerPhone || '',
+            customerId: repair.customerId || null,
+            deviceModel: repair.deviceModel || '',
+            imei: repair.imei || null,
+            status: repair.status || 'En attente',
+            laborCost: repair.laborCost || 0,
+            partsCost: repair.partsCost || 0,
+            totalCost: repair.totalCost || 0,
+            depositAmount: repair.depositAmount || 0,
+            partsCostBasis:
+              typeof repair.partsCostBasis === 'number' && Number.isFinite(repair.partsCostBasis)
+                ? repair.partsCostBasis
+                : 0,
+            costingModel: repair.costingModel || '',
+            reworkOfRepairId: repair.reworkOfRepairId || null,
+            createdAt: repair.createdAt || new Date().toISOString(),
+            updatedAt: repair.updatedAt || new Date().toISOString(),
+            jsonPayload: payload,
+          },
+        });
       } catch (err) {
         console.warn('[operationsAdapter] SQLite saveRepairOrder failed, fallback to Dexie:', err);
       }

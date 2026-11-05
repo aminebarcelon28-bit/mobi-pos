@@ -270,6 +270,100 @@ pub fn save_purchase_order(
     )
 }
 
+// ── repair orders ──────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepairOrderRequest {
+    pub id: String,
+    pub ticket_number: String,
+    pub customer_name: String,
+    pub customer_phone: String,
+    pub customer_id: Option<String>,
+    pub device_model: String,
+    pub imei: Option<String>,
+    pub status: String,
+    pub labor_cost: i64,
+    pub parts_cost: i64,
+    pub total_cost: i64,
+    pub deposit_amount: i64,
+    pub parts_cost_basis: i64,
+    pub costing_model: String,
+    pub rework_of_repair_id: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub json_payload: String,
+}
+
+pub fn save_repair_order_core(
+    conn: &Connection,
+    req: &RepairOrderRequest,
+) -> Result<usize, String> {
+    if req.id.trim().is_empty() {
+        return Err("save_repair_order: id required".to_string());
+    }
+    conn.execute(
+        "INSERT INTO repair_orders (id, ticket_number, customer_name, customer_phone, customer_id, device_model, imei, status, labor_cost, parts_cost, total_cost, deposit_amount, parts_cost_basis, costing_model, rework_of_repair_id, created_at, updated_at, json_payload)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
+         ON CONFLICT(id) DO UPDATE SET
+           ticket_number=excluded.ticket_number,
+           customer_name=excluded.customer_name,
+           customer_phone=excluded.customer_phone,
+           customer_id=excluded.customer_id,
+           device_model=excluded.device_model,
+           imei=excluded.imei,
+           status=excluded.status,
+           labor_cost=excluded.labor_cost,
+           parts_cost=excluded.parts_cost,
+           total_cost=excluded.total_cost,
+           deposit_amount=excluded.deposit_amount,
+           parts_cost_basis=excluded.parts_cost_basis,
+           costing_model=excluded.costing_model,
+           rework_of_repair_id=excluded.rework_of_repair_id,
+           updated_at=excluded.updated_at,
+           json_payload=excluded.json_payload,
+           version=repair_orders.version + 1",
+        rusqlite::params![
+            req.id,
+            req.ticket_number,
+            req.customer_name,
+            req.customer_phone,
+            req.customer_id,
+            req.device_model,
+            req.imei,
+            req.status,
+            req.labor_cost,
+            req.parts_cost,
+            req.total_cost,
+            req.deposit_amount,
+            req.parts_cost_basis,
+            req.costing_model,
+            req.rework_of_repair_id,
+            req.created_at,
+            req.updated_at,
+            req.json_payload
+        ],
+    )
+    .map_err(|e| format!("save_repair_order: {e}"))
+}
+
+#[tauri::command]
+pub fn save_repair_order(
+    app: tauri::AppHandle,
+    request: RepairOrderRequest,
+) -> Result<WriteReport, TrustError> {
+    crate::trust_core::ipc_authorizer::authorize_and_execute(
+        "save_repair_order",
+        crate::trust_core::capability_policy::Capability::OperationalWrites,
+        |_| {
+            let conn = open_db(&app)?;
+            save_repair_order_core(&conn, &request)
+                .map(|changes| WriteReport { changes })
+                .map_err(TrustError::op_failed)
+        },
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -288,6 +382,12 @@ mod tests {
                 ref_id TEXT, at TEXT, actor TEXT, note TEXT);
              CREATE TABLE purchase_orders (id TEXT PRIMARY KEY, po_number TEXT, vendor_name TEXT,
                 total_amount REAL, status TEXT, created_at TEXT, json_payload TEXT,
+                version INTEGER NOT NULL DEFAULT 1);
+             CREATE TABLE repair_orders (id TEXT PRIMARY KEY, ticket_number TEXT, customer_name TEXT,
+                customer_phone TEXT, customer_id TEXT, device_model TEXT, imei TEXT, status TEXT,
+                labor_cost INTEGER, parts_cost INTEGER, total_cost INTEGER, deposit_amount INTEGER,
+                parts_cost_basis INTEGER, costing_model TEXT, rework_of_repair_id TEXT,
+                created_at TEXT, updated_at TEXT, json_payload TEXT,
                 version INTEGER NOT NULL DEFAULT 1);",
         )
         .unwrap();
@@ -356,6 +456,49 @@ mod tests {
         assert_eq!(po, "PO1", "COALESCE keeps the original purchase link");
         assert_eq!(months, 12);
         assert_eq!(version, 2);
+    }
+
+    #[test]
+    fn repair_order_upsert_bumps_the_version_and_keeps_costs() {
+        let conn = seeded();
+        let mut req = RepairOrderRequest {
+            id: "R1".to_string(),
+            ticket_number: "SAV-1".to_string(),
+            customer_name: "Ali".to_string(),
+            customer_phone: "0550".to_string(),
+            customer_id: None,
+            device_model: "iPhone".to_string(),
+            imei: Some("I1".to_string()),
+            status: "En attente".to_string(),
+            labor_cost: 1000,
+            parts_cost: 2500,
+            total_cost: 3500,
+            deposit_amount: 500,
+            parts_cost_basis: 2000,
+            costing_model: "manual".to_string(),
+            rework_of_repair_id: None,
+            created_at: "2026-11-05T10:00:00Z".to_string(),
+            updated_at: "2026-11-05T10:00:00Z".to_string(),
+            json_payload: "{\"id\":\"R1\"}".to_string(),
+        };
+        assert_eq!(save_repair_order_core(&conn, &req).unwrap(), 1);
+        req.status = "Terminé".to_string();
+        req.updated_at = "2026-11-05T11:00:00Z".to_string();
+        assert_eq!(save_repair_order_core(&conn, &req).unwrap(), 1);
+        let (status, total, version): (String, i64, i64) = conn
+            .query_row(
+                "SELECT status, total_cost, version FROM repair_orders WHERE id='R1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(status, "Terminé");
+        assert_eq!(total, 3500);
+        assert_eq!(version, 2);
+        let rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM repair_orders", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows, 1);
     }
 
     #[test]

@@ -4393,6 +4393,27 @@ export async function enqueueOrderSync(
   payload: Record<string, unknown>,
 ): Promise<void> {
   // Self-serializing (house rule — see markOutbox): callers own retry only.
+  // Native lane (SEC-01): the status flip, the version bump and the order
+  // envelope commit in one Rust transaction, with the same ALREADY_VOIDED
+  // refusal, so the loser of a race can never double-restore stock.
+  if (isTauriEnv()) {
+    const { invokeCommand } = await import('../platform/invoke');
+    try {
+      await invokeCommand<{ version: number }>('sync_order_status', {
+        request: {
+          orderId,
+          status: payload.status ? String(payload.status) : null,
+          payloadJson: toBoundedSyncJson({ ...payload }),
+          now: utcNowIso(),
+        },
+      });
+      return;
+    } catch (err) {
+      const msg = String((err as Error)?.message ?? err);
+      if (msg.includes('ALREADY_VOIDED')) throw new Error('ALREADY_VOIDED');
+      if (!/not found|unknown command/i.test(msg)) throw err;
+    }
+  }
   return withWriteLock(async () => {
     const db = await getLocalDb();
     const now = utcNowIso();
@@ -6980,6 +7001,30 @@ export async function insertDebtPlanWithEntries(
   },
   entries: ReadonlyArray<{ id: string; seq: number; dueDate: string; amount: number }>
 ): Promise<void> {
+  // Native lane (SEC-01): entries + header in one transaction, both
+  // ON CONFLICT DO NOTHING so a retry converges.
+  if (isTauriEnv()) {
+    const { invokeCommand } = await import('../platform/invoke');
+    await invokeCommand<{ entriesWritten: number }>('save_debt_plan', {
+      request: {
+        id: String(plan.id),
+        customerId: String(plan.customerId),
+        totalAmount: toIntDzd(plan.totalAmount),
+        installments: toIntDzd(plan.installments),
+        intervalDays: toIntDzd(plan.intervalDays),
+        startDate: String(plan.startDate ?? ''),
+        notes: plan.notes == null ? null : String(plan.notes),
+        createdAt: String(plan.createdAt ?? ''),
+        entries: (entries ?? []).map((entry) => ({
+          id: String(entry.id),
+          seq: toIntDzd(entry.seq),
+          dueDate: String(entry.dueDate ?? ''),
+          amount: toIntDzd(entry.amount),
+        })),
+      },
+    });
+    return;
+  }
   const db = await getLocalDb();
   for (const entry of entries ?? []) {
     await db.execute(KREDY_PLAN_ENTRY_INSERT_SQL, [
@@ -7007,6 +7052,18 @@ export async function updateDebtPlanEntries(
   updates: ReadonlyArray<{ id: string; paidAmount: number; paidAt?: string | null }>
 ): Promise<void> {
   if (!updates || updates.length === 0) return;
+  // Native lane (SEC-01): one transaction, same COALESCE on paid_at.
+  if (isTauriEnv()) {
+    const { invokeCommand } = await import('../platform/invoke');
+    await invokeCommand<number>('pay_debt_plan_entries', {
+      payments: updates.map((u) => ({
+        id: String(u.id),
+        paidAmount: toIntDzd(u.paidAmount),
+        paidAt: u.paidAt ?? null,
+      })),
+    });
+    return;
+  }
   const db = await getLocalDb();
   for (const u of updates) {
     await db.execute(KREDY_ENTRY_PAY_UPDATE_SQL, [
@@ -7023,6 +7080,15 @@ export async function setDebtPlanStatus(
   status: 'SOLDE' | 'ANNULE',
   nowIso: string
 ): Promise<boolean> {
+  // Native lane (SEC-01): ACTIF -> SOLDE/ANNULE is a single claim.
+  if (isTauriEnv()) {
+    const { invokeCommand } = await import('../platform/invoke');
+    return await invokeCommand<boolean>('close_debt_plan', {
+      planId: String(planId),
+      status,
+      now: nowIso,
+    });
+  }
   const db = await getLocalDb();
   const res = await db.execute(KREDY_PLAN_STATUS_UPDATE_SQL, [String(planId), status, nowIso]);
   return Number(res?.rowsAffected ?? 0) === 1;

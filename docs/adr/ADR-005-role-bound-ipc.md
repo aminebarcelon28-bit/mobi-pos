@@ -411,3 +411,19 @@ Running the 43 non-scale specs in one process under the flag produced the exact
 residual app lanes (11 refusals): `repair_orders` (4), `db:restitute` (BEGIN + batch
 insert + restock update), `sync:order` (BEGIN ×2), `debt_plan_entries` (1). Everything
 else in that set is at zero.
+
+### Order status, repairs and plans are native (2026-11-05)
+
+`sync_order_status` replaces the renderer transaction behind `enqueueOrderSync`: the
+status flip, the version bump and the `order` envelope commit together, and the
+`ALREADY_VOIDED` refusal aborts before any write so the loser of a race cannot
+double-restore stock. The kredy lane puts entries and header in **one** transaction
+(stricter than the renderer's "entries first, header second" ordering: a failed
+header now rolls the schedule back instead of leaving orphans). `save_repair_order`
+is the plain upsert.
+
+A process lesson: `sync_order_status` was added to the capability allowlist but not
+to `generate_handler!`, so the renderer would have swallowed "unknown command" and
+fallen back to SQL. The runtime refusals would have stayed while the tests looked
+green. The ad-hoc allowlist↔handler diff caught it; that diff belongs in the gate
+set, not in a human's head.
