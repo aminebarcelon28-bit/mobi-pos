@@ -966,7 +966,23 @@ check for the change).
 reconcile 687 · cargo **559**/559 · registry **118** · sql-boundary **301** · drift OK ·
 secrets/licences clean.
 
+## Latency at n=200 on the current tree (2026-11-05, E-0215)
+
+Re-measured on `ce6afb1` (after ~25 lanes, including the FIFO reconcile), same
+machine, warm-up inside the probe:
+
+| Mode | p50 | p95 | min | max |
+|---|---|---|---|---|
+| normal | 1092 ms | 1124 ms | 1042 ms | 1545 ms |
+| `POS_SQL_QUERY_ONLY=1` | 1092 ms | **1125 ms** | 1047 ms | 1523 ms |
+
+p95 regression **+0.09 %**, against a budget of ≤ 10 %. The earlier table
+(1097/1132 vs 1096/1133 at `41caeea`) is superseded; the numbers barely moved across
+~25 lane migrations, which is the expected shape — the lanes replace a handful of
+renderer statements per operation with one native transaction.
+
 ## Next, in order
 
-1. n>=200 latency on the current tree (the 41caeea table is stale).
-2. Re-run the 43-spec flag sweep on this tree; clean-worktree full floor; tag.
+1. Re-run the 43-spec flag sweep on `ce6afb1` (the zero-refusal run was on `0a80b92`;
+   the FIFO lane landed after it). ~100 minutes.
+2. Clean-worktree gate battery on the tagged commit; tag.
