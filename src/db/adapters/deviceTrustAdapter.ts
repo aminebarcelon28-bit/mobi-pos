@@ -149,21 +149,20 @@ export async function appendImeiEvent(event: ImeiTrustEventInput): Promise<void>
   const canonical = canonicalOf(event.imei);
   if (!canonical) return;
   const at = event.at || new Date().toISOString();
-  const db = await getLocalDb();
-  await db.execute(
-    `INSERT OR IGNORE INTO imei_events (id, imei, kind, ref_type, ref_id, at, actor, note)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-    [
-      imeiTrustEventId(event.kind, event.refType, event.refId, canonical),
-      canonical,
-      event.kind,
-      event.refType,
-      event.refId,
+  // Native lane (SEC-01): idempotent by the canonical event id.
+  const { invokeCommand } = await import('../../platform/invoke');
+  await invokeCommand<{ changes: number }>('append_imei_event', {
+    request: {
+      id: imeiTrustEventId(event.kind, event.refType, event.refId, canonical),
+      imei: canonical,
+      kind: event.kind,
+      refType: event.refType,
+      refId: event.refId,
       at,
-      String(event.actor ?? ''),
-      String(event.note ?? ''),
-    ]
-  );
+      actor: String(event.actor ?? ''),
+      note: String(event.note ?? ''),
+    },
+  });
 }
 
 export async function appendImeiEvents(events: ImeiTrustEventInput[]): Promise<void> {

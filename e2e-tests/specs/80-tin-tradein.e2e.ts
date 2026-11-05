@@ -180,7 +180,10 @@ async function tinFill(o: TinFill): Promise<Row> {
         return true;
       };
       const byPh = (needle: RegExp) => inputs.find((i) => needle.test(i.placeholder || ''));
-      const name = set(byPh(/Nadir Hadj/i), v.name ?? '');
+      // Placeholder tracks the modal (`Ex: Salma Hadj`). The field is
+      // `required`, so a stale pattern leaves it empty and HTML5 validation
+      // silently blocks the submit — the case then measures nothing.
+      const name = set(byPh(/Hadj/i), v.name ?? '');
       const phone = set(byPh(/0661 88 99 00/i), v.phone ?? '');
       const nationalId = set(byPh(/1987-44-112233/i), v.nationalId ?? '');
       const model = set(byPh(/iPhone 14 Pro Max/i), v.model ?? '');

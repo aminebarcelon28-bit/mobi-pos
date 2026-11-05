@@ -37,6 +37,9 @@ pub mod customer_lane;
 pub mod void_refund_lane;
 pub mod product_lane;
 pub mod held_order_lane;
+pub mod voucher_lane;
+pub mod operations_lane;
+pub mod receiving_lane;
 pub mod schema_heal_sql;
 #[cfg(test)] pub mod sql_boundary;
 
@@ -2514,6 +2517,12 @@ pub fn run() {
             held_order_lane::delete_held_order,
             held_order_lane::claim_held_order,
             held_order_lane::release_held_order,
+            voucher_lane::update_credit_voucher,
+            operations_lane::save_trade_in,
+            operations_lane::save_imei_record,
+            operations_lane::append_imei_event,
+            receiving_lane::insert_stock_batch,
+            receiving_lane::insert_supplier_price_rows,
             emergency_export::emergency_export_ledger,
             sav_attachments::sav_attachment_write,
             sav_attachments::sav_attachment_read,
@@ -2629,6 +2638,12 @@ pub fn run() {
             held_order_lane::delete_held_order,
             held_order_lane::claim_held_order,
             held_order_lane::release_held_order,
+            voucher_lane::update_credit_voucher,
+            operations_lane::save_trade_in,
+            operations_lane::save_imei_record,
+            operations_lane::append_imei_event,
+            receiving_lane::insert_stock_batch,
+            receiving_lane::insert_supplier_price_rows,
             emergency_export::emergency_export_ledger,
             sav_attachments::sav_attachment_write,
             sav_attachments::sav_attachment_read,

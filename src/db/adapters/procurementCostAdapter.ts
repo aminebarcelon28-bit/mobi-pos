@@ -91,31 +91,29 @@ export async function insertPoFreightRecord(record: {
  */
 export async function insertSupplierPriceRows(rows: SupplierPriceRow[]): Promise<number> {
   if (!isTauriEnv() || rows.length === 0) return 0;
-  const { getLocalDb } = await import('../sqlPluginAdapter');
-  const db = await getLocalDb();
-  let written = 0;
-  for (const row of rows) {
-    await db.execute(
-      `INSERT INTO supplier_price_history
-         (id, product_id, product_name, supplier, invoice_no, unit_cost, quantity, batch_id, received_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-       ON CONFLICT(id) DO NOTHING`,
-      [
-        row.id,
-        row.productId,
-        row.productName ?? null,
-        row.supplier,
-        row.invoiceNo ?? null,
-        Math.max(0, Math.round(Number(row.unitCost) || 0)),
-        Math.max(0, Number(row.quantity) || 0),
-        row.batchId ?? null,
-        row.receivedAt,
-      ]
-    );
-    written++;
-  }
-  return written;
+  // Native lane (SEC-01): one transaction, idempotent by row id, so a retried
+  // receipt appends nothing twice.
+  const { invokeCommand } = await import('../../platform/invoke');
+  const report = await invokeCommand<{ written: number }>('insert_supplier_price_rows', {
+    rows: rows.map((row) => ({
+      id: row.id,
+      productId: row.productId,
+      productName: row.productName ?? null,
+      supplier: row.supplier,
+      invoiceNo: row.invoiceNo ?? null,
+      unitCost: Math.max(0, Math.round(Number(row.unitCost) || 0)),
+      quantity: Math.max(0, Number(row.quantity) || 0),
+      batchId: row.batchId ?? null,
+      receivedAt: row.receivedAt,
+    })),
+  });
+  return report.written;
 }
+
+/**
+ * Non-Tauri hosts never reached the SQL path here either (`insertSupplierPriceRows`
+ * has always returned 0 off-Tauri), so there is no renderer fallback to keep.
+ */
 
 /**
  * Latest recorded unit cost per product for one supplier (before the current

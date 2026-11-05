@@ -229,7 +229,6 @@ export const operationsAdapter = {
   async saveTradeIn(trade: TradeInItem): Promise<void> {
     if (isTauriEnv()) {
       try {
-        const db = await getLocalDb();
         const payload = JSON.stringify(trade);
         // UPGRADE-08 — the trade-in rubric envelope (markers + verdict). The
         // column is for SQL-side reporting; the json_payload above keeps the
@@ -238,42 +237,27 @@ export const operationsAdapter = {
         const inspectionJson = trade.inspectionMarkers
           ? buildTradeInInspectionJson(trade.inspectionMarkers, trade.conditionGrade)
           : null;
-        await db.execute(
-          `INSERT INTO trade_ins (id, device_model, imei, brand, condition_grade, buyback_value, resale_margin_percent, resale_price, customer_name, customer_phone, customer_id, credit_to_wallet, created_at, json_payload, inspection_json)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-           ON CONFLICT(id) DO UPDATE SET
-             device_model=excluded.device_model,
-             imei=excluded.imei,
-             brand=excluded.brand,
-             condition_grade=excluded.condition_grade,
-             buyback_value=excluded.buyback_value,
-             resale_margin_percent=excluded.resale_margin_percent,
-             resale_price=excluded.resale_price,
-             customer_name=excluded.customer_name,
-             customer_phone=excluded.customer_phone,
-             customer_id=excluded.customer_id,
-             credit_to_wallet=excluded.credit_to_wallet,
-             json_payload=excluded.json_payload,
-             inspection_json=excluded.inspection_json,
-             version=trade_ins.version + 1`,
-          [
-            trade.id,
-            trade.deviceModel || '',
-            trade.imei || '',
-            trade.brand || '',
-            trade.conditionGrade || '',
-            trade.buybackValue || 0,
-            trade.resaleMarginPercent || 0,
-            trade.resalePrice || 0,
-            trade.customerName || '',
-            trade.customerPhone || null,
-            trade.customerId || null,
-            trade.creditToWallet ? 1 : 0,
-            trade.createdAt || new Date().toISOString(),
-            payload,
+        // Native lane (SEC-01): same upsert semantics (version bump).
+        const { invokeCommand } = await import('../../platform/invoke');
+        await invokeCommand<{ changes: number }>('save_trade_in', {
+          request: {
+            id: trade.id,
+            deviceModel: trade.deviceModel || '',
+            imei: trade.imei || '',
+            brand: trade.brand || '',
+            conditionGrade: trade.conditionGrade || '',
+            buybackValue: trade.buybackValue || 0,
+            resaleMarginPercent: trade.resaleMarginPercent || 0,
+            resalePrice: trade.resalePrice || 0,
+            customerName: trade.customerName || '',
+            customerPhone: trade.customerPhone || null,
+            customerId: trade.customerId || null,
+            creditToWallet: Boolean(trade.creditToWallet),
+            createdAt: trade.createdAt || new Date().toISOString(),
+            jsonPayload: payload,
             inspectionJson,
-          ],
-        );
+          },
+        });
       } catch (err) {
         console.warn('[operationsAdapter] SQLite saveTradeIn failed, fallback to Dexie:', err);
       }
@@ -313,32 +297,21 @@ export const operationsAdapter = {
   async saveIMEIRecord(record: IMEIRecord): Promise<void> {
     if (isTauriEnv()) {
       try {
-        const db = await getLocalDb();
-        await db.execute(
-          `INSERT INTO imei_records (imei, product_id, purchase_order_id, sale_transaction_id, warranty_expires_at, received_at, sold_at, warranty_months, status)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, COALESCE($9, 'in_stock'))
-           ON CONFLICT(imei) DO UPDATE SET
-             product_id=excluded.product_id,
-             purchase_order_id=COALESCE(excluded.purchase_order_id, imei_records.purchase_order_id),
-             sale_transaction_id=excluded.sale_transaction_id,
-             warranty_expires_at=COALESCE(excluded.warranty_expires_at, imei_records.warranty_expires_at),
-             received_at=COALESCE(excluded.received_at, imei_records.received_at),
-             sold_at=excluded.sold_at,
-             warranty_months=COALESCE(excluded.warranty_months, imei_records.warranty_months),
-             status=COALESCE($9, imei_records.status),
-             version=imei_records.version + 1`,
-          [
-            record.imei,
-            record.productId || '',
-            record.purchaseOrderId || null,
-            record.saleTransactionId || null,
-            record.warrantyExpiresAt || null,
-            record.receivedAt || new Date().toISOString(),
-            record.soldAt || null,
-            record.warrantyMonths || null,
-            record.status || null,
-          ],
-        );
+        // Native lane (SEC-01): COALESCE-preserved columns keep parity.
+        const { invokeCommand } = await import('../../platform/invoke');
+        await invokeCommand<{ changes: number }>('save_imei_record', {
+          request: {
+            imei: record.imei,
+            productId: record.productId || '',
+            purchaseOrderId: record.purchaseOrderId || null,
+            saleTransactionId: record.saleTransactionId || null,
+            warrantyExpiresAt: record.warrantyExpiresAt || null,
+            receivedAt: record.receivedAt || new Date().toISOString(),
+            soldAt: record.soldAt || null,
+            warrantyMonths: record.warrantyMonths || null,
+            status: record.status || null,
+          },
+        });
       } catch (err) {
         console.warn('[operationsAdapter] SQLite saveIMEIRecord failed, fallback to Dexie:', err);
       }

@@ -339,3 +339,19 @@ the two remaining single-statement admin writes. The first 48-spec flag sweep
 measured 30 refusals: ~11 app lanes (these three now removed) and ~19 deliberate
 harness probes in the DAT/INVARIANT specs, which must move to host-side writable
 connections because their subject is SQLite behaviour, not the renderer lane.
+
+### Receiving writes are native (2026-11-05)
+
+`insert_stock_batch` and `insert_supplier_price_rows` close the receiving path: the
+batch row and its envelope commit together, the envelope carries the version read
+back after the upsert, and an idempotency key supplied by the caller now makes a
+retry converge instead of minting a second envelope. Supplier evidence rows are
+idempotent by row id.
+
+Also recorded here because it cost real time: a stale locator is not a lane bug.
+`80-tin-tradein` lost five baseline-PASS cases because the modal's customer name
+became `required` with a new placeholder, so the spec's `/Nadir Hadj/i` matched
+nothing and HTML5 validation blocked the submit with no toast. A probe that dumps
+the fill result and the toast is what separated "the native lane broke the write"
+from "the form never submitted". Fixing the pattern restored the exact baseline
+failure set (15/21, failures = `TIN-01/04/06/08/14/17`).

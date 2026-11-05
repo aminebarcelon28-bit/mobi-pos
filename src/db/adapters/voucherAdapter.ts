@@ -198,14 +198,18 @@ export const voucherAdapter = {
         // lane moved the balance since our read. A 0-row write means another
         // capture won the race (or missing row) — inspect before deciding.
         // NO schema change: uses the existing id + remaining_amount columns.
-        const affected = (await withBusyRetry(
-          () =>
-            db.execute(
-              'UPDATE credit_vouchers SET remaining_amount = $1, status = $2, updated_at = $3, version = version + 1 WHERE id = $4 AND remaining_amount = $5',
-              [updated.remainingAmount, updated.status, updated.updatedAt, updated.id, voucher.remainingAmount]
-            ),
-          { attempts: 3, baseDelayMs: 60, label: 'voucher-redeem-authority' }
-        )) as { rowsAffected?: number } | number;
+        const affected: { rowsAffected: number } = await (async () => {
+          // Native CAS (SEC-01): same expected-balance guard; the loser gets 0.
+          const { invokeCommand } = await import('../../platform/invoke');
+          const r = await invokeCommand<{ changes: number }>('update_credit_voucher', {
+            id: updated.id,
+            expectedRemaining: voucher.remainingAmount,
+            remaining: updated.remainingAmount,
+            status: updated.status,
+            now: updated.updatedAt,
+          });
+          return { rowsAffected: r.changes };
+        })();
 
         const rowsAffected =
           typeof affected === 'number'
@@ -333,15 +337,18 @@ export const voucherAdapter = {
 
     if (isTauriEnv()) {
       try {
-        const db = await getLocalDb();
-        const affected = (await withBusyRetry(
-          () =>
-            db.execute(
-              'UPDATE credit_vouchers SET remaining_amount = $1, status = $2, updated_at = $3, version = version + 1 WHERE id = $4 AND remaining_amount = $5',
-              [updated.remainingAmount, updated.status, updated.updatedAt, updated.id, voucher.remainingAmount]
-            ),
-          { attempts: 3, baseDelayMs: 60, label: 'voucher-creditback-authority' }
-        )) as { rowsAffected?: number } | number;
+        const affected: { rowsAffected: number } = await (async () => {
+          // Native CAS (SEC-01): same expected-balance guard.
+          const { invokeCommand } = await import('../../platform/invoke');
+          const r = await invokeCommand<{ changes: number }>('update_credit_voucher', {
+            id: updated.id,
+            expectedRemaining: voucher.remainingAmount,
+            remaining: updated.remainingAmount,
+            status: updated.status,
+            now: updated.updatedAt,
+          });
+          return { rowsAffected: r.changes };
+        })();
         const rowsAffected =
           typeof affected === 'number'
             ? affected

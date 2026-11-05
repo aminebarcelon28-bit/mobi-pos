@@ -402,7 +402,7 @@ pub fn void_sale_mirror_core(
                 "INSERT OR IGNORE INTO imei_events (id, imei, kind, ref_type, ref_id, at, actor, note)
                  VALUES (?1, ?2, 'RETURN_IN', 'order', ?3, ?4, '', ?5)",
                 rusqlite::params![
-                    format!("RETURN_IN:order:{}:{}", req.transaction_id, imei),
+                    format!("imev|RETURN_IN|order|{}|{}", req.transaction_id, imei),
                     imei,
                     req.transaction_id,
                     req.now_iso,
@@ -480,7 +480,7 @@ pub fn refund_sale_mirror_core(
                 "INSERT OR IGNORE INTO imei_events (id, imei, kind, ref_type, ref_id, at, actor, note)
                  VALUES (?1, ?2, ?3, 'order', ?4, ?5, '', ?6)",
                 rusqlite::params![
-                    format!("{}:order:{}:{}", release.kind, req.transaction_id, release.imei),
+                    format!("imev|{}|order|{}|{}", release.kind, req.transaction_id, release.imei),
                     release.imei,
                     release.kind,
                     req.transaction_id,
@@ -819,6 +819,10 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM imei_events", [], |r| r.get(0))
             .unwrap();
         assert_eq!(events, 1, "INSERT OR IGNORE keeps one event");
+        let event_id: String = conn
+            .query_row("SELECT id FROM imei_events", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(event_id, "imev|RETURN_IN|order|R1|I1", "id shape matches imeiTrustEventId");
     }
 
     fn debt_schema() -> Connection {

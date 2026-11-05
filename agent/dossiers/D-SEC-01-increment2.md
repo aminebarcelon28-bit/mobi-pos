@@ -533,8 +533,58 @@ was 49.4 GB). `cargo clean` removed only regenerable build output (114 083 files
 49.4 GiB), restoring 39.3 GB; no source or user data was touched, and the next
 build is consequently a full rebuild.
 
+## Trade-in floor restored + receiving lanes (2026-11-05, E-0204)
+
+**A floor row had fallen and it was not the lanes.** `80-tin-tradein` was 10/21 with
+eleven failures where the committed baseline records six (`TIN-01/04/06/08/14/17`).
+Root cause found by probe, not by guess: the modal's customer-name input is
+`required` (`TradeInBuybackModal.tsx:664-672`) and its placeholder became
+`Ex: Salma Hadj`, while the spec filled it by matching `/Nadir Hadj/i`. The field
+was never filled, so HTML5 validation silently blocked every submit — no toast, no
+write, `trade_ins` unchanged. `TIN-02/03/07/11` (baseline PASS) and `TIN-10`
+(baseline N/A) fell as collateral.
+
+Fix is a locator repair, not a weaker test: the pattern now tracks the current
+placeholder (`/Hadj/i`), every assertion is untouched. Measured after:
+
+| Run | Result | Failing cases |
+|---|---|---|
+| `80-tin` normal | **15/21** | `TIN-01, 04, 06, 08, 14, 17` |
+| baseline COVERAGE FAIL set | — | `TIN-01, 04, 06, 08, 14, 17` |
+
+Exact match: no extra row falls, and `TIN-10` now passes where the baseline
+recorded N/A.
+
+**Receiving lanes** (`src-tauri/src/receiving_lane.rs`, 4 tests):
+
+| Command | Replaces | Contract |
+|---|---|---|
+| `insert_stock_batch` | `insertStockBatch` (row + envelope) | one transaction; the envelope carries the committed version; a caller-supplied key makes a retry converge on one envelope (the old lane always minted a fresh key) |
+| `insert_supplier_price_rows` | `insertSupplierPriceRows` | one transaction, idempotent by row id; a retried receipt appends nothing twice |
+
+**Refusals measured, same specs:**
+
+| Spec | Before | After |
+|---|---|---|
+| `82-inv-inventory` flag | 5 (`supplier_price_history` ×2, `stock_batches` ×2, `event_log` ×1) | **3** (`purchase_orders` ×2, `event_log` ×1) |
+| `80-tin-tradein` flag | 10 (`stock_batches` ×9, `event_log` ×1) | **10** (`products` singular ×9, `event_log` ×1) |
+
+The trade-in batch refusals are gone; the singular `syncProductUpsert` (a different
+function from the bulk lane ported in E-0201) is the new exposure, because the flag
+now reaches further into the flow.
+
+**Static boundary 308** (down from 314): the voucher, trade-in, IMEI and
+supplier-price SQL left the renderer.
+
+**Named remainder (measured, not guessed):** the shadow-event interceptor
+(`event_log` + the `p_*` projections, `src/sync/eventInterceptor.ts` +
+`src/domain/reducers.ts`, 10 event types) is still renderer-side and is called from
+the product upsert; the singular `syncProductUpsert`; `purchase_orders`; and the
+FIFO reconcile algorithm.
+
 ## Next, in order
 
-1. `credit_vouchers` + trade-in (`trade_ins`/`imei_records`/`imei_events`) lanes.
-2. Migrate the DAT/INVARIANT probe writes to host-side writable connections.
-3. Re-run the 48-spec sweep under the flag; then FIFO reconcile; clean floor; tag.
+1. `record_shadow_event` native lane (event_log insert + projection switch) — the
+   last structural piece, because the product path calls it.
+2. Route `syncProductUpsert` to the existing `upsert_product` command.
+3. `purchase_orders` lane; then the 48-spec sweep; then FIFO; clean floor; tag.

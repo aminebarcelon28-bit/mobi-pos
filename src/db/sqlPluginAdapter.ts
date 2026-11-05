@@ -4625,6 +4625,45 @@ export async function insertStockBatch(batch: {
   purchaseOrderId?: string;
   idempotencyKey?: string;
 }): Promise<string> {
+  // Native lane (SEC-01): the batch row and its sync envelope commit in one
+  // transaction, and the envelope carries the committed version. A retry with
+  // the same key converges on one envelope instead of minting a second one.
+  // Non-Tauri hosts keep the renderer SQL path below.
+  if (isTauriEnv()) {
+    const { invokeCommand } = await import('../platform/invoke');
+    const nativeDb = await getLocalDb();
+    const device = (await getOrCreateDeviceId(nativeDb)) || 'default';
+    const stamp = utcNowIso();
+    const nativeReceivedAt = batch.receivedAt || stamp;
+    const report = await invokeCommand<{ batchId: string; version: number }>('insert_stock_batch', {
+      request: {
+        batchId: batch.batchId || newId('batch'),
+        productId: batch.productId,
+        quantityRemaining: batch.quantityRemaining,
+        unitCost: batch.unitCost,
+        freightPerUnit: Math.max(0, Number(batch.freightPerUnit) || 0),
+        receivedAt: nativeReceivedAt,
+        purchaseOrderId: batch.purchaseOrderId || null,
+        deviceId: device,
+        idempotencyKey: batch.idempotencyKey || null,
+        now: stamp,
+      },
+    });
+    try {
+      const { dexieDb } = await import('./database');
+      await dexieDb.stockBatches.put({
+        batchId: report.batchId,
+        productId: batch.productId,
+        quantityRemaining: batch.quantityRemaining,
+        unitCost: batch.unitCost,
+        receivedAt: nativeReceivedAt,
+        purchaseOrderId: batch.purchaseOrderId || undefined,
+      });
+    } catch (dexErr) {
+      console.warn('[insertStockBatch] Dexie mirror put skipped:', dexErr);
+    }
+    return report.batchId;
+  }
   const db = await getLocalDb();
   const deviceId = (await getOrCreateDeviceId(db)) || 'default';
   const now = utcNowIso();
