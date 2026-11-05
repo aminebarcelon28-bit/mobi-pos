@@ -901,8 +901,34 @@ envCount 3 -> envCountAfter 3   (a second delete converges, it does not multiply
 reconcile 687 · cargo **554**/554 · registry **117** · sql-boundary **301** (from 303) ·
 drift OK · secrets/licences clean.
 
+## 43-spec flag sweep: ZERO refusals (2026-11-05, E-0213)
+
+The non-scale suite, re-run after the `delete_product` lane:
+
+```
+duration 5978.0s   passing 250   failing 105   skipped 0   cases 325
+SWEEP43 refusals=0
+```
+
+**Zero refused renderer writes.** Progression on this suite: 30 → 11 → 3 → **0**
+(the 30 was the pre-lane run, 11 after the first batch of lanes, 3 after the
+refund/repair/kredy set, 0 after `delete_product`).
+
+Honest caveats about this run, because they matter for the tag:
+
+* **The suite is still RED overall** — 105 failing cases. Those are the baseline's
+  own FAIL/N/A set plus the specs that die on this box; this run proves the
+  *boundary* metric, not a green suite.
+* **Case count moved** (325 here vs 335 in the previous run, 105 vs 94 failures):
+  the app session was killed by the 300 s renderer watchdog twice mid-run
+  (`Timed out receiving message from renderer` at 17:37Z), so a few specs lost
+  cases to teardown. That variance is environment-driven, not boundary-driven, but
+  it means a *case-for-case* comparison across runs is not apples-to-apples.
+* The three 10M-fixture specs remain excluded by name (measured: 10M boot 2 141 ms
+  vs 254 s host seed, E-0208).
+
 ## Next, in order
 
-1. Re-run the 43-spec flag sweep → expect **0** refusals (takes ~100 min).
-2. FIFO reconcile port (row-level goldens).
-3. n>=200 latency on the current tree; clean floor; tag.
+1. FIFO reconcile port (row-level COGS goldens) — the last renderer money algorithm.
+2. n>=200 latency on the CURRENT tree (the 41caeea table is stale).
+3. Clean-worktree full floor; tag.
