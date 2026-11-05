@@ -167,28 +167,20 @@ export const operationsAdapter = {
   async savePurchaseOrder(po: PurchaseOrder): Promise<void> {
     if (isTauriEnv()) {
       try {
-        const db = await getLocalDb();
         const payload = JSON.stringify(po);
-        await db.execute(
-          `INSERT INTO purchase_orders (id, po_number, vendor_name, total_amount, status, created_at, json_payload)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)
-           ON CONFLICT(id) DO UPDATE SET
-             po_number=excluded.po_number,
-             vendor_name=excluded.vendor_name,
-             total_amount=excluded.total_amount,
-             status=excluded.status,
-             json_payload=excluded.json_payload,
-             version=purchase_orders.version + 1`,
-          [
-            po.id,
-            po.poNumber || '',
-            po.vendorName || '',
-            po.totalAmount || 0,
-            po.status || 'Draft',
-            po.createdAt || new Date().toISOString(),
-            payload,
-          ],
-        );
+        // Native lane (SEC-01): same upsert, version bumped on conflict.
+        const { invokeCommand } = await import('../../platform/invoke');
+        await invokeCommand<{ changes: number }>('save_purchase_order', {
+          request: {
+            id: po.id,
+            poNumber: po.poNumber || '',
+            vendorName: po.vendorName || '',
+            totalAmount: po.totalAmount || 0,
+            status: po.status || 'Draft',
+            createdAt: po.createdAt || new Date().toISOString(),
+            jsonPayload: payload,
+          },
+        });
       } catch (err) {
         console.warn('[operationsAdapter] SQLite savePurchaseOrder failed, fallback to Dexie:', err);
       }

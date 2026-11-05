@@ -8,6 +8,7 @@
 import type { DomainEvent, Envelope } from '../bindings/bindings.ts';
 import { ClientHlcClock } from '../bindings/bindings.ts';
 import { reduceEnvelope, type SqlExecutor } from '../domain/reducers.ts';
+import { isTauriEnv } from '../db/adapters/base';
 
 // Crockford Base32 charset for ULID generation
 const ENCODING = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
@@ -91,8 +92,26 @@ export async function recordShadowEvent(
 
   if (!laneDead) {
     try {
-      // 1. Append to event_log
-      await db.execute(
+      // Native lane (SEC-01): log + reduce + cursor in one Rust transaction, so
+      // a failed projection cannot leave half-applied shadow state. Off-Tauri
+      // hosts and the writer-schema oracle keep the SQL path below.
+      if (isTauriEnv()) {
+        const { invokeCommand } = await import('../platform/invoke');
+        await invokeCommand<{ recorded: boolean }>('record_shadow_event', {
+          request: {
+            eventId: envelope.event_id,
+            aggregate,
+            hlc: envelope.hlc,
+            deviceId: envelope.device_id,
+            schemaV: envelope.schema_v,
+            eventType: envelope.event.type,
+            dataJson: JSON.stringify(envelope.event.data),
+            createdAt: new Date().toISOString(),
+          },
+        });
+      } else {
+        // 1. Append to event_log
+        await db.execute(
         `INSERT INTO event_log (
           event_id, aggregate, hlc, device_id, schema_v, event_type, data_json, synced_to_cloud, created_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?);`,
@@ -108,8 +127,9 @@ export async function recordShadowEvent(
         ]
       );
 
-      // 2. Reduce onto p_* projections
-      await reduceEnvelope(db, envelope);
+        // 2. Reduce onto p_* projections
+        await reduceEnvelope(db, envelope);
+      }
     } catch (err) {
       if (isSchemaMismatch(err)) {
         // Permanent: this database will never accept the lane. Latch open —

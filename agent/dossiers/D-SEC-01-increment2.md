@@ -582,9 +582,45 @@ supplier-price SQL left the renderer.
 the product upsert; the singular `syncProductUpsert`; `purchase_orders`; and the
 FIFO reconcile algorithm.
 
+## Shadow events + product mirror are native (2026-11-05, E-0205)
+
+**Five specs now run at 0 refused writes in BOTH modes.** This increment closed the
+last structural piece — the shadow-event interceptor — and the singular product
+mirror that calls it.
+
+| Command / change | Replaces | Tests |
+|---|---|---|
+| `record_shadow_event` | `recordShadowEvent` in `eventInterceptor.ts`: `event_log` append + the nine-case `p_*` reducer + `projection_cursor` | 5: create/stock reduce, LWW staleness, checkout header+lines idempotent, failed projection rolls the event back, unknown type logged not guessed |
+| `save_purchase_order` | `savePurchaseOrder` upsert | 1: version bumped on conflict, one row |
+| `syncProductUpsert` → existing `upsert_product` | the *singular* product write (distinct from the bulk lane in E-0201) | covered by the existing 4 product-lane tests |
+
+**Deliberate difference, recorded in ADR-005:** the shadow lane runs log + reduce +
+cursor in ONE transaction, so a failed projection cannot leave half-applied shadow
+state. The renderer ran them as separate statements and could. On a schema the
+lane cannot support, the command fails and TypeScript latches exactly as before.
+
+**Measured (same machine, same specs):**
+
+| Spec | Normal | Flag |
+|---|---|---|
+| `80-tin-tradein` | **15/21, 0 refusals** | **15/21, 0 refusals** (was 14/21 with 10) |
+| `82-inv-inventory` | **12/17, 0 refusals** | **12/17, 0 refusals** (was 12/17 with 3) |
+| `30-ref-refunds` | 12/12, 0 | 12/12, 0 |
+| `10-mny-money` | 14/14, 0 | 14/14, 0 |
+| `40-shf-shifts` | 12/12, 0 | 12/12, 0 |
+
+`TIN-10` returning to PASS under the flag is the direct proof that the product
+refusal (not the spec) was its cause.
+
+**Static boundary 307** (down from 308); registry 106; cargo 533.
+
+**Remaining from the last full sweep:** the DAT/INVARIANT harness probes (~19 raw
+writes whose subject is SQLite behaviour) and the FIFO reconcile algorithm. No app
+lane is left in the measured inventory for the specs exercised so far; the full
+48-spec sweep is what confirms that across every spec.
+
 ## Next, in order
 
-1. `record_shadow_event` native lane (event_log insert + projection switch) — the
-   last structural piece, because the product path calls it.
-2. Route `syncProductUpsert` to the existing `upsert_product` command.
-3. `purchase_orders` lane; then the 48-spec sweep; then FIFO; clean floor; tag.
+1. Migrate the DAT/INVARIANT probe writes to host-side writable connections.
+2. Full 48-spec sweep under the flag; address whatever it still finds.
+3. FIFO reconcile port (row-level COGS goldens); n>=200 latency; clean floor; tag.

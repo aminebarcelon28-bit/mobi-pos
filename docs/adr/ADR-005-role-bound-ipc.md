@@ -355,3 +355,23 @@ nothing and HTML5 validation blocked the submit with no toast. A probe that dump
 the fill result and the toast is what separated "the native lane broke the write"
 from "the form never submitted". Fixing the pattern restored the exact baseline
 failure set (15/21, failures = `TIN-01/04/06/08/14/17`).
+
+### Shadow events are native (2026-11-05)
+
+`record_shadow_event` owns the `event_log` append, the nine-case `p_*` reducer and
+the `projection_cursor` advance. It is called from the product, stock and checkout
+paths, so leaving it renderer-side meant a refusal on every catalog write.
+
+**Deliberate, documented difference from the renderer:** log, reduce and cursor
+share one transaction. The renderer ran them as separate statements and could leave
+half-applied shadow state if a projection failed mid-way; all-or-nothing is
+strictly safer, and a projection failure surfaces as a command error that the
+TypeScript side latches on (same `laneDead` behaviour). Unknown event types are
+logged, never guessed at.
+
+Also in this change: the **singular** `syncProductUpsert` now uses the existing
+`upsert_product` command (the bulk lane landed in E-0201; they are different
+functions and the flag exposed the difference), and `savePurchaseOrder` moved
+native. Result: `80-tin-tradein` and `82-inv-inventory` are at zero refused writes in
+both modes, and `TIN-10` — which had only failed under the flag — passes again,
+proving that failure was the product refusal rather than the spec.

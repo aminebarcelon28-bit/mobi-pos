@@ -3640,7 +3640,83 @@ export async function syncProductUpsert(p: ProductSyncInput): Promise<void> {
     ).catch(() => [{ s: 0, n: 0 }])) as Array<{ s: number; n: number }>;
     const currentSum = Number(ledgerStats?.[0]?.s ?? 0);
     const hasLedger = Number(ledgerStats?.[0]?.n ?? 0) > 0;
+    // Ledger baseline → the stock delta. Shared by the native lane and the
+    // renderer fallback, and reused by the `stock_adjusted` shadow event below.
+    const adjust = wantStock - (hasLedger ? currentSum : 0);
 
+    // Native lane (SEC-01): product row, conditional ledger ADJUST, stock
+    // recompute, opening batch and envelopes commit in one Rust transaction.
+    // The shadow events below are native too, so projections still move.
+    let wroteNatively = false;
+    if (isTauriEnv()) {
+      let batchCount = 0;
+      if (wantStock > 0) {
+        try {
+          const batchRows = (await db.select(
+            'SELECT COUNT(*) as count FROM stock_batches WHERE product_id = $1 AND deleted = 0',
+            [pId],
+          ).catch(() => [{ count: 0 }])) as Array<{ count: number }>;
+          batchCount = Number(batchRows[0]?.count ?? 0);
+        } catch {
+          batchCount = 0;
+        }
+      }
+      const { invokeCommand } = await import('../platform/invoke');
+      const report = await invokeCommand<{ batchId?: string | null }>('upsert_product', {
+        request: {
+          id: pId,
+          sku: p.sku ?? '',
+          barcode: p.barcode ?? '',
+          title,
+          brand,
+          category,
+          price: Number(p.price ?? 0),
+          wholesalePrice: Number(p.wholesalePrice ?? 0),
+          costPrice: Number(p.costPrice ?? 0),
+          stock: wantStock,
+          imageUrl: sanitizeImageField(p.imageUrl) ?? null,
+          isSerialized: Boolean(p.isSerialized),
+          imeiNumber: p.imeiNumber ?? null,
+          vendorName: p.vendorName ?? null,
+          leadTimeDays: p.leadTimeDays ?? 7,
+          dailySalesVelocity: p.dailySalesVelocity ?? 0,
+          reorderPoint: p.reorderPoint ?? 5,
+          jsonPayload: toBoundedSyncJson(p.raw ?? p),
+          deviceId,
+          idempotencyKey: pkey,
+          createdAt: (prev?.created_at as string) ?? now,
+          updatedAt: now,
+          version: baseVersion + 1,
+          ledgerAdjust: adjust !== 0 ? adjust : null,
+          openingBatch:
+            wantStock > 0 && batchCount === 0
+              ? {
+                  quantity: wantStock,
+                  unitCost: Math.max(0, Number(p.costPrice ?? 0)),
+                  purchaseOrderId: 'OPENING_STOCK',
+                }
+              : null,
+        },
+      });
+      if (report?.batchId) {
+        try {
+          const { dexieDb } = await import('./database');
+          await dexieDb.stockBatches.put({
+            batchId: report.batchId,
+            productId: pId,
+            quantityRemaining: wantStock,
+            unitCost: Math.max(0, Number(p.costPrice ?? 0)),
+            receivedAt: now,
+            purchaseOrderId: 'OPENING_STOCK',
+          });
+        } catch {
+          // Dexie mirror is best-effort; SQLite is the authority.
+        }
+      }
+      wroteNatively = true;
+    }
+
+    if (!wroteNatively) {
     await db.execute(
       `INSERT INTO products (id, sku, barcode, title, brand, category, price, wholesale_price,
         cost_price, stock, image_url, is_serialized, imei_number, vendor_name, lead_time_days,
@@ -3671,8 +3747,6 @@ export async function syncProductUpsert(p: ProductSyncInput): Promise<void> {
     );
 
     // Stock truth stays in the ledger: record the user's new baseline as a delta.
-    const baseline = hasLedger ? currentSum : 0;
-    const adjust = wantStock - baseline;
     if (adjust !== 0) {
       const ledgerId = newIdempotencyKey();
       const ledgerKey = newIdempotencyKey();
@@ -3754,6 +3828,7 @@ export async function syncProductUpsert(p: ProductSyncInput): Promise<void> {
        ON CONFLICT(idempotency_key) DO UPDATE SET payload_json=excluded.payload_json, updated_at=$4`,
       [pkey, pId, toBoundedSyncJson(productPayload), now],
     );
+    }
 
     // Phase P1 Shadow Event Interceptor: Record product event and stock adjust
     try {

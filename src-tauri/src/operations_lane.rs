@@ -209,6 +209,67 @@ pub fn append_imei_event(app: tauri::AppHandle, request: ImeiEventRequest) -> Re
     )
 }
 
+// ── purchase orders ────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PurchaseOrderRequest {
+    pub id: String,
+    pub po_number: String,
+    pub vendor_name: String,
+    pub total_amount: f64,
+    pub status: String,
+    pub created_at: String,
+    pub json_payload: String,
+}
+
+pub fn save_purchase_order_core(
+    conn: &Connection,
+    req: &PurchaseOrderRequest,
+) -> Result<usize, String> {
+    if req.id.trim().is_empty() {
+        return Err("save_purchase_order: id required".to_string());
+    }
+    conn.execute(
+        "INSERT INTO purchase_orders (id, po_number, vendor_name, total_amount, status, created_at, json_payload)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+         ON CONFLICT(id) DO UPDATE SET
+           po_number=excluded.po_number,
+           vendor_name=excluded.vendor_name,
+           total_amount=excluded.total_amount,
+           status=excluded.status,
+           json_payload=excluded.json_payload,
+           version=purchase_orders.version + 1",
+        rusqlite::params![
+            req.id,
+            req.po_number,
+            req.vendor_name,
+            req.total_amount,
+            req.status,
+            req.created_at,
+            req.json_payload
+        ],
+    )
+    .map_err(|e| format!("save_purchase_order: {e}"))
+}
+
+#[tauri::command]
+pub fn save_purchase_order(
+    app: tauri::AppHandle,
+    request: PurchaseOrderRequest,
+) -> Result<WriteReport, TrustError> {
+    crate::trust_core::ipc_authorizer::authorize_and_execute(
+        "save_purchase_order",
+        crate::trust_core::capability_policy::Capability::OperationalWrites,
+        |_| {
+            let conn = open_db(&app)?;
+            save_purchase_order_core(&conn, &request)
+                .map(|changes| WriteReport { changes })
+                .map_err(TrustError::op_failed)
+        },
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -224,7 +285,10 @@ mod tests {
                 sale_transaction_id TEXT, warranty_expires_at TEXT, received_at TEXT, sold_at TEXT,
                 warranty_months INTEGER, status TEXT, version INTEGER NOT NULL DEFAULT 1);
              CREATE TABLE imei_events (id TEXT PRIMARY KEY, imei TEXT, kind TEXT, ref_type TEXT,
-                ref_id TEXT, at TEXT, actor TEXT, note TEXT);",
+                ref_id TEXT, at TEXT, actor TEXT, note TEXT);
+             CREATE TABLE purchase_orders (id TEXT PRIMARY KEY, po_number TEXT, vendor_name TEXT,
+                total_amount REAL, status TEXT, created_at TEXT, json_payload TEXT,
+                version INTEGER NOT NULL DEFAULT 1);",
         )
         .unwrap();
         conn
@@ -292,6 +356,38 @@ mod tests {
         assert_eq!(po, "PO1", "COALESCE keeps the original purchase link");
         assert_eq!(months, 12);
         assert_eq!(version, 2);
+    }
+
+    #[test]
+    fn purchase_order_upsert_bumps_the_version() {
+        let conn = seeded();
+        let mut po = PurchaseOrderRequest {
+            id: "PO1".to_string(),
+            po_number: "PO-1".to_string(),
+            vendor_name: "Sup".to_string(),
+            total_amount: 1000.0,
+            status: "Draft".to_string(),
+            created_at: "2026-11-05T10:00:00Z".to_string(),
+            json_payload: "{\"id\":\"PO1\"}".to_string(),
+        };
+        assert_eq!(save_purchase_order_core(&conn, &po).unwrap(), 1);
+        po.status = "Received".to_string();
+        po.total_amount = 1200.0;
+        assert_eq!(save_purchase_order_core(&conn, &po).unwrap(), 1);
+        let (status, total, version): (String, f64, i64) = conn
+            .query_row(
+                "SELECT status, total_amount, version FROM purchase_orders WHERE id='PO1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(status, "Received");
+        assert_eq!(total, 1200.0);
+        assert_eq!(version, 2);
+        let rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM purchase_orders", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows, 1, "the upsert converges on one row");
     }
 
     #[test]
