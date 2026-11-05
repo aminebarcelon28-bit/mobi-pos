@@ -45,6 +45,7 @@ pub mod kredy_lane;
 pub mod restitute_lane;
 pub mod repair_lane;
 pub mod delete_lane;
+pub mod fifo_reconcile_lane;
 pub mod shadow_event_lane;
 pub mod schema_heal_sql;
 #[cfg(test)] pub mod sql_boundary;
@@ -2534,6 +2535,7 @@ pub fn run() {
             repair_lane::close_open_time_logs,
             repair_lane::start_time_log,
             delete_lane::delete_product,
+            fifo_reconcile_lane::reconcile_shadow_batches,
             kredy_lane::save_debt_plan,
             kredy_lane::pay_debt_plan_entries,
             kredy_lane::close_debt_plan,
@@ -2668,6 +2670,7 @@ pub fn run() {
             repair_lane::close_open_time_logs,
             repair_lane::start_time_log,
             delete_lane::delete_product,
+            fifo_reconcile_lane::reconcile_shadow_batches,
             kredy_lane::save_debt_plan,
             kredy_lane::pay_debt_plan_entries,
             kredy_lane::close_debt_plan,

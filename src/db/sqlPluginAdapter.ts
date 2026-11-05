@@ -5850,6 +5850,64 @@ export async function reconcileShadowBatches(targetProductId?: string): Promise<
       )
       .catch(rethrowBusy)) as Array<{ n?: unknown }>;
     if (Number(pending?.[0]?.n ?? 0) === 0) return 0;
+
+    // Native lane (SEC-01): depletion, line/order COGS rewrite, allocation
+    // ledger swap and marker resolution commit in one Rust transaction, with
+    // the same coverage pre-check and guarded depletion as the renderer.
+    if (isTauriEnv()) {
+      const firstShadow = (await db
+        .select(
+          `SELECT batch_id FROM stock_batches
+            WHERE purchase_order_id = 'SHADOW' AND deleted = 0 AND shadow_resolved = 0
+            ${targetProductId ? 'AND product_id = $1' : ''}
+            ORDER BY received_at ASC, batch_id ASC LIMIT 1`,
+          targetProductId ? [targetProductId] : undefined,
+        )
+        .catch(() => [])) as Array<{ batch_id?: string }>;
+      // Peer claim stays here: a best-effort cross-tab guard that proceeds
+      // unclaimed when offline, exactly as before.
+      try {
+        const { tryClaimCompensation } = await import('../sync/claims');
+        const claim = await tryClaimCompensation(
+          'RECONCILE',
+          `RECON-${targetProductId ?? 'ALL'}`,
+          String(firstShadow?.[0]?.batch_id ?? ''),
+        );
+        if (!claim.claimed && claim.reason === 'HELD_BY_PEER') return 0;
+      } catch {
+        // Claim lane trouble — proceed unclaimed (status quo ante).
+      }
+      const nativeDevice = (await getOrCreateDeviceId(db)) || 'default';
+      const { invokeCommand } = await import('../platform/invoke');
+      const report = await invokeCommand<{ reconciled: number; saleIds: string[]; productIds: string[] }>(
+        'reconcile_shadow_batches',
+        { request: { productId: targetProductId ?? null, deviceId: nativeDevice, now: utcNowIso() } },
+      );
+      if (report.reconciled > 0) {
+        try {
+          const { reconstructDexieTransactionsFromSql } = await import('./backfill');
+          await reconstructDexieTransactionsFromSql(db, { onlyTransactionIds: report.saleIds });
+        } catch {
+          // Mirror heals on the next read.
+        }
+        for (const id of report.saleIds) {
+          if (reconciledSaleIds.length >= MAX_DRAIN_RECONCILED) reconciledSaleIds.shift();
+          reconciledSaleIds.push(String(id));
+        }
+        try {
+          await mirrorStockBatchesToDexie(db, report.productIds);
+        } catch {
+          // Mirror heals on next mutation/boot.
+        }
+        try {
+          const { syncManager } = await import('../sync/SyncManager');
+          syncManager.notifyLocalWrite();
+        } catch {
+          // Sync kick best-effort.
+        }
+      }
+      return report.reconciled;
+    }
     const deviceId = (await getOrCreateDeviceId(db)) || 'default';
     const now = utcNowIso();
     const useTxn = await beginImmediate(db, 'fifo:reconcile');

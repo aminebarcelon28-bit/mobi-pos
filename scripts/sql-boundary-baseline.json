@@ -1,5 +1,5 @@
 {
-  "at": "2026-11-05T16:21:20.652Z",
+  "at": "2026-11-05T18:54:47.518Z",
   "count": 301,
   "entries": [
     "src/api/syncGateway.ts:72",
@@ -233,11 +233,11 @@
     "src/db/sqlPluginAdapter.ts:1959",
     "src/db/sqlPluginAdapter.ts:2041",
     "src/db/sqlPluginAdapter.ts:2053",
-    "src/db/sqlPluginAdapter.ts:6341",
-    "src/db/sqlPluginAdapter.ts:6348",
-    "src/db/sqlPluginAdapter.ts:6366",
-    "src/db/sqlPluginAdapter.ts:6759",
-    "src/db/sqlPluginAdapter.ts:6809",
+    "src/db/sqlPluginAdapter.ts:6399",
+    "src/db/sqlPluginAdapter.ts:6406",
+    "src/db/sqlPluginAdapter.ts:6424",
+    "src/db/sqlPluginAdapter.ts:6817",
+    "src/db/sqlPluginAdapter.ts:6867",
     "src/domain/reducers.ts:28",
     "src/domain/reducers.ts:44",
     "src/domain/reducers.ts:55",

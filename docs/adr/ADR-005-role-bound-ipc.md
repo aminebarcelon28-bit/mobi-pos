@@ -467,3 +467,23 @@ second call, and 0 batches tombstoned the second time.
 
 With this lane the 43-spec flag sweep's measured refusals (11 → 3) should reach 0;
 the confirming sweep is the next run, not an inference.
+
+### FIFO reconcile is native (2026-11-05)
+
+`reconcile_shadow_batches` closes the last renderer money algorithm. It keeps the
+coverage pre-check (never burn real stock for a shadow it cannot fully cover), the
+guarded oldest-first depletion, and the cost-basis formula exactly:
+`newUnit = round((oldUnit*qty − shadowUnit*shadowQty + takenCost) / qty)`, with the
+line profit, the ticket's `cost_total`/profit/margin, the allocation ledger swap and
+`ledger_cogs_total` following from it. Five row-level goldens assert those numbers,
+including a two-batch weighted case (2200/3 → 733) and a rollback when an envelope
+cannot be written.
+
+The peer-claim coordination stays in TypeScript by design: it is a best-effort
+cross-tab guard that already proceeds unclaimed when offline, and it has to run
+before the transaction rather than inside it.
+
+One renderer quirk is preserved rather than "fixed": the materialisation step stamps
+the bumped version into the payload but not into the row, so the order row keeps the
+reconcile's bump. Changing it here would be a silent divergence from every peer that
+still runs the old code, so it is pinned by the test instead.

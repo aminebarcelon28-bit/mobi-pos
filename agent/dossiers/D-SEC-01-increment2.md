@@ -927,8 +927,46 @@ Honest caveats about this run, because they matter for the tag:
 * The three 10M-fixture specs remain excluded by name (measured: 10M boot 2 141 ms
   vs 254 s host seed, E-0208).
 
+## FIFO reconcile is native (2026-11-05, E-0214)
+
+The last renderer money algorithm. `reconcile_shadow_batches`
+(`src-tauri/src/fifo_reconcile_lane.rs`, 5 goldens) mirrors
+`reconcileShadowBatches` statement-for-statement:
+
+| Step | Rule preserved |
+|---|---|
+| coverage pre-check | a shadow is only touched when live batches **fully** cover it; a partial cover leaves the marker open and the batches untouched |
+| guarded depletion | `quantity_remaining >= want AND deleted = 0`, oldest-first (`received_at, batch_id`), one envelope per depletion |
+| cost basis | `newUnit = round((oldUnit*qty − shadowUnit*shadowQty + takenCost) / qty)` |
+| line | `line_profit = (charged − newUnit)*qty − discount` (sign flips for a return), `fifo_allocations` swap, envelope |
+| order | `cost_total += (newUnit − oldUnit)*qty`, `profit = total − cost`, margin one decimal, envelope |
+| marker | `deleted = 1, shadow_resolved = 1`, version bumped, `sb-<id>-resolved` envelope |
+| ledger | allocation rows swapped to the real batches, then `ledger_cogs_total = Σ(qty*unit_cost)` materialised |
+
+**Row-level goldens:**
+
+| Test | Asserted rows |
+|---|---|
+| phantom replaced | line `unit_cost_at_sale` 900→**700**, `line_profit` 300→**900**; order `cost_total` 2700→**2100**, profit **900**, margin **30.0**, `ledger_cogs_total` **2100**; batch 3→**0** (v2); marker resolved+tombstoned (v2); allocation rows = [B1, 3, 700] |
+| partial cover | 2 units cannot cover 3 → reconciled **0**, batch still **2**, marker open, `cost_total` untouched **2700** |
+| second run | reconciled **0**, `cost_total` stays **2100** (no drift) |
+| two batches | takes B1×1 @600 then B2×2 @800, `newUnit` **733** (`2200/3`), `cost_total = 2700 + (733−900)*3` |
+| failing envelope | whole reconcile rolls back (cost 2700, marker open) |
+
+**One parity quirk, preserved deliberately and pinned:** the materialisation step
+sets `ledger_cogs_total` and the payload's `version` but not the row's `version`
+column, so the order row keeps the reconcile's bump (4) while the payload says 5 —
+exactly what the renderer did.
+
+**Measured:** `10-mny-money` 14/14 and `30-ref-refunds` 12/12, **0 refusals in both
+modes** (the reconcile runs on the receipt/checkout path, so this is the regression
+check for the change).
+
+**Gates:** money 65/0 · zero-tax 23/0 · cash-terms 32/0 · tsc 0 · lint 0 · selftest OK ·
+reconcile 687 · cargo **559**/559 · registry **118** · sql-boundary **301** · drift OK ·
+secrets/licences clean.
+
 ## Next, in order
 
-1. FIFO reconcile port (row-level COGS goldens) — the last renderer money algorithm.
-2. n>=200 latency on the CURRENT tree (the 41caeea table is stale).
-3. Clean-worktree full floor; tag.
+1. n>=200 latency on the current tree (the 41caeea table is stale).
+2. Re-run the 43-spec flag sweep on this tree; clean-worktree full floor; tag.
