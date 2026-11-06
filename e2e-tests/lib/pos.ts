@@ -153,9 +153,15 @@ export async function unlockIfNeeded(pin = APP_PIN): Promise<void> {
   if ((await detectBootScreen()) === 'lock') {
     const lock = await $(tid('lock-screen'));
     await lock.waitForDisplayed({ timeout: 20000 });
-    const pad = await $(tid('login-pin-pad'));
-    await pad.waitForDisplayed({ timeout: 20000 });
-    await pad.click();
+    // Focus the PIN input directly. Clicking the pad DIV goes through WDIO's
+    // clickable middleware, which refuses it when the transparent input covers
+    // the pad's centre ("login-pin-pad ... did not become interactable" after a
+    // chained predecessor — captured in INV-01/REP-03 hook artifacts). The pad
+    // only exists to focus that input (LockScreenOverlay onClick), so focusing
+    // it in page context is the same user action without the hit-test.
+    await browser.execute(
+      'var el = document.querySelector("[data-testid=\\"login-pin-input\\"]"); if (el) el.focus();',
+    );
     await browser.keys(pin.split(''));
     // Keys land on whatever holds focus, and after a long chained spec the
     // WebView can hand focus elsewhere: the click on submit then fails
@@ -1027,29 +1033,70 @@ export async function ensureShiftOpen(openingDa = 10000): Promise<DexieShift> {
  * (`Actif — Désélectionner <name>`), the dialog is closed WITHOUT clicking —
  * clicking would detach the sale's customer. */
 export async function selectCustomer(name: string): Promise<void> {
-  // REF-27/30/44/47 (batch): a toast / lingering overlay intercepts the shell
-  // button's WebDriver click. Click in PAGE context first (not hit-tested) and
-  // fall back to the normal click only if that did not open the dialog.
-  const opened = (await browser.execute(() => {
-    const btn = ([...document.querySelectorAll('[data-testid="clients-button"]')] as HTMLButtonElement[]).find(
-      (b) => !b.disabled,
-    );
-    if (!btn) return false;
-    btn.click();
-    return true;
-  })) as boolean;
-  // The page-click can be swallowed (button present but the handler not ready).
-  // Verify the DIALOG actually opened; otherwise use the WebDriver click.
-  const clientsDialogUp = async (): Promise<boolean> =>
-    (await $(tid('customers-dialog')).isDisplayed().catch(() => false)) as boolean;
-  if (!opened || !(await clientsDialogUp())) {
-    await browser.pause(200);
+  // A chained predecessor can leave a toast/modal over the shell, or the
+  // WebDriver click can be intercepted by the transparent mobile/desktop twin.
+  // Click in PAGE context on the DISPLAYED twin, prove the dialog opened, and
+  // fail loud with the visible state instead of a bare 20 s timeout
+  // (REF-51 isolated run 3: "customers-dialog still not displayed").
+  const clientsDialogUp = async (): Promise<boolean> => {
+    for (const d of await $$(tid('customers-dialog'))) {
+      if (await d.isDisplayed().catch(() => false)) return true;
+    }
+    return false;
+  };
+  const pageClick = async (testid: string): Promise<boolean> =>
+    (await browser.execute(
+      'var els = Array.prototype.slice.call(document.querySelectorAll(\'[data-testid="' + testid + '"]\'));' +
+        'for (var i = 0; i < els.length; i++) {' +
+        ' var b = els[i];' +
+        ' var cs = getComputedStyle(b);' +
+        ' if (b.disabled || !cs || cs.display === "none" || cs.visibility === "hidden") continue;' +
+        ' var r = b.getBoundingClientRect();' +
+        ' if (r.width <= 0 || r.height <= 0) continue;' +
+        ' b.click();' +
+        ' return true;' +
+        '}' +
+        'return false;',
+    )) as boolean;
+
+  if (!(await clientsDialogUp())) {
+    await closeDialogs(2).catch(() => undefined);
+    let clicked = false;
+    for (let attempt = 0; attempt < 3 && !(await clientsDialogUp()); attempt++) {
+      clicked = await pageClick('clients-button');
+      if (!clicked) {
+        await browser.pause(400);
+        continue;
+      }
+      try {
+        await browser.waitUntil(clientsDialogUp, { timeout: 5000, interval: 200 });
+      } catch {
+        console.log(
+          `[selectCustomer] clients dialog did not open on page click #${attempt + 1}/3`,
+        );
+      }
+    }
     if (!(await clientsDialogUp())) {
-      console.log('[selectCustomer] page-context click did not open the dialog - falling back to the WebDriver click');
-      await (await $(tid('clients-button'))).click().catch(() => undefined);
+      // Last resort: a real WebDriver click on the displayed twin.
+      for (const b of await $$(tid('clients-button'))) {
+        if (!(await b.isDisplayed().catch(() => false))) continue;
+        await b.click().catch(() => undefined);
+        break;
+      }
+      await browser.pause(400);
+    }
+    if (!(await clientsDialogUp())) {
+      const state = (await browser.execute(
+        'var vis = function (el) { try { var cs = getComputedStyle(el); if (!cs || cs.display === "none" || cs.visibility === "hidden") return false; var r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; } catch (e) { return false; } };' +
+          'return {' +
+          ' clientsButtons: Array.prototype.slice.call(document.querySelectorAll(\'[data-testid="clients-button"]\')).map(function (b) { return { displayed: vis(b), disabled: b.disabled === true }; }),' +
+          ' dialogs: Array.prototype.slice.call(document.querySelectorAll(\'[role="dialog"],[data-testid$="dialog"]\')).filter(vis).map(function (d) { return d.getAttribute("aria-label") || d.getAttribute("data-testid") || d.tagName; }),' +
+          ' bodyTail: (document.body.innerText || "").slice(-500)' +
+          '};',
+      )) as Record<string, unknown>;
+      throw new Error(`customers-dialog never opened: ${JSON.stringify(state)}`);
     }
   }
-  await (await $(tid('customers-dialog'))).waitForDisplayed({ timeout: 20000 });
   const tryTarget = async (): Promise<'clicked' | 'already' | null> => {
     const btns = await $$(
       '//div[@data-testid="customers-dialog"]' +
