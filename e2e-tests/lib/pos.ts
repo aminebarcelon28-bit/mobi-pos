@@ -191,26 +191,32 @@ export async function unlockIfNeeded(pin = APP_PIN): Promise<void> {
     }
     const submit = await $(tid('login-submit'));
     if (await submit.isDisplayed().catch(() => false)) {
-      // JS-click the DISPLAYED twin: WebDriver clicks on this button are
-      // intercepted whenever the overlay is mid-render (observed as
-      // "login-submit ... not clickable" in the before-all hook after a long
-      // chained spec). The button's own onClick is what the user's tap runs.
+      // JS-click the displayed, enabled twin. WDIO's clickable middleware
+      // refuses this button after a long chained spec ("did not become
+      // interactable") even when the PIN is complete, so waitForClickable never
+      // settles. The function body below deliberately has NO named inner
+      // closures: the TS transform names them and the injected page context has
+      // no `__name` helper.
       const clicked = (await browser.execute(() => {
-        const vis = (el: HTMLElement) => {
+        const btns = Array.from(
+          document.querySelectorAll('[data-testid="login-submit"]'),
+        ) as HTMLButtonElement[];
+        for (let i = 0; i < btns.length; i++) {
+          const b = btns[i];
+          if (b.disabled) continue;
+          let cs: CSSStyleDeclaration | null = null;
           try {
-            const cs = getComputedStyle(el);
-            if (!cs || cs.display === 'none' || cs.visibility === 'hidden') return false;
-            const r = el.getBoundingClientRect();
-            return r.width > 0 && r.height > 0;
+            cs = getComputedStyle(b);
           } catch {
-            return false;
+            cs = null;
           }
-        };
-        const btns = [...document.querySelectorAll('[data-testid="login-submit"]')] as HTMLButtonElement[];
-        const b = btns.find((x) => vis(x) && !x.disabled);
-        if (!b) return false;
-        b.click();
-        return true;
+          if (!cs || cs.display === 'none' || cs.visibility === 'hidden') continue;
+          const r = b.getBoundingClientRect();
+          if (r.width <= 0 || r.height <= 0) continue;
+          b.click();
+          return true;
+        }
+        return false;
       })) as boolean;
       if (!clicked) {
         throw new Error('login-submit is not displayed/enabled after PIN entry (no clickable twin)');

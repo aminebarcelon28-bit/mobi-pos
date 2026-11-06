@@ -538,6 +538,12 @@ export interface SanctionedResetReport {
  * so a half-reset can never pass silently.
  */
 export async function resetData(): Promise<SanctionedResetReport> {
+  // The native reset commands are OperationalWrites: they are authorised
+  // against the session principal, so the canonical session must exist
+  // BEFORE the wipe. Completing setup / unlocking first also makes the
+  // post-reset state exactly post-boot (a fresh boot is not locked).
+  const { unlockIfNeeded } = await import('./pos');
+  await unlockIfNeeded();
   const { invoke } = await import('./invoke');
   const base = wipeDataTables();
   const reanchor = await invoke<{

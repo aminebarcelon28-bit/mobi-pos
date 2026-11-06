@@ -15,13 +15,17 @@ for (const line of cov.split(/\r?\n/)) {
   baseline.set(id, { verdict, reason });
 }
 
-// 2. Failing cases in the tagrun (43-spec sweep)
-const runLog = fs
-  .readdirSync('e2e-tests/results/runs')
-  .filter((f) => f.includes('tagrun-382c1bf') && f.endsWith('.log'))
-  .map((f) => path.join('e2e-tests/results/runs', f))
-  .sort()
-  .pop();
+// 2. Failing cases in a sweep log. Default: the rc-12 tagrun (382c1bf);
+//    pass an explicit log path to census a newer sweep:
+//    node scripts/triage-failures.cjs e2e-tests/results/runs/<stamp>-census-43.log
+const runLog = process.argv[2]
+  ? path.resolve(process.argv[2])
+  : fs
+      .readdirSync('e2e-tests/results/runs')
+      .filter((f) => f.includes('tagrun-382c1bf') && f.endsWith('.log'))
+      .map((f) => path.join('e2e-tests/results/runs', f))
+      .sort()
+      .pop();
 const log = fs.readFileSync(runLog, 'utf8');
 const failing = new Set();
 for (const line of log.split(/\r?\n/)) {

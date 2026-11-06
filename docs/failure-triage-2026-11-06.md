@@ -331,3 +331,76 @@ anchor is process-global and outlives a data reset, which the spec's own
 the fixture model: each spec seeds what it needs only sometimes and otherwise
 relies on residue. The fix is per-spec ownership of fixtures and a reset that
 also re-anchors the native audit chain — a 48-spec change, queued, not faked.
+
+## Task 4 — census re-run, re-attribution, and the STOP call (E-0221)
+
+The census is the same container as the rc-12 tag-run: 43 spec files (the five
+`23-scl-scale-*` files stay process-isolated, E-0208, out of scope here), one
+wiped sandbox, chained in filename order.
+
+| Sweep | Specs | Cases | Red total | Case-level | Hooks |
+|---|---|---|---|---|---|
+| tag-run (rc-12, `382c1bf`) | 43 | 336 | 94 | 79 | 15 |
+| census-43 (`f256598` tree, `14-11-34Z-census-43`) | 43 | 335 | 107 | 85 | 22 |
+| ⇒ after the two harness regressions below | 43 | 335 | ≈101 | ≈79 | ≈22 |
+
+### Re-attribution of the 15 hooks
+
+The hook bucket was not "15 unknown failures"; it was hiding case rows. The
+clearest case: `60-idn-identity` died in its `before all` in the tag-run
+(`script timeout`, one hook), so IDN-01…22 never reported. With the sanctioned
+reset in place the spec executes and reports **17 case-level FAILs**, every one
+a baseline-FAIL row (`IDN-01` rejected only the name string on the document;
+transactions carry no identity columns). One hook became seventeen accounted
+rows — the accounting is better, the count is higher.
+
+The other hooks are named now, not unknown:
+
+- `login-submit` "did not become interactable" / `login-pin-pad`: WDIO's
+  clickable middleware never settles on the lock screen after a chained
+  predecessor (5–6 occurrences). The helper now JS-clicks the displayed,
+  enabled submit and fails loud when none is clickable, which collapsed the
+  IDN and (partly) INV boot hooks.
+- `SAV boot unlock failed` / `INV boot unlock failed`: the residual subset of
+  the same class, still present on 82/84 after 50 (`hook-collapse-2`).
+- three `no boot screen mounted`, one `27a` screenshot ENOENT (temp dir), one
+  drawer click intercepted: environment/interaction, each now carries its spec.
+
+### Two harness regressions this census found (fixed)
+
+1. `__name is not defined` in injected page scripts: the first unlock patch
+   used a named inner arrow inside `browser.execute`; the TS transform emits
+   `__name(...)` and the page context has no such helper. Six MNY cases failed
+   in the census. Fixed by removing every named closure from the injected body
+   (MNY 6/6 green in `regress-check-1`).
+2. `resetData()` ran before the session existed, so `audit_reanchor` /
+   `repair_customer_debt_cache` (OperationalWrites) were refused for specs whose
+   `before` starts locked. The helper now completes setup / unlocks **first**,
+   then wipes, then re-anchors ("post-reset == post-boot").
+
+### REF-51 measured (no budget bump)
+
+Three isolated runs on this tree: **84 s, 80 s, 59 s** (median 80 s), against the
+300 s mocha budget — the tag-run failure was the shared 300 s wall only because
+31+33 were chained in one process. The REF-87 600 s precedent is **not** used:
+no cap change, no weakening. The third run flaked on `selectCustomer`
+(customers dialog never opened), which is the interaction class above, not a
+timeout.
+
+### STOP — chained variance did not collapse
+
+Per the standing rule, this is a stop-and-write-up, not another loop:
+
+- `50 → 60`: IDN now runs (17 baseline-FAIL rows) — hook collapsed. ✅
+- `50 → 82/84`: `INV/SAV boot unlock failed` persists after the submit fix
+  (`hook-collapse-2`: 32 cases, 15 pass, 17 IDN baseline FAILs, 2 spec hooks).
+- `census-43`: 34 spec files red; the residue is the renderer interaction layer
+  (lock-screen/shift controls not interactable after a chained predecessor), not
+  the DB and not the audit chain. The audit class is fixed: SEC-05 is green
+  isolated **and** chained, and every reset is logged with the retired head.
+
+The honest position: the reset/session model is now correct (one helper, wipe +
+re-anchor + debt repair, session restored first), the audit-chain class is
+closed, IDN's hidden failures are accounted, and the remaining chained variance
+is concentrated in one harness interaction class that needs its own pass (WDIO
+clickable middleware on the lock screen / shift controls). No tag, no rc-13.
