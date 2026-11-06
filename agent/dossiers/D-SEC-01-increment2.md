@@ -986,3 +986,37 @@ renderer statements per operation with one native transaction.
 1. Re-run the 43-spec flag sweep on `ce6afb1` (the zero-refusal run was on `0a80b92`;
    the FIFO lane landed after it). ~100 minutes.
 2. Clean-worktree gate battery on the tagged commit; tag.
+
+## Renderer pool is read-only by default (2026-11-06, E-0216)
+
+The flip landed on the rc-13 line. `patches/tauri-plugin-sql/src/wrapper.rs`:
+
+| Before | After |
+|---|---|
+| writable pool unless `POS_SQL_QUERY_ONLY=1` | `PRAGMA query_only = 1` on every open; **read-only is the default** |
+| refusals logged only under the opt-in flag | refusals logged whenever the hatch is absent |
+| mode unstated | pool logs `renderer pool mode: read-only (default)` / `WRITABLE (… hatch)` |
+
+**Hatch:** `POS_SQL_ALLOW_RENDERER_WRITES=1`. Time-boxed; **scheduled deletion: the
+first release cut after 2027-01-31**. While set, no refusals are recorded, so a run
+cannot mix hatch statements into a boundary measurement.
+
+**Probes, both directions:**
+
+```
+default : WRITE_REFUSED (code 8) attempt to write a readonly database · READ_OK · refusals=1 (the probe itself)
+hatch   : WRITE_OK [1,12] · READ_OK · refusals=0
+```
+
+**Specs in default mode (no env var):** `10-mny-money` 14/14 · `30-ref-refunds` 12/12 ·
+`40-shf-shifts` 12/12 · `92-sql-readonly-app` 1/1 — every one **0 refusals**.
+
+The `23-scl-rcp-tim-i18` SCL-79 diagnostic now keys off the hatch
+(`POS_SQL_ALLOW_RENDERER_WRITES !== '1'`) instead of the old opt-in flag.
+
+## Next, in order
+
+1. Triage the committed failure backlog (94 + 9) into real bug / stale spec / N/A /
+   infra-blocked, with counts reconciled in `COVERAGE.md`.
+2. E-0208: merge the process-isolated scale runner into the harness.
+3. Fix in priority order; then the 48/48 green line and the next tag.

@@ -487,3 +487,28 @@ One renderer quirk is preserved rather than "fixed": the materialisation step st
 the bumped version into the payload but not into the row, so the order row keeps the
 reconcile's bump. Changing it here would be a silent divergence from every peer that
 still runs the old code, so it is pinned by the test instead.
+
+### Renderer pool is read-only by default (2026-11-06)
+
+The flip criterion was "the full suite under a read-only pool at 0 refused writes".
+It was met on `382c1bf` (rc-12): 43/43 non-scale specs in one pass plus the five
+scale fixtures process-isolated, every one at 0 refusals. So the pool is now
+read-only **by default** rather than opt-in:
+
+* `PRAGMA query_only = 1` is applied on every SQLite pool open unless the hatch is
+  set; the pool logs its mode so a run proves which mode it used;
+* a refused write is recorded with its SQL (debug builds) — a renderer write is a
+  defect by definition now;
+* `POS_SQL_QUERY_ONLY=1` is still accepted so older harness invocations mean what
+  they meant.
+
+**Hatch, time-boxed:** `POS_SQL_ALLOW_RENDERER_WRITES=1` restores a writable pool.
+It exists for one release line only and is **scheduled for deletion in the first
+release cut after 2027-01-31**. It is not a supported configuration: while set, no
+refusals are recorded, precisely so a run cannot mix hatch statements into a
+boundary measurement.
+
+Verified in default mode (no env var): `10-mny-money` 14/14, `30-ref-refunds` 12/12,
+`40-shf-shifts` 12/12, `92-sql-readonly-app` 1/1, all 0 refusals; and the hatch was
+probed both ways (default: write refused with `attempt to write a readonly database`;
+hatch: write accepted, no refusal logged).

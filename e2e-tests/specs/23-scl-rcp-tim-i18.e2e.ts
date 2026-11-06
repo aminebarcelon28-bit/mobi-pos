@@ -718,9 +718,9 @@ describe('SCL/RCP/TIM/I18 — batch 23 functional', () => {
     // connection above; the app-side probes are diagnostics, so they are
     // reported as skipped rather than attempted (an attempt would just record a
     // refused write with no extra evidence).
-    const readOnlyPool = process.env.POS_SQL_QUERY_ONLY === '1';
+    const readOnlyPool = process.env.POS_SQL_ALLOW_RENDERER_WRITES !== '1';
     const appStrict = readOnlyPool
-      ? { ok: false, error: 'skipped: renderer pool is read-only (POS_SQL_QUERY_ONLY=1)' }
+      ? { ok: false, error: 'skipped: renderer pool is read-only by default' }
       : await sqlExec(
           'CREATE TEMP TABLE IF NOT EXISTS scl79_strict_app(id INTEGER PRIMARY KEY) STRICT',
         );

@@ -6,6 +6,21 @@ gate table is recorded in the same ledger.
 
 ## [Unreleased] — after c01-rc-11
 
+### Changed
+- **SEC-01 flip: the renderer pool is READ-ONLY by default (rc-13 line).** Every
+  write lane on the measured suite is a native Tauri command (48/48 specs at 0
+  refused writes on `382c1bf`, rc-12), so a renderer write is now a defect by
+  definition: it is refused and named in
+  `%TEMP%/mobi-sql-readonly-violations.log`, and the pool logs
+  `renderer pool mode: read-only (default)` at open. `POS_SQL_QUERY_ONLY=1` still
+  works (it asks for what is already true).
+- **Time-boxed hatch:** `POS_SQL_ALLOW_RENDERER_WRITES=1` restores the old writable
+  pool for one release line only; **scheduled deletion: the first release cut after
+  2027-01-31**. While set, the pool logs the WRITABLE mode and no refusals are
+  recorded, so a run cannot mix hatch statements into a boundary measurement.
+- Verified in default mode with no env var: `10-mny-money` 14/14, `30-ref-refunds`
+  12/12, `40-shf-shifts` 12/12, `92-sql-readonly-app` 1/1 — all at **0 refusals**.
+
 ### Added
 - **ESC/POS capture sink + decoder oracle** (`scripts/escpos_sink.mjs`,
   `e2e-tests/lib/escpos-parse.ts`): raw TCP virtual printer, byte-exact goldens,
