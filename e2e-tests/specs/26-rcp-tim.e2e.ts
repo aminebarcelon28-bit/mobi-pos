@@ -45,6 +45,7 @@ import {
   unlockIfNeeded,
 } from '../lib/pos';
 import { parseEscpos } from '../lib/escpos-parse';
+import { receiptDayFromPrintedLine } from '../lib/receiptDate';
 import { resetData, seedCustomerFull, seedProducts, seedSettings } from '../lib/seed';
 
 // Repo root, independent of the directory wdio was started from: the
@@ -1723,7 +1724,7 @@ describe('RCP/TIM — receipts, printing and clock edges (batch 26)', () => {
       }
     }
     const weekStart = walkSrc(/weekStart|week_start|premiereJourSemaine|startOfWeek/i);
-    const dates = out.map((o) => (o.receipt.match(/-(\d{8})-/) ?? [])[1] ?? '?');
+    const dates = out.map((o) => receiptDayFromPrintedLine(o.printed));
     const rolloverOk = dates[0] === '20261231' && dates[1] === '20270101' && dates[2] === '20280229';
     const ev =
       `rows=${JSON.stringify(out)} receiptDates=${JSON.stringify(dates)} rolloverCorrect=${rolloverOk} ` +

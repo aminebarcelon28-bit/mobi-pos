@@ -127,7 +127,7 @@
     "test:e2e": "wdio run e2e-tests/wdio.conf.ts",
     "e2e:clean": "node scripts/e2e-clean.mjs",
     "golden:generate": "node scripts/generate-golden.mjs",
-    "test:oracle": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types e2e/lib/oracle.test.mts",
+    "test:oracle": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types e2e/lib/oracle.test.mts && node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types e2e-tests/lib/receiptDate.test.mts",
     "test:golden": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_golden_parity.mts && python scripts/verify_golden_sample.py",
     "test:visual": "playwright test tests/visual/mobile-visual-matrix.spec.ts",
     "test:tokens": "node scripts/check-design-tokens.mjs",
