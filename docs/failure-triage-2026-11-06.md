@@ -289,3 +289,45 @@ residue (lock screen/PIN lockout, modal twins), not separate defects.
 
 Next: fix `refundSearch` to bind the visible twin, give the lockout-using spec a
 residue cleanup so later specs unlock, then re-run the probe three times.
+
+## Task 3 — harness isolation: what the probes proved (E-0219)
+
+Three probes, each a clean wipe, one process per spec, ordered like the sweep:
+
+| Probe | Specs (order) | Result |
+|---|---|---|
+| `order-probe-1` | 20, 31, 33, 50, 70, 82, 84 | 56/61; REF-36 `refund-search` timeout, SEC-05 `linksVerified 0/105`, CRM-03/06, PAY-11; INV-01 + REP-03 died in `before all` ("boot unlock failed") |
+| `ref-twin-fix-1` | 31, 33 | **33/33 GREEN** — REF-14/35/36/41/60 all pass chained (2 more runs queued) |
+| `hook-probe-1` | 70, 82, 84 | 23/45: with CRM first, INV-03/06/12/13/17 and 14 REP cases fail; with SEC first, INV/REP fail at boot instead |
+
+### Fixed: the refund-search twin (REF-14/35/36/41/60)
+
+`refundSearch` bound `$(tid('refund-search'))`, the FIRST DOM match. The modal
+renders a mobile card list and a desktop table with the same testid, one
+`display:none`; after an earlier case leaves the shell in the other mode the
+first match is the hidden twin and `waitForDisplayed` times out. The helper now
+binds the displayed twin (and logs when it had to skip a hidden one), matching
+what `refundDialogVisible`, `forceCloseRefund` and `selectRefundTicket` already
+did. Verified: 31 + 33 chained, 33/33 green, where 31 previously failed 1/15 and
+the battery failed 2.
+
+### Fixed: lock-screen PIN entry focus (the `before all` hook class)
+
+The hook error was `login-submit ... not clickable` followed by
+`INV/SAV boot unlock failed`: `unlockIfNeeded` focused the pad and used
+`browser.keys`, which lands wherever focus is after a long chained spec, so the
+controlled PIN input stayed empty and the submit never enabled. The helper now
+proves the digits reached the input and falls back to the native setter (the
+same discipline as `refundSearch`), failing loud with the digit count instead of
+a 20 s timeout. Typing cannot escalate the native lockout; only a submit can.
+
+### Still open — the real isolation defect
+
+The probes show the specs are not independent: with 70 first, five INV cases and
+fourteen REP cases fail; with 50 first, INV/REP fail to unlock; SEC-05's audit
+walk verifies 0 of 105 links after earlier specs reset the DB (the native chain
+anchor is process-global and outlives a data reset, which the spec's own
+"fresh-container contract" comment acknowledges). This is not one helper bug but
+the fixture model: each spec seeds what it needs only sometimes and otherwise
+relies on residue. The fix is per-spec ownership of fixtures and a reset that
+also re-anchors the native audit chain — a 48-spec change, queued, not faked.

@@ -157,6 +157,38 @@ export async function unlockIfNeeded(pin = APP_PIN): Promise<void> {
     await pad.waitForDisplayed({ timeout: 20000 });
     await pad.click();
     await browser.keys(pin.split(''));
+    // Keys land on whatever holds focus, and after a long chained spec the
+    // WebView can hand focus elsewhere: the click on submit then fails
+    // ("login-submit still not clickable") or the PIN stays short and the
+    // native verify refuses. Prove the digits reached the controlled input,
+    // and drive it through its native setter if they did not (same
+    // controlled-input discipline as refundSearch). Typing never escalates the
+    // native lockout — only a submit does.
+    const typePin = async (): Promise<number> => {
+      for (let attempt = 0; attempt < 10; attempt++) {
+        const len = (await browser.execute(() => {
+          const els = [...document.querySelectorAll('[data-testid="login-pin-input"]')] as HTMLInputElement[];
+          const el = els.find((e) => !e.disabled) ?? els[0];
+          return el ? el.value.length : -1;
+        })) as number;
+        if (len === pin.length) return len;
+        if (attempt === 4) {
+          await browser.execute((p: string) => {
+            const els = [...document.querySelectorAll('[data-testid="login-pin-input"]')] as HTMLInputElement[];
+            const el = els.find((e) => !e.disabled) ?? els[0];
+            if (!el) return;
+            const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+            setter?.call(el, p);
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+          }, pin);
+        }
+        await browser.pause(250);
+      }
+      return -1;
+    };
+    if ((await typePin()) !== pin.length) {
+      throw new Error(`PIN entry never registered ${pin.length} digits on the lock screen (focus lost)`);
+    }
     const submit = await $(tid('login-submit'));
     if (await submit.isDisplayed().catch(() => false)) {
       await submit.click();
@@ -1524,8 +1556,31 @@ export async function closeRefund(): Promise<void> {
  *  "REF P500", refund search held a mangled receipt → "0 sur 0 tickets
  *  éligibles"). Retries, then falls back to the controlled-input setter. */
 export async function refundSearch(text: string): Promise<void> {
-  const input = await $(tid('refund-search'));
-  await input.waitForDisplayed({ timeout: 10000 });
+  // The modal renders a mobile card list and a desktop table with the SAME
+  // `refund-search` testid, one of them `display:none`. `$(tid(...))` returns
+  // the first DOM match, which is the hidden twin whenever an earlier case left
+  // the shell in the other mode (the chained REF-14/REF-36 timeout
+  // `refund-search still not displayed`). Bind the DISPLAYED twin; log when the
+  // first one was hidden so the ordering cause stays visible in the artifact.
+  const deadline = Date.now() + 10000;
+  let input: Awaited<ReturnType<typeof $>> | undefined;
+  let index = -1;
+  while (Date.now() < deadline) {
+    const twins = await $$(tid('refund-search'));
+    for (let i = 0; i < twins.length; i++) {
+      if (await twins[i].isDisplayed().catch(() => false)) {
+        input = twins[i];
+        index = i;
+        break;
+      }
+    }
+    if (input) break;
+    await browser.pause(150);
+  }
+  if (!input) throw new Error('refund search input is not displayed (both twins hidden)');
+  if (index > 0) {
+    console.log(`[refundSearch] bound displayed twin #${index} (first DOM twin is hidden)`);
+  }
   const readback = async (): Promise<string> =>
     (await browser.execute(() => {
       const vis = (d: HTMLElement) => { try { const cs = getComputedStyle(d); if (!cs || cs.display === 'none' || cs.visibility === 'hidden') return false; const r = d.getBoundingClientRect(); return r.width > 0 && r.height > 0; } catch { return false; } };
