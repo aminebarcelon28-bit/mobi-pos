@@ -72,3 +72,73 @@ Measured process-isolated, one process per spec, all at 0 refused writes:
 2. Second triage pass on the 15 hook failures.
 3. Then the 68 recorded gaps, money/refund first.
 4. E-0208 runner (process-isolated scale orchestration) merged into the harness.
+
+## Task 1 verdicts — the ten, isolated (one run each, clean sandbox, exact case grep)
+
+Method: `run.mjs --spec <spec> --grep "\[<ID>\]" --wipe`, one process per case, so
+cross-spec state cannot leak. Result:
+
+| Case | Spec | Isolated | Verdict |
+|---|---|---|---|
+| `MNY-25` | 11-mny-money-part2 | **0/1 (fails)** | **real failure — money path, see below** |
+| `TIM-03` | 26-rcp-tim | **0/1 (fails)** | **real failure — stale spec parser, see below** |
+| `REF-35` | 33-ref-refunds-part4 | 1/1 | ordering/seed pollution |
+| `REF-41` | 33-ref-refunds-part4 | 1/1 | ordering/seed pollution |
+| `REF-60` | 33-ref-refunds-part4 | 1/1 | ordering/seed pollution |
+| `PAY-21` | 20-pay-payments | 1/1 | ordering/seed pollution |
+| `SEC-05` | 50-sec-authorization | 1/1 | ordering/seed pollution |
+| `CRM-04` | 70-crm-customers | 1/1 | ordering/seed pollution |
+| `INV-01` | 82-inv-inventory | 1/1 | ordering/seed pollution |
+| `REP-03` | 84-rep-repair | 1/1 | ordering/seed pollution |
+
+**8 of 10 are ordering defects, not regressions.** They pass alone and fail in the
+chained sweep, which makes the sweep's own isolation the bug: a case whose result
+depends on what ran before it is a harness defect and must be fixed as one (seeded
+fixtures, no reliance on prior specs' leftover rows), never retried until green.
+
+### `TIM-03` — stale spec parser (evidence)
+
+The receipt row is correct: the app printed `Date: 31/12/2026 23:59:30` and the
+row's `dayKey` is `2026-12-31`, but the case's extractor returned `"?"` for all
+three boundaries:
+
+```
+actual=["?","?","?"]   expected=["20261231","20270101","20280229"]
+```
+
+So the assertion is comparing an unparsed token, not a wrong date. Class: **stale
+spec** — repair the extractor so it reads the printed `DD/MM/YYYY` format and still
+asserts the three boundary dates (the assertion itself is not weakened).
+
+### `MNY-25` — real, and on the money path (STOPPED as required)
+
+The case exercises Kredy instalment plans (`Σ entries == total`, remainder to the
+earliest, early payoff fills FIFO and closes the plan). It fails in isolation, so it
+is a real gap, not ordering. Because the fix would touch the debt-plan money lane,
+the standing rule ("if a fix risks the money path, STOP and report first") applies:
+the root cause is characterised but **not** patched.
+
+Observed context from the isolated run:
+
+```
+[MNY-25] entry: reload=true shell=mobile demo=true kredyTab=true
+[MNY-25] debtor card (col=0, ledger=1000): "...Ooredoo 1000 DA  Plafond 100000 DA  recouvrer  Score 40 ..."
+```
+
+The plan header/entries are created through the native `save_debt_plan` lane; the
+suspicion is the mobile Kredy surface reading the plan back before the header lands
+(the lane writes entries + header in one transaction, so a read-after-write through
+the renderer should see both). Needs the assertion diff and the plan rows to confirm.
+
+## Reconciled state after task 1
+
+| Bucket | Count |
+|---|---|
+| baseline-PASS now failing | 10 |
+| — ordering/seed pollution (fix the harness) | 8 |
+| — real, spec-side (`TIM-03`) | 1 |
+| — real, money path (`MNY-25`, stopped for report) | 1 |
+| remaining real gaps (baseline FAIL) | 68 |
+| baseline BLOCKED | 1 |
+| hook/unattributed | 15 |
+| scale specs | 9 |
