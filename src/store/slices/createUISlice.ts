@@ -1867,6 +1867,16 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
             } catch (shiftErr) {
               console.warn('[initDatabase] Shift boot adoption error:', shiftErr);
             }
+            try {
+              // Boot-hydration debt heal (MNY-25): the SAME statement the native
+              // startup runs, so a page reload repairs a lagged current_debt
+              // column exactly like the pre-SEC-01 renderer heal did. Native
+              // write, one call per boot — never per poll or tick.
+              const { invokeCommand } = await import('../../platform/invoke');
+              await invokeCommand<number>('repair_customer_debt_cache');
+            } catch (debtErr) {
+              console.warn('[initDatabase] Debt cache boot repair error:', debtErr);
+            }
           }
 
           const [products, activeShift] = await Promise.all([

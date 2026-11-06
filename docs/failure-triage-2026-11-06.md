@@ -222,3 +222,70 @@ the boot heal, which the app still performs", not as a weakening of the assertio
 
 Both keep `Σ entries === total`, the remainder-to-earliest rule, the FIFO payoff and
 the no-fee model exactly as asserted.
+
+## Task 2 — MNY-25 fixed (Option A, native repair-on-reload) — E-0217
+
+Ruling executed: the startup statement was lifted byte-for-byte into
+`boot_maintenance::REPAIR_DEBT_CACHE_SQL` and exposed as the native command
+`repair_customer_debt_cache` (registry 118 → 119, capability
+`OperationalWrites`). The renderer calls it exactly once per boot hydration
+(`createUISlice.initDatabase`, after shift adoption). No new SQL, no schema
+change, no message-path change; only WHEN the same UPDATE runs.
+
+Evidence:
+
+| Check | Result |
+|---|---|
+| `cargo test --lib customer_lane` | 9 passed (stale repaired once, consistent cache no write, tombstoned debts ignored, two-connection convergence: exactly one caller reports a change) |
+| `cargo test --lib boot_maintenance` | 13 passed (the startup call site uses the same const) |
+| MNY-25 isolated | 3/3 GREEN (`mny25-iso-1..3`), column repaired after `browser.refresh()` |
+| MNY-25 chained (full spec 11) | 6/6 GREEN (`mny25-chained-1`) |
+| Money battery (10/20/30/31/32/33/34/71) | 118/121, MNY-25 GREEN; failures are the known gaps (PAY-11) and ordering cases (REF-14, REF-36 — both pass alone) |
+| sql-boundary | 301 ≤ 301 (the command adds no SQL text) |
+| `cargo`, `tsc`, `lint` | green, 0 errors |
+
+Red-before is the run already on record at `79c294c`
+(`2026-11-06T00-59-16-210Z-iso10-MNY-25.log`: `boot heal did not repair
+customers.current_debt from the ledger` at `11-mny-money-part2.e2e.ts:1130`);
+the only delta to the green runs is the restored boot-hydration call plus its
+native command. `prove-fix.mjs` could not be used: it aborts because
+`src-tauri/Cargo.lock` is not tracked in this repo (`git stash push` pathspec
+fails before any build) — recorded here rather than silently skipped.
+
+## Task 2 — TIM-03 fixed (stale extractor) — E-0218
+
+The app was right all along: `Date: 31/12/2026 23:59:30`, dayKey
+`2026-12-31`. The case read a date token out of the receipt NUMBER
+(`/-(\d{8})-/`), which the current numbering scheme
+(`PREFIX-SERIES-SEQ6`, e.g. `REC-M0YF-000001`) does not carry. The extractor
+now reads the printed `Date:` line through `receiptDayFromPrintedLine`
+(`e2e-tests/lib/receiptDate.ts`), day-first per the product's fr-DZ format.
+The three expected values are untouched.
+
+Pins (`e2e-tests/lib/receiptDate.test.mts`, 8/8): `20261231`, the
+`20270101` rollover, `20280229`, the day-first control (never
+`20263112`), padding, and the absent-date fallback. Registered in
+`test:oracle`.
+
+Run: TIM-03 isolated 3/3 GREEN (`tim03-iso-1..3`), verdict PASS-PARTIAL as at
+baseline (the week-start setting genuinely does not exist).
+
+## Task 3 — harness isolation, first evidence (in progress)
+
+A chained probe of the eight ordering suspects plus their neighbours
+(`order-probe-1`: specs 20, 31, 33, 50, 70, 82, 84 in one process) reproduced
+the class:
+
+| Case/hook | Symptom | First diagnosis |
+|---|---|---|
+| REF-36, REF-14 | `[data-testid="refund-search"] still not displayed after 10000ms`; both pass alone | `refundSearch` takes `$(tid('refund-search'))` — the FIRST DOM twin. The modal renders a mobile card list and a desktop table with the same testid and one is `display:none`; after an earlier case leaves the shell in the other mode the first twin is the hidden one. The other helpers already filter by computed visibility. |
+| INV-01, REP-03 (and their `before all` hooks) | `INV boot unlock failed` / `SAV boot unlock failed` | the lock screen is up and the admin PIN no longer unlocks it after the SEC spec ran lockout cases — durable lockout state leaking across specs. |
+| SEC-05 | `expected 105, received 0` (audit-chain tamper audit rows) | audit entry count differs after earlier specs; needs the same seeded-fixture treatment before it can be called real. |
+| CRM-03 / CRM-06 | `expect(...).toBe(...)` failures | under triage; both pass alone. |
+| PAY-11 | `expect(received).toBe(expected)` | known real gap (staged-credit leak cluster C04). |
+
+Counts reconcile: the 15 unattributed hook failures are this same cross-spec
+residue (lock screen/PIN lockout, modal twins), not separate defects.
+
+Next: fix `refundSearch` to bind the visible twin, give the lockout-using spec a
+residue cleanup so later specs unlock, then re-run the probe three times.

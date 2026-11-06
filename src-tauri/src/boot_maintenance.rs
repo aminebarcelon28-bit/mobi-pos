@@ -35,6 +35,31 @@ pub struct BootMaintenanceReport {
     pub index_created: bool,
 }
 
+/// The debt-cache repair. One statement, two call sites: the native startup
+/// transaction below and the renderer's boot hydration
+/// (`repair_customer_debt_cache`). The SEC-01 migration moved this heal to
+/// process-start only, which changed WHEN it ran; exposing the same text as a
+/// command restores the per-page-load contract without new SQL.
+pub const REPAIR_DEBT_CACHE_SQL: &str = "UPDATE customers
+                SET current_debt = (
+                    SELECT COALESCE(SUM(CASE WHEN d.type = 'DEBT_ACQUIRED' THEN d.amount
+                                             WHEN d.type = 'PAYMENT_SETTLED' THEN -d.amount
+                                             ELSE 0 END), 0)
+                      FROM customer_debts d
+                     WHERE d.customer_id = customers.id AND d.deleted = 0
+                )
+              WHERE EXISTS (
+                    SELECT 1 FROM customer_debts d
+                     WHERE d.customer_id = customers.id AND d.deleted = 0
+              )
+                AND COALESCE(current_debt, -1) <> (
+                    SELECT COALESCE(SUM(CASE WHEN d.type = 'DEBT_ACQUIRED' THEN d.amount
+                                             WHEN d.type = 'PAYMENT_SETTLED' THEN -d.amount
+                                             ELSE 0 END), 0)
+                      FROM customer_debts d
+                     WHERE d.customer_id = customers.id AND d.deleted = 0
+                )";
+
 /// Apply the boot maintenance to `conn`. Idempotent; one transaction; no
 /// renderer-supplied SQL.
 pub fn apply_boot_maintenance(conn: &mut Connection) -> Result<BootMaintenanceReport, String> {
@@ -55,25 +80,7 @@ pub fn apply_boot_maintenance(conn: &mut Connection) -> Result<BootMaintenanceRe
     // Customer cache reconciled from the ledger, exactly the renderer's SQL.
     report.debts_repaired = tx
         .execute(
-            "UPDATE customers
-                SET current_debt = (
-                    SELECT COALESCE(SUM(CASE WHEN d.type = 'DEBT_ACQUIRED' THEN d.amount
-                                             WHEN d.type = 'PAYMENT_SETTLED' THEN -d.amount
-                                             ELSE 0 END), 0)
-                      FROM customer_debts d
-                     WHERE d.customer_id = customers.id AND d.deleted = 0
-                )
-              WHERE EXISTS (
-                    SELECT 1 FROM customer_debts d
-                     WHERE d.customer_id = customers.id AND d.deleted = 0
-              )
-                AND COALESCE(current_debt, -1) <> (
-                    SELECT COALESCE(SUM(CASE WHEN d.type = 'DEBT_ACQUIRED' THEN d.amount
-                                             WHEN d.type = 'PAYMENT_SETTLED' THEN -d.amount
-                                             ELSE 0 END), 0)
-                      FROM customer_debts d
-                     WHERE d.customer_id = customers.id AND d.deleted = 0
-                )",
+            REPAIR_DEBT_CACHE_SQL,
             [],
         )
         .map_err(|e| format!("reconcile debt cache: {e}"))?;

@@ -259,12 +259,31 @@ pub fn refresh_customer_debt_cache(
     )
 }
 
+/// Boot-hydration repair: the SAME statement the startup transaction runs
+/// (`boot_maintenance::REPAIR_DEBT_CACHE_SQL`), exposed so a page reload heals
+/// the column like it did before the SEC-01 migration. No new SQL.
+pub fn repair_customer_debt_cache_core(conn: &Connection) -> Result<usize, String> {
+    conn.execute(crate::boot_maintenance::REPAIR_DEBT_CACHE_SQL, [])
+        .map_err(|e| format!("repair_customer_debt_cache: {e}"))
+}
+
+#[tauri::command]
+pub fn repair_customer_debt_cache(app: tauri::AppHandle) -> Result<usize, TrustError> {
+    crate::trust_core::ipc_authorizer::authorize_and_execute(
+        "repair_customer_debt_cache",
+        crate::trust_core::capability_policy::Capability::OperationalWrites,
+        |_| {
+            let conn = open_db(&app)?;
+            repair_customer_debt_cache_core(&conn).map_err(TrustError::op_failed)
+        },
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn seeded() -> Connection {
-        let conn = Connection::open_in_memory().expect("memory db");
+    fn seed_schema(conn: &Connection) {
         conn.execute_batch(
             "CREATE TABLE customers (
                 id TEXT PRIMARY KEY, name TEXT NOT NULL, phone TEXT NOT NULL, email TEXT,
@@ -273,9 +292,16 @@ mod tests {
                 json_payload TEXT NOT NULL, updated_at TEXT NOT NULL,
                 deleted INTEGER NOT NULL DEFAULT 0, version INTEGER NOT NULL DEFAULT 1,
                 idempotency_key TEXT, created_at TEXT, current_debt INTEGER,
-                sync_status TEXT DEFAULT 'pending');",
+                sync_status TEXT DEFAULT 'pending');
+             CREATE TABLE customer_debts (id TEXT PRIMARY KEY, customer_id TEXT,
+                type TEXT, amount INTEGER, deleted INTEGER NOT NULL DEFAULT 0);",
         )
         .expect("schema");
+    }
+
+    fn seeded() -> Connection {
+        let conn = Connection::open_in_memory().expect("memory db");
+        seed_schema(&conn);
         conn
     }
 
@@ -353,6 +379,142 @@ mod tests {
         assert_eq!(version, 5);
         assert_eq!(tombstone_customer_core(&conn, "C9", "2026-11-05T10:00:01Z").unwrap(), 1);
         assert_eq!(tombstone_customer_core(&conn, "MISSING", "2026-11-05T10:00:02Z").unwrap(), 0);
+    }
+
+    #[test]
+    fn boot_repair_fixes_a_stale_column_once() {
+        let conn = seeded();
+        conn.execute(
+            "INSERT INTO customers (id, name, phone, json_payload, updated_at, version, current_debt)
+             VALUES ('C-BOOT', 'Ali', '0550', '{}', '2026-11-01', 3, 0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO customer_debts (id, customer_id, type, amount, deleted)
+             VALUES ('D1', 'C-BOOT', 'DEBT_ACQUIRED', 1000, 0)",
+            [],
+        )
+        .unwrap();
+        assert_eq!(repair_customer_debt_cache_core(&conn).unwrap(), 1, "stale row repaired");
+        let debt: i64 = conn
+            .query_row("SELECT current_debt FROM customers WHERE id='C-BOOT'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(debt, 1000);
+        assert_eq!(
+            repair_customer_debt_cache_core(&conn).unwrap(),
+            0,
+            "a second call is a no-op (idempotent)"
+        );
+        let version: i64 = conn
+            .query_row("SELECT version FROM customers WHERE id='C-BOOT'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 3, "a derived cache repair never bumps the clock");
+    }
+
+    #[test]
+    fn boot_repair_leaves_a_consistent_cache_untouched() {
+        let conn = seeded();
+        conn.execute(
+            "INSERT INTO customers (id, name, phone, json_payload, updated_at, version, current_debt)
+             VALUES ('C-OK', 'Ali', '0550', '{}', '2026-11-01', 2, 700)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO customer_debts (id, customer_id, type, amount, deleted)
+             VALUES ('D-OK', 'C-OK', 'DEBT_ACQUIRED', 1000, 0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO customer_debts (id, customer_id, type, amount, deleted)
+             VALUES ('D-OK-P', 'C-OK', 'PAYMENT_SETTLED', 300, 0)",
+            [],
+        )
+        .unwrap();
+        assert_eq!(repair_customer_debt_cache_core(&conn).unwrap(), 0, "700 already agrees");
+    }
+
+    #[test]
+    fn boot_repair_ignores_tombstoned_debts() {
+        let conn = seeded();
+        conn.execute(
+            "INSERT INTO customers (id, name, phone, json_payload, updated_at, version, current_debt)
+             VALUES ('C-TOMB', 'Ali', '0550', '{}', '2026-11-01', 1, 500)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO customer_debts (id, customer_id, type, amount, deleted)
+             VALUES ('D-T', 'C-TOMB', 'DEBT_ACQUIRED', 500, 1)",
+            [],
+        )
+        .unwrap();
+        assert_eq!(repair_customer_debt_cache_core(&conn).unwrap(), 0, "no live debt row => no repair");
+        let debt: i64 = conn
+            .query_row("SELECT current_debt FROM customers WHERE id='C-TOMB'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(debt, 500);
+    }
+
+    #[test]
+    fn boot_repair_converges_across_two_connections() {
+        // Two independent connections on one file, as two processes/threads would
+        // hold. The single guarded UPDATE is serialised by SQLite, so exactly one
+        // caller reports a change and both end up looking at the repaired value.
+        let path = std::env::temp_dir().join(format!(
+            "mobi_repair_pin_{}_{}.db",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let conn_a = Connection::open(&path).expect("file db a");
+        conn_a
+            .busy_timeout(std::time::Duration::from_secs(5))
+            .expect("busy timeout a");
+        seed_schema(&conn_a);
+        conn_a
+            .execute(
+                "INSERT INTO customers (id, name, phone, json_payload, updated_at, version, current_debt)
+                 VALUES ('C-RACE', 'Ali', '0550', '{}', '2026-11-01', 4, 0)",
+                [],
+            )
+            .unwrap();
+        conn_a
+            .execute(
+                "INSERT INTO customer_debts (id, customer_id, type, amount, deleted)
+                 VALUES ('D-RACE', 'C-RACE', 'DEBT_ACQUIRED', 1000, 0)",
+                [],
+            )
+            .unwrap();
+
+        let conn_b = Connection::open(&path).expect("file db b");
+        conn_b
+            .busy_timeout(std::time::Duration::from_secs(5))
+            .expect("busy timeout b");
+
+        let (a, b) = std::thread::scope(|scope| {
+            let left = scope.spawn(move || repair_customer_debt_cache_core(&conn_a));
+            let right = scope.spawn(move || repair_customer_debt_cache_core(&conn_b));
+            (left.join().unwrap(), right.join().unwrap())
+        });
+        assert_eq!(a.unwrap() + b.unwrap(), 1, "one caller repairs, the other sees agreement");
+
+        let check = Connection::open(&path).expect("file db check");
+        let (debt, version): (i64, i64) = check
+            .query_row("SELECT current_debt, version FROM customers WHERE id='C-RACE'", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(debt, 1000);
+        assert_eq!(version, 4, "the repair never bumps the clock");
+        drop(check);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("db-wal"));
+        let _ = std::fs::remove_file(path.with_extension("db-shm"));
     }
 
     #[test]
