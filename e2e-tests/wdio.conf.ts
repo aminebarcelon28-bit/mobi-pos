@@ -199,6 +199,205 @@ function stopAppGracefully(): void {
 
 const LOG_DIR = path.join(ROOT, 'e2e-tests', 'test-logs');
 
+// ---------------------------------------------------------------------------
+// Failure artifacts (VISUAL evidence): on any failed test OR hook, capture a
+// viewport PNG, a full-page PNG (CDP, when the driver supports it), the DOM
+// outerHTML, the page console tap, element diagnostics (target from the error,
+// elementFromPoint at its centre, visible overlays) and the raw error. Files
+// are named by CASE ID under results/artifacts/<stamp>/<spec>/.
+//
+// PII: phones and PIN/secret assignments are masked before anything is
+// written; scan-pii.mjs is run over the directory after the run.
+// ---------------------------------------------------------------------------
+const ARTIFACT_ROOT = path.join(ROOT, 'e2e-tests', 'results', 'artifacts');
+const ARTIFACT_STAMP = () =>
+  (process.env.POS_E2E_ARTIFACT_STAMP ?? '').trim() ||
+  new Date().toISOString().replace(/[:.]/g, '-');
+
+function maskPii(input: string): string {
+  return String(input ?? '')
+    .replace(/(?<!\d)0[5-7][\s.-]?\d{2}[\s.-]?\d{2}[\s.-]?\d{2}[\s.-]?\d{2}(?!\d)/g, '<phone>')
+    .replace(/(?<!\d)0[5-7]\d{8}(?!\d)/g, '<phone>')
+    .replace(/(\+213|00213)[\s.-]?\d{3}[\s.-]?\d{3}[\s.-]?\d{3}/g, '<phone>')
+    .replace(/("?(?:pin|password|passcode|secret|token|appPin)"?\s*[:=]\s*"?)[^",\s}]{3,}/gi, '$1<masked>')
+    .replace(/(pin\s*[:=]\s*)(\d{4,8})/gi, '$1<masked>');
+}
+
+function caseArtifactBase(test: { fullTitle?: string; title?: string; file?: string }): {
+  dir: string;
+  base: string;
+} {
+  const spec = path
+    .basename(String(test?.file ?? 'unknown'))
+    .replace(/\.e2e\.(ts|mts)$/, '')
+    .replace(/[^A-Za-z0-9._-]+/g, '-');
+  const title = String(test?.fullTitle ?? test?.title ?? 'unknown');
+  const id =
+    (title.match(/\[([A-Z][A-Z0-9]{0,3}-\d{2,3})\]/) ?? [])[1] ??
+    (title
+      .replace(/[^A-Za-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 60) ||
+      'unknown');
+  const hook = /"?(before|after)\s*(each|all)"?\s*hook/i.exec(title);
+  const suffix = hook ? `.${hook[1]}-${hook[2].toLowerCase()}` : '';
+  const dir = path.join(ARTIFACT_ROOT, ARTIFACT_STAMP(), spec);
+  return { dir, base: path.join(dir, `${id}${suffix}`) };
+}
+
+/** Raw-string page probes: no transpiled closures, so no __name dependency. */
+const PAGE_DIAGNOSTICS = `(function (targetTestid) {
+  var out = { url: location.href, title: document.title, viewport: { w: innerWidth, h: innerHeight, dpr: devicePixelRatio } };
+  function shown(el) {
+    try {
+      if (!el) return false;
+      var cs = getComputedStyle(el);
+      if (!cs || cs.display === 'none' || cs.visibility === 'hidden' || cs.opacity === '0') return false;
+      var r = el.getBoundingClientRect();
+      return r.width > 0 && r.height > 0;
+    } catch (e) { return false; }
+  }
+  function rect(el) {
+    var r = el.getBoundingClientRect();
+    return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) };
+  }
+  function describe(el) {
+    if (!el) return null;
+    var cs = null; try { cs = getComputedStyle(el); } catch (e) {}
+    return {
+      tag: el.tagName,
+      testid: el.getAttribute && el.getAttribute('data-testid'),
+      aria: el.getAttribute && el.getAttribute('aria-label'),
+      role: el.getAttribute && el.getAttribute('role'),
+      disabled: el.disabled === true,
+      displayed: shown(el),
+      rect: rect(el),
+      pointerEvents: cs ? cs.pointerEvents : null,
+      zIndex: cs ? cs.zIndex : null,
+      text: (el.textContent || '').trim().slice(0, 120),
+    };
+  }
+  out.active = describe(document.activeElement);
+  out.bodyClass = document.body ? document.body.className.slice(0, 200) : null;
+  out.centerElement = describe(document.elementFromPoint(Math.round(innerWidth / 2), Math.round(innerHeight / 2)));
+  var target = targetTestid ? document.querySelector('[data-testid="' + targetTestid + '"]') : null;
+  out.target = describe(target);
+  if (target) {
+    var r = target.getBoundingClientRect();
+    out.targetFromPoint = describe(document.elementFromPoint(Math.round(r.x + r.width / 2), Math.round(r.y + r.height / 2)));
+  }
+  out.overlays = Array.prototype.slice.call(document.querySelectorAll(
+    '[role="dialog"],[data-testid$="dialog"],[data-testid$="-overlay"],[data-testid="lock-screen"],[data-testid="login-pin-pad"]'
+  )).filter(shown).map(describe);
+  out.controls = Array.prototype.slice.call(document.querySelectorAll('button,input,[data-testid]')).filter(shown).slice(0, 120).map(describe);
+  out.bodyTail = (document.body && document.body.innerText ? document.body.innerText : '').slice(-4000);
+  return out;
+})(`;
+const PAGE_CONSOLE_TAP = 'return (window.__posErrors || []).slice(-200);';
+const PAGE_OUTER_HTML = 'return document.documentElement.outerHTML;';
+
+async function captureFailureArtifacts(
+  test: { fullTitle?: string; title?: string; file?: string },
+  result: { error?: Error; duration?: number; passed?: boolean },
+): Promise<void> {
+  const { dir, base } = caseArtifactBase(test);
+  fs.mkdirSync(dir, { recursive: true });
+  const title = String(test?.fullTitle ?? test?.title ?? '');
+  const err = result.error;
+  const targetTestid = err
+    ? (String(err.message).match(/data-testid="([^"]+)"/) ?? [])[1] ?? null
+    : null;
+  const record: Record<string, unknown> = {
+    ts: new Date().toISOString(),
+    spec: path.basename(String(test?.file ?? 'unknown')),
+    title,
+    caseId: path.basename(base).replace(/\.(before|after)-(each|all)$/, ''),
+    durationMs: result.duration ?? null,
+    error: err ? { name: err.name, message: maskPii(err.message), stack: maskPii(err.stack ?? '') } : null,
+    targetTestid,
+    screenshots: {} as Record<string, string>,
+    probeErrors: [] as string[],
+  };
+  const probes = record.probeErrors as string[];
+
+  // 1. Viewport PNG (always available).
+  try {
+    const b64 = await browser.takeScreenshot();
+    fs.writeFileSync(`${base}.png`, Buffer.from(b64, 'base64'));
+    (record.screenshots as Record<string, string>).viewport = `${base}.png`;
+  } catch (e) {
+    probes.push(`viewport screenshot: ${maskPii(String((e as Error)?.message ?? e))}`);
+  }
+  // 2. Full-page PNG. The tauri-driver session exposes no CDP bridge
+  // (browser.cdp is absent), so grow the window to the document height,
+  // capture, and restore. If the window manager clamps the size, the JSON
+  // records the clamp and the viewport PNG remains the visual evidence.
+  try {
+    const metrics = (await browser.execute(
+      'return { w: innerWidth, h: Math.max(document.documentElement.scrollHeight, document.body ? document.body.scrollHeight : 0) };',
+    )) as { w: number; h: number };
+    const before = (await browser.getWindowSize()) as { width: number; height: number };
+    const targetHeight = Math.max(before.height, Math.min(metrics.h + 120, 6000));
+    await browser.setWindowSize(before.width, targetHeight);
+    await browser.pause(300);
+    const actual = (await browser.getWindowSize()) as { width: number; height: number };
+    const b64 = await browser.takeScreenshot();
+    fs.writeFileSync(`${base}.full.png`, Buffer.from(b64, 'base64'));
+    (record.screenshots as Record<string, string>).fullPage = `${base}.full.png`;
+    record.fullPage = {
+      requestedHeight: targetHeight,
+      actualHeight: actual.height,
+      documentHeight: metrics.h,
+      clamped: actual.height < targetHeight - 5,
+    };
+    await browser.setWindowSize(before.width, before.height);
+  } catch (e) {
+    probes.push(`full-page screenshot: ${maskPii(String((e as Error)?.message ?? e))}`);
+  }
+  // 3. DOM + diagnostics + console tap (raw-string probes).
+  try {
+    const html = (await browser.execute(PAGE_OUTER_HTML)) as string;
+    fs.writeFileSync(`${base}.html`, maskPii(html));
+  } catch (e) {
+    probes.push(`outerHTML: ${maskPii(String((e as Error)?.message ?? e))}`);
+  }
+  let diag: Record<string, unknown> | null = null;
+  try {
+    diag = (await browser.execute(`return ${PAGE_DIAGNOSTICS}${JSON.stringify(targetTestid)});`)) as Record<
+      string,
+      unknown
+    >;
+    record.diagnostics = diag;
+  } catch (e) {
+    probes.push(`diagnostics: ${maskPii(String((e as Error)?.message ?? e))}`);
+  }
+  let consoleTap: unknown = null;
+  try {
+    consoleTap = await browser.execute(PAGE_CONSOLE_TAP);
+    record.consoleTap = consoleTap;
+  } catch (e) {
+    probes.push(`console tap: ${maskPii(String((e as Error)?.message ?? e))}`);
+  }
+  fs.writeFileSync(`${base}.json`, maskPii(JSON.stringify(record, null, 2)));
+  fs.writeFileSync(
+    `${base}.log`,
+    maskPii(
+      [
+        `ts: ${record.ts}`,
+        `spec: ${String(record.spec)}`,
+        `case: ${String(record.caseId)}`,
+        `title: ${title}`,
+        `error: ${err ? `${err.name}: ${err.message}` : 'none'}`,
+        `stack:\n${err?.stack ?? ''}`,
+        `probe errors: ${probes.join(' | ') || 'none'}`,
+        `console tap:\n${JSON.stringify(consoleTap, null, 2)}`,
+        `body tail:\n${diag ? String((diag as { bodyTail?: string }).bodyTail ?? '') : ''}`,
+      ].join('\n'),
+    ),
+  );
+  console.log(`[artifact] ${path.relative(ROOT, base)} (.png/.full.png/.html/.json/.log)`);
+}
+
 export const config: Options.Testrunner = {
   runner: 'local',
   specs: ['./specs/**/*.e2e.ts'],
@@ -265,6 +464,10 @@ export const config: Options.Testrunner = {
 
   onPrepare: () => {
     fs.mkdirSync(LOG_DIR, { recursive: true });
+    if (!(process.env.POS_E2E_ARTIFACT_STAMP ?? '').trim()) {
+      process.env.POS_E2E_ARTIFACT_STAMP = new Date().toISOString().replace(/[:.]/g, '-');
+    }
+    console.log(`[e2e-tests] artifacts: ${path.join(ARTIFACT_ROOT, ARTIFACT_STAMP())}`);
     console.log(`[e2e-tests] binary : ${BIN_PATH}`);
     console.log(`[e2e-tests] sandbox: ${SANDBOX}`);
     console.log(`[e2e-tests] db     : ${DB_PATH}`);
@@ -321,6 +524,7 @@ export const config: Options.Testrunner = {
       });
   },
 
+
   /**
    * Append one NDJSON line per finished test — the raw fuel for
    * `tools/coverage.mjs`. (Custom reporter classes need an `emit` method in
@@ -351,8 +555,36 @@ export const config: Options.Testrunner = {
         path.join(ROOT, 'e2e-tests', 'results', 'events.ndjson'),
         JSON.stringify(rec) + '\n',
       );
+      if (state === 'fail') {
+        await captureFailureArtifacts(test, result);
+      }
     } catch {
       /* reporting must never fail a test */
+    }
+  },
+
+  /**
+   * Hook failures carry no test body, so `afterTest` never sees them. Capture
+   * the same artifact set here, with the hook name in the file name — a red
+   * hook must end the run with a picture and a named cause, not a timeout.
+   */
+  afterHook: async function (
+    test: { fullTitle?: string; title?: string; file?: string },
+    _context: unknown,
+    result: { error?: Error; duration?: number; passed?: boolean },
+    hookName: string,
+  ) {
+    try {
+      if (!result?.error) return;
+      await captureFailureArtifacts(
+        {
+          fullTitle: `${hookName} hook: ${String(test?.fullTitle ?? test?.title ?? '')}`,
+          file: test?.file,
+        },
+        result,
+      );
+    } catch (e) {
+      console.error('[e2e-tests] afterHook artifact failed:', (e as Error)?.message ?? e);
     }
   },
 };
