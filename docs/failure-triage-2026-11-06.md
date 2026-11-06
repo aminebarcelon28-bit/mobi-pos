@@ -142,3 +142,83 @@ the renderer should see both). Needs the assertion diff and the plan rows to con
 | baseline BLOCKED | 1 |
 | hook/unattributed | 15 |
 | scale specs | 9 |
+
+## MNY-25 — root cause (rows first)
+
+### Assertion diff
+
+The isolated run fails at `11-mny-money-part2.e2e.ts:1130`:
+
+```
+Error: boot heal did not repair customers.current_debt from the ledger
+  at e2e-tests/specs/11-mny-money-part2.e2e.ts:1130:5
+```
+
+The preceding assertion passed: the debtor card rendered `… Ooredoo 1000 DA …`
+(payload/ledger path), and the failing one is the poll
+`colDebt() === 1000` on the `customers.current_debt` **column**.
+
+### Fixture shape (verified in the spec)
+
+```
+seedCustomerFull: currentDebtDa 1000, currentDebtColumnDa 0, debtLimitDa 100000
+seedCustomerDebts: one DEBT_ACQUIRED 1000, balanceAfter 1000, deleted = 0
+then: run('UPDATE customers SET current_debt = 0 WHERE id = ?')
+then: browser.refresh()            // page reload, NOT a process restart
+```
+
+So the fixture is legal: the ledger row really is `deleted = 0`, which is the only
+predicate the native repair needs.
+
+### Native repair SQL (correct, and not the defect)
+
+`src-tauri/src/boot_maintenance.rs:56-79` runs, inside the startup transaction:
+
+```sql
+UPDATE customers SET current_debt = (SELECT COALESCE(SUM(CASE WHEN d.type='DEBT_ACQUIRED'
+  THEN d.amount WHEN d.type='PAYMENT_SETTLED' THEN -d.amount ELSE 0 END),0)
+  FROM customer_debts d WHERE d.customer_id = customers.id AND d.deleted = 0)
+WHERE EXISTS (SELECT 1 FROM customer_debts d WHERE d.customer_id = customers.id AND d.deleted = 0)
+  AND COALESCE(current_debt,-1) <> (<same sum>)
+```
+
+That statement satisfies the case's requirement; it is not wrong.
+
+### Root cause — a behaviour-timing conflict, not a write defect
+
+The repair is part of **native startup** (`run_at_startup`). `browser.refresh()`
+reloads the WebView; the Tauri backend — and therefore boot maintenance — does not
+run again. Before the SEC-01 migration series the renderer performed an equivalent
+heal on every page load, so a reload re-repaired the column; that renderer write is
+gone (it is exactly the kind of write the flip retired), and the native replacement
+runs once per process.
+
+Therefore the case measures `repair-on-page-reload`, while the shipped design now
+provides `repair-on-process-start`. The card is right, the ledger is right, the
+column is stale **because nothing repaired it on this reload**.
+
+### Why this is a STOP under the MNY-25 guard
+
+The frozen assertions are untouched, no schema is involved, and the ledger/plan data
+is correct — but making the case pass requires **changing when the cache repair
+happens** (add a page-load repair), which is a behaviour change on a money-adjacent
+surface. The ruling's guard is explicit: "no semantics change — if the root cause
+demands one, STOP with a plan, don't patch".
+
+### Plan (awaiting go-ahead, two options)
+
+**Option A (recommended, no semantics change to money math):** expose the existing
+startup statement as a native command (`repair_customer_debt_cache`) and call it
+from the renderer's boot hydration path. The repair stays a single native UPDATE on
+the same table with the same predicate; only *when* it runs changes (per page load,
+restoring the pre-migration behaviour). Pinning: the existing boot-maintenance Rust
+tests plus an end-to-end check that the command repairs a stale column and is a
+no-op when it already agrees.
+
+**Option B (no product change):** re-point the fixture at a real app restart instead
+of `browser.refresh()`, so the case measures the shipped boot behaviour. This
+changes the test, not the app — and must be argued as "the case's stated subject is
+the boot heal, which the app still performs", not as a weakening of the assertion.
+
+Both keep `Σ entries === total`, the remainder-to-earliest rule, the FIFO payoff and
+the no-fee model exactly as asserted.
