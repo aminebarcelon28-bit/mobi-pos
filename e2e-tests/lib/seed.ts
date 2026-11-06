@@ -591,7 +591,6 @@ export async function resetData(): Promise<SanctionedResetReport> {
   );
   return report;
 }
-}
 
 /** Remove every outbox row (sync residue from app-side backfills). */
 export function clearOutbox(): number {
