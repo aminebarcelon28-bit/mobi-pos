@@ -12,6 +12,7 @@ that contradicts an ADR is a bug until the ADR is superseded.
 | [ADR-004](ADR-004-escpos-arabic-raster.md) | Arabic prints as a `GS v 0` raster rendered by the platform; CP864 is a measured fallback, not the path | accepted | RCP-01/12/21 |
 | [ADR-005](ADR-005-role-bound-ipc.md) | Role-bound native authorisation, then read-only SQL, then a data-plane gateway | proposed, staged | SEC-01 |
 | [ADR-006](ADR-006-fiscal-numbering.md) | One continuous fiscal series per terminal; printed PREFIX-SERIES-000001; swappable seam | accepted, provisional | SYN-02 |
+| [ADR-007](ADR-007-audit-baseline-reset.md) | The audit chain never auto-heals; one sanctioned reset retires the head after a wipe and logs the reset as the new genesis link | accepted | SEC-05 |
 
 ## Adding an ADR
 

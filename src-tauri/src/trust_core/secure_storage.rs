@@ -99,6 +99,11 @@ pub trait KeyStore: Send + Sync {
     /// Audit-chain head (Phase 4.5): truncation detection anchor.
     fn load_audit_head(&self) -> Result<Option<AuditHead>, StoreError>;
     fn store_audit_head(&self, head: &AuditHead) -> Result<(), StoreError>;
+    /// Sanctioned baseline reset only (`audit_reanchor`, which refuses a
+    /// non-empty chain). Production appends never clear the head: removing it
+    /// on a live chain destroys the truncation anchor, so the only caller is
+    /// the boot-equivalent reset after a deliberate wipe.
+    fn clear_audit_head(&self) -> Result<(), StoreError>;
     /// PIN lockout map (Phase 4.5): JSON object user_id -> UserLockout.
     /// Absent entry means no lockout history (fresh), never an error.
     fn load_pin_lockouts(&self) -> Result<Option<String>, StoreError>;
@@ -246,6 +251,16 @@ impl KeyStore for OsKeyStore {
         entry
             .set_password(&s)
             .map_err(|e| StoreError::Unavailable(format!("keyring write: {e}")))
+    }
+
+    fn clear_audit_head(&self) -> Result<(), StoreError> {
+        assert_not_in_unit_tests("clear_audit_head");
+        let entry = keyring::Entry::new("mobi-pos-trust", "audit-head-v1")
+            .map_err(|e| StoreError::Unavailable(format!("keyring entry: {e}")))?;
+        match entry.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(e) => Err(StoreError::Unavailable(format!("keyring delete: {e}"))),
+        }
     }
 
     fn load_pin_lockouts(&self) -> Result<Option<String>, StoreError> {
@@ -404,6 +419,17 @@ impl KeyStore for FileKeyStore {
         }
         doc["audit_head"] = serde_json::to_value(head)
             .map_err(|e| StoreError::Unavailable(format!("audit head encode: {e}")))?;
+        self.write_doc(&doc)
+    }
+
+    fn clear_audit_head(&self) -> Result<(), StoreError> {
+        let mut doc = self.read_doc()?;
+        if !doc.is_object() {
+            return Ok(());
+        }
+        if let Some(obj) = doc.as_object_mut() {
+            obj.remove("audit_head");
+        }
         self.write_doc(&doc)
     }
 
@@ -1033,6 +1059,14 @@ pub(crate) mod test_support {
             let s = serde_json::to_string(head)
                 .map_err(|e| StoreError::Unavailable(format!("audit head encode: {e}")))?;
             self.inner.lock().unwrap().insert("audit_head".into(), s);
+            Ok(())
+        }
+
+        fn clear_audit_head(&self) -> Result<(), StoreError> {
+            if *self.fail_all.lock().unwrap() {
+                return Err(StoreError::Unavailable("injected".into()));
+            }
+            self.inner.lock().unwrap().remove("audit_head");
             Ok(())
         }
 

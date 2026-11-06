@@ -415,6 +415,7 @@ static COMMAND_REGISTRY: &[(&str, Capability)] = &[
     ("sav_attachment_sweep_stale_drafts", Capability::OperationalWrites),
     // Tier A audit path (Phase 4.4): native append-only writes.
     ("audit_append", Capability::OperationalWrites),
+    ("audit_reanchor", Capability::OperationalWrites),
     // Swallowed-audit surfacing (Phase 4.5 WP2a): same plane as append.
     ("audit_note_swallowed", Capability::OperationalWrites),
     // Tier A PIN plane (Phase 4.5): device-local verify/rotate. Scoped to
@@ -1177,6 +1178,7 @@ pub static ALL_COMMAND_FNS_IN_TESTS: &[&str] = &[
 "sav_attachment_purge",
     "sav_attachment_sweep_stale_drafts",
     "sqlite_print_raw_escpos",
+    "audit_reanchor",
     "sqlite_open_cash_drawer",
     "get_cloud_credentials",
     "set_cloud_credentials",

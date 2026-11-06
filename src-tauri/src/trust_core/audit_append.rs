@@ -1189,6 +1189,141 @@ pub fn audit_note_swallowed(
     )
 }
 
+/// Report from a sanctioned baseline reset (`audit_reanchor`).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuditReanchorReport {
+    /// Head sequence the wiped chain had left behind (None = no head on record).
+    pub prior_head_seq: Option<u64>,
+    /// Links in the new chain (always 1: the reset event itself).
+    pub chain_links: u64,
+    pub event_id: String,
+    /// Head sequence after re-sealing (0 when no key was available).
+    pub head_seq: u64,
+    pub sealed: bool,
+}
+
+/// Boot-equivalent audit re-anchor for a SANCTIONED reset only.
+///
+/// A data wipe under a live process leaves the keystore head ahead of a fresh
+/// chain — a truncation signal by design. This restores the fresh-install
+/// shape exactly: the wiped chain is proven empty (a single surviving link is
+/// refused, so a live chain can never be re-baselined), the stale head that
+/// belonged to the wiped chain is cleared, and the reset itself is appended as
+/// the new genesis link (audit-logged, never silent). The caller owns the
+/// invocation; boot never calls this.
+pub fn reanchor_audit_baseline(
+    conn: &mut Connection,
+    store: &dyn KeyStore,
+    mac_key: Option<&[u8]>,
+    reason: &str,
+    timestamp: &str,
+) -> Result<AuditReanchorReport, TrustError> {
+    ensure_audit_schema(conn)?;
+    let total: u64 = conn
+        .query_row("SELECT COUNT(*) FROM audit_chain", [], |r| r.get(0))
+        .map_err(|e| TrustError::op_failed(format!("audit reanchor count: {e}")))?;
+    if total != 0 {
+        return Err(TrustError::op_failed(format!(
+            "AUDIT_CHAIN_NOT_EMPTY: {total} link(s) present; re-anchor is only valid on a wiped chain"
+        )));
+    }
+    let prior_head_seq = store
+        .load_audit_head()
+        .ok()
+        .flatten()
+        .map(|h| h.seq);
+    store
+        .clear_audit_head()
+        .map_err(|e| TrustError::op_failed(format!("audit head clear: {e:?}")))?;
+
+    let reason = reason.trim();
+    let reason = if reason.is_empty() { "unspecified" } else { reason };
+    if reason.len() > 512 {
+        return Err(TrustError::IPCProtocolError {
+            reason: "audit reanchor reason must be <= 512 chars",
+        });
+    }
+    let req = AuditAppendRequest {
+        action: "audit.baseline_reset".into(),
+        details: format!(
+            "sanctioned reset ({reason}); priorHeadSeq={}",
+            prior_head_seq
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "none".into())
+        ),
+        user: Some("system:test-reset".into()),
+        requires_pin: Some(false),
+        device_id: None,
+        ip_address: None,
+        actor_id: Some("system:test-reset".into()),
+        idempotency_key: None,
+        app_version: None,
+        session_id: None,
+    };
+    let event_id = format!(
+        "AUD-RESET-{}-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0),
+        &uuid::Uuid::new_v4().to_string()[..8]
+    );
+    append_audit_event(conn, mac_key, &req, &event_id, timestamp)?;
+    let mut head_seq = 0u64;
+    if let Some(key) = mac_key {
+        head_seq = advance_audit_head(conn, store, key)?.seq;
+    }
+    let chain_links: u64 = conn
+        .query_row("SELECT COUNT(*) FROM audit_chain", [], |r| r.get(0))
+        .map_err(|e| TrustError::op_failed(format!("audit reanchor count after: {e}")))?;
+    Ok(AuditReanchorReport {
+        prior_head_seq,
+        chain_links,
+        event_id,
+        head_seq,
+        sealed: mac_key.is_some(),
+    })
+}
+
+/// `#[tauri::command]`: sanctioned baseline reset (OperationalWrites).
+///
+/// Refuses a non-empty chain, so it cannot re-baseline live evidence; the
+/// reset event is itself chained and audited. Never auto-invoked: boot runs
+/// `boot_audit_check` (read-only) and appends advance the head themselves.
+#[tauri::command]
+pub fn audit_reanchor(
+    app: tauri::AppHandle,
+    reason: String,
+) -> Result<AuditReanchorReport, TrustError> {
+    super::ipc_authorizer::authorize_and_execute(
+        "audit_reanchor",
+        super::Capability::OperationalWrites,
+        |_| {
+            use tauri::Manager;
+            let path = db_path_for(&app)?;
+            let app_dir = app
+                .path()
+                .app_data_dir()
+                .map_err(|e| TrustError::op_failed(format!("app dir: {e}")))?;
+            let (store, _) = super::ipc_authorizer::select_store(&app_dir);
+            let mac_key = match resolve_manifest_mac_key(&app_dir) {
+                ManifestMac::Key(k) => Some(k),
+                ManifestMac::Unavailable(_) => None,
+            };
+            let mut conn = Connection::open_with_flags(
+                &path,
+                OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            )
+            .map_err(|e| TrustError::op_failed(format!("audit reanchor open: {e}")))?;
+            conn.busy_timeout(std::time::Duration::from_secs(5))
+                .map_err(|e| TrustError::op_failed(format!("audit reanchor busy: {e}")))?;
+            let timestamp = chrono_iso8601_utc();
+            reanchor_audit_baseline(&mut conn, &*store, mac_key.as_deref(), &reason, &timestamp)
+        },
+    )
+}
+
 /// `#[tauri::command]`: full chain verification (ReadOperationalData — it is
 /// a read; locked-state diagnostics keep their dedicated paths). Returns the
 /// rich status; callers map it to UI.
@@ -1663,6 +1798,101 @@ mod tests {
             "truncation must be detected, got {:?}",
             st.state
         );
+    }
+
+    #[test]
+    fn reanchor_refuses_a_live_chain() {
+        use crate::trust_core::secure_storage::test_support::MemKeyStore;
+        let _g = serial_test_lock();
+        let mut conn = fixture_conn();
+        let store = MemKeyStore::new();
+        let key = b"audit-test-key-32bytes!!!!!!!!".to_vec();
+        append_audit_event(&mut conn, Some(&key), &req("live"), "EV-L", "t").unwrap();
+        advance_audit_head(&conn, &store, &key).unwrap();
+        let err =
+            reanchor_audit_baseline(&mut conn, &store, Some(&key), "test", "t").unwrap_err();
+        assert!(
+            format!("{err:?}").contains("AUDIT_CHAIN_NOT_EMPTY"),
+            "a live chain must never be re-baselined, got {err:?}"
+        );
+        assert_eq!(
+            store.load_audit_head().unwrap().unwrap().seq,
+            1,
+            "the head is untouched when the reset is refused"
+        );
+    }
+
+    #[test]
+    fn reanchor_rebaselines_a_wiped_chain_and_logs_the_reset() {
+        use crate::trust_core::secure_storage::test_support::MemKeyStore;
+        let _g = serial_test_lock();
+        let mut conn = fixture_conn();
+        let store = MemKeyStore::new();
+        let key = b"audit-test-key-32bytes!!!!!!!!".to_vec();
+        for i in 0..3 {
+            append_audit_event(
+                &mut conn,
+                Some(&key),
+                &req(&format!("act-{i}")),
+                &format!("EV-R{i}"),
+                "2026-11-06T00:00:00Z",
+            )
+            .unwrap();
+            advance_audit_head(&conn, &store, &key).unwrap();
+        }
+        // The sanctioned wipe: rows and links go, the keystore head stays
+        // ahead (that is the truncation signal this reset exists to retire).
+        conn.execute("DELETE FROM audit_chain", []).unwrap();
+        conn.execute("DELETE FROM security_audit_logs", []).unwrap();
+
+        let r = reanchor_audit_baseline(
+            &mut conn,
+            &store,
+            Some(&key),
+            "e2e sanctioned reset",
+            "2026-11-06T00:00:01Z",
+        )
+        .unwrap();
+        assert_eq!(r.prior_head_seq, Some(3));
+        assert_eq!(r.chain_links, 1, "the reset event is the new genesis link");
+        assert_eq!(r.head_seq, 1);
+        assert!(r.sealed);
+
+        let st = verify_audit_chain_full(&conn, &store, Some(&key));
+        assert!(matches!(st.state, ChainState::Intact), "got {:?}", st.state);
+        assert_eq!((st.links_verified, st.total_links), (1, 1));
+
+        let (action, details): (String, String) = conn
+            .query_row(
+                "SELECT action, details FROM security_audit_logs WHERE id = ?1",
+                [&r.event_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(action, "audit.baseline_reset");
+        assert!(
+            details.contains("priorHeadSeq=3"),
+            "the reset names the head it retired: {details}"
+        );
+    }
+
+    #[test]
+    fn reanchor_is_refused_without_a_fresh_wipe() {
+        use crate::trust_core::secure_storage::test_support::MemKeyStore;
+        let _g = serial_test_lock();
+        let mut conn = fixture_conn();
+        let store = MemKeyStore::new();
+        let key = b"audit-test-key-32bytes!!!!!!!!".to_vec();
+        let first =
+            reanchor_audit_baseline(&mut conn, &store, Some(&key), "first", "t1").unwrap();
+        assert_eq!(first.head_seq, 1);
+        let err = reanchor_audit_baseline(&mut conn, &store, Some(&key), "second", "t2")
+            .unwrap_err();
+        assert!(
+            format!("{err:?}").contains("AUDIT_CHAIN_NOT_EMPTY"),
+            "a second reset without a wipe is refused, got {err:?}"
+        );
+        assert_eq!(store.load_audit_head().unwrap().unwrap().seq, 1);
     }
 
     #[test]
