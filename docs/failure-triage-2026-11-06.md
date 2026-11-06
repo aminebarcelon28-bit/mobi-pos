@@ -404,3 +404,60 @@ re-anchor + debt repair, session restored first), the audit-chain class is
 closed, IDN's hidden failures are accounted, and the remaining chained variance
 is concentrated in one harness interaction class that needs its own pass (WDIO
 clickable middleware on the lock screen / shift controls). No tag, no rc-13.
+
+## Task 5 — B1/B2 closed with visual evidence; the licence latch is a STOP sub-item (E-0222/E-0223)
+
+### Visual evidence first
+
+Every failing case and every failing hook now writes
+`results/artifacts/<stamp>/<spec>/<case-id>[.before-all|.after-all]{.png,.full.png,.html,.json,.log}`:
+viewport PNG, full-page PNG (window grown to document height — no CDP bridge in
+this session, so the JSON records any clamp), DOM, console tap, error, and
+element diagnostics (the element named in the error, `elementFromPoint` at its
+centre, visible overlays/controls). Masking runs before writing and
+`scan-pii.mjs` reports **clean** for every stamp (552 text files re-masked for
+the pre-mask captures).
+
+### B1 — the pad was not clickable because the lock screen shows the PROFILE GRID
+
+The screenshot
+`2026-11-06T16-58-14-663Z/82-inv-inventory/INV-01.png` shows the real state:
+the lock screen lists every profile (E2E Gerant / SEC A / SEC B / IDN A …) and
+the PIN pad is not the interactable surface; WDIO refused `login-pin-pad`
+("did not become interactable") because the grid covers the pad's centre.
+Fix: `unlockIfNeeded` focuses `login-pin-input` in page context (the pad's
+own onClick does exactly this) and keeps the digit-count proof + native-setter
+fallback; the submit is JS-clicked on the displayed, enabled twin. Result:
+`50 → 82 → 84` x3 → 31 passing / 23 failing with an **identical** case set each
+run and **zero boot-unlock hooks** (the 20 INV/REP rows are baseline FAILs).
+
+### B2 — customer picker
+
+`selectCustomer` now clicks the displayed `clients-button` in page context,
+waits up to 5 s for the dialog, retries 3x after closing stale dialogs, then
+falls back to a displayed WebDriver click, and finally throws with the visible
+controls/dialogs instead of a bare 20 s timeout. REF-51 isolated **3/3**
+(73.2 s / 72.9 s / 74.8 s) — no budget bump.
+
+### STOP sub-item — licence clock latch after the clock spec
+
+Sweep A (43 specs) ran only 190 of 335 cases: from `27a-scl-batch` onward every
+spec booted to the **licence gate**:
+
+- screenshot `2026-11-06T17-44-32-985Z/unknown/before-hook-…SCL-27….png`:
+  "Accès Temporairement Suspendu — Horloge appareil incohérente avec les ventes
+  enregistrées — vérification requise", status **SUSPENDUE**.
+- cause: `26-rcp-tim` deliberately writes sales under fake clocks
+  (31/12/2026, 01/01/2027, 29/02/2028, +5 min mid-sale). The native licence
+  clock guard compares the wall clock with those recorded sale times and
+  latches suspended — **fail-closed product behaviour, not a harness bug**.
+  `TIM-07` alone does not latch it (27a ran 25/25 straight after); the latch
+  needs the clock spec's future-dated sales.
+- why not patched: recovery needs a supervisor-signed time re-anchor
+  (`trust_reanchor_time`) the harness cannot mint, and the guard must not be
+  weakened. The plan is (a) a supervisor-signed re-anchor fixture for the clock
+  spec, or (b) keep the clock spec out of the shared process — which is what is
+  done here, exactly like the `23-scl-scale-*` isolation: `26-rcp-tim` runs as
+  its own process, its cases stay in the census, and the chained suite is
+  measured without a licence latch that has nothing to do with the code under
+  test.

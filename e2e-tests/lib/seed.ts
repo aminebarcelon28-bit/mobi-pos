@@ -545,26 +545,52 @@ export async function resetData(): Promise<SanctionedResetReport> {
   const { unlockIfNeeded } = await import('./pos');
   await unlockIfNeeded();
   const { invoke } = await import('./invoke');
-  const base = wipeDataTables();
-  const reanchor = await invoke<{
+
+  // The app keeps running while the harness wipes: a store tick can append an
+  // audit row between the wipe and the re-anchor, and the native command then
+  // refuses (AUDIT_CHAIN_NOT_EMPTY — correct, it must never re-baseline a live
+  // chain). Re-wipe and try again, bounded and loud: this converges the RESET,
+  // it never retries a verdict. After the last attempt the refusal propagates.
+  let base = wipeDataTables();
+  let reanchor: {
     eventId: string;
     chainLinks: number;
     priorHeadSeq: number | null;
-  }>('audit_reanchor', { reason: 'e2e sanctioned reset' });
+  } | null = null;
+  let lastRefusal = '';
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      reanchor = await invoke<{
+        eventId: string;
+        chainLinks: number;
+        priorHeadSeq: number | null;
+      }>('audit_reanchor', { reason: 'e2e sanctioned reset' });
+      break;
+    } catch (e) {
+      lastRefusal = String((e as Error)?.message ?? e);
+      if (!/AUDIT_CHAIN_NOT_EMPTY/.test(lastRefusal) || attempt === 3) throw e;
+      console.log(
+        `[reset] re-anchor refused on attempt ${attempt}/3 (${lastRefusal.slice(0, 120)}) — re-wiping`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      base = wipeDataTables();
+    }
+  }
   const debtRepaired = await invoke<number>('repair_customer_debt_cache');
   const report: SanctionedResetReport = {
     ...base,
-    auditEventId: reanchor.eventId,
-    auditChainLinks: reanchor.chainLinks,
-    priorHeadSeq: reanchor.priorHeadSeq,
+    auditEventId: reanchor?.eventId ?? '',
+    auditChainLinks: reanchor?.chainLinks ?? 0,
+    priorHeadSeq: reanchor?.priorHeadSeq ?? null,
     debtRepaired,
   };
   console.log(
     `[reset] sanctioned: tables=${base.tables.length} rows=${base.rowsDeleted} ` +
-      `auditEvent=${reanchor.eventId} chain=${reanchor.chainLinks} ` +
-      `priorHead=${reanchor.priorHeadSeq ?? 'none'} debtRepaired=${debtRepaired}`,
+      `auditEvent=${report.auditEventId} chain=${report.auditChainLinks} ` +
+      `priorHead=${report.priorHeadSeq ?? 'none'} debtRepaired=${debtRepaired}`,
   );
   return report;
+}
 }
 
 /** Remove every outbox row (sync residue from app-side backfills). */
