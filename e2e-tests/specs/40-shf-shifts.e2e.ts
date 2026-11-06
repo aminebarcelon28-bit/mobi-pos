@@ -1075,7 +1075,7 @@ describe('SHF — shifts, drawers & cash control (batch 9)', () => {
       timeoutMsg: `live DB never appeared at ${DB_PATH}`,
     });
     await waitForSchemaSettled();
-    resetData();
+    await resetData();
     seedProducts([
       { id: P500, title: 'REF3 P500', priceDa: 500, stock: 500, costDa: 300 },
       { id: P700, title: 'REF3 P700', priceDa: 700, stock: 300, costDa: 400 },

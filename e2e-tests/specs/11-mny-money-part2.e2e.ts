@@ -453,7 +453,7 @@ describe('MNY — money, rounding, currency (batch 2)', () => {
       timeoutMsg: `live DB never appeared at ${DB_PATH}`,
     });
     await waitForSchemaSettled();
-    resetData();
+    await resetData();
     seedProducts([
       { id: 'MNY2-A', title: 'MNY2 A', priceDa: 100, stock: 1000, costDa: 40 },
       { id: 'MNY2-B', title: 'MNY2 B', priceDa: 250, stock: 1000, costDa: 100 },

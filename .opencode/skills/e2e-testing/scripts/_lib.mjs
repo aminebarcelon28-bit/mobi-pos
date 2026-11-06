@@ -404,7 +404,7 @@ export const APP_PATHS = [
   'src',
   'src-tauri/src',
   'src-tauri/Cargo.toml',
-  'src-tauri/Cargo.lock',
+  'Cargo.lock',
   'src-tauri/build.rs',
   'src-tauri/tauri.conf.json',
   'src-tauri/tauri.e2e.conf.json',

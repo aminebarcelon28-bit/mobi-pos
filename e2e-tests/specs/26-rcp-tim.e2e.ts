@@ -781,7 +781,7 @@ function algiersDayKey(iso: string): string {
 before(async () => {
   await installErrorTrap();
   await unlockIfNeeded(APP_PIN);
-  resetData();
+  await resetData();
   const bulk = BULK.map((id, i) => ({
     id,
     title: `Bulk Item ${String(i).padStart(3, '0')}`,

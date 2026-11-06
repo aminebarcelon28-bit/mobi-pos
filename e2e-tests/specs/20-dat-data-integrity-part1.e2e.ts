@@ -91,7 +91,7 @@ describe('DAT batch 20 — data integrity / durability (P0)', () => {
     await unlockIfNeeded(APP_PIN);
     await waitForSchemaSettled();
     await installErrorTrap();
-    resetData();
+    await resetData();
     seedProducts([
       { id: P, title: P_TITLE, priceDa: 1000, stock: 40, barcode: 'DAT-1001' },
       { id: 'DAT-DEL-P', title: 'DAT Deleted Product', priceDa: 100, stock: 1, barcode: 'DAT-DEL-1' },

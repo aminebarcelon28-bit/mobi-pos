@@ -305,7 +305,7 @@ describe('DAT batch 21 — data integrity / durability (P0/P1)', () => {
     await unlockIfNeeded(APP_PIN);
     await waitForSchemaSettled();
     await installErrorTrap();
-    resetData();
+    await resetData();
     seedProducts([
       { id: IMP, title: IMP_TITLE, priceDa: 1000, stock: 10, barcode: IMP_BARCODE, costDa: 500 },
       { id: HOLD_P, title: HOLD_TITLE, priceDa: 1000, stock: 5, barcode: HOLD_BARCODE, costDa: 500 },

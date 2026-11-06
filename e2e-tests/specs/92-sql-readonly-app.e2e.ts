@@ -58,7 +58,7 @@ describe('SEC-01 increment 2 — hardened read-only lane', () => {
   before(async () => {
     await browser.setTimeout({ pageLoad: 120000, script: 120000 });
     await unlockIfNeeded(APP_PIN);
-    resetData();
+    await resetData();
     seedProducts([
       { id: 'SEC2-P', title: 'SEC2 Product', priceDa: 1000, stock: 20, barcode: '613000009201', costDa: 400 },
     ]);

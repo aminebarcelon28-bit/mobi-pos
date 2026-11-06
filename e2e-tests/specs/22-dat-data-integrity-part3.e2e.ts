@@ -155,7 +155,7 @@ describe('DAT-59…DAT-89 — data integrity, part 3', () => {
     await unlockIfNeeded(APP_PIN);
     await waitForSchemaSettled();
     await installErrorTrap();
-    resetData();
+    await resetData();
     seedProducts([
       { id: P59, title: 'DAT59 Product', priceDa: 1000, stock: 20, barcode: '6130000000591', costDa: 500 },
       { id: P60, title: 'DAT60 Product', priceDa: 1000, stock: 20, barcode: '6130000000601', costDa: 500 },

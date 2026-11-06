@@ -122,7 +122,7 @@ describe('D4-A — wallet leg at 32-bit boundaries', () => {
     await installErrorTrap();
     await browser.waitUntil(() => fs.existsSync(DB_PATH), { timeout: 180000, interval: 1000, timeoutMsg: `no DB at ${DB_PATH}` });
     await waitForSchemaSettled();
-    resetData();
+    await resetData();
     seedProducts([
       { id: P231, title: 'REF4 P231', priceDa: 2147483649, stock: 10, costDa: 1 },
       { id: P4E9, title: 'REF4 P4E9', priceDa: 4000000000, stock: 10, costDa: 1 },

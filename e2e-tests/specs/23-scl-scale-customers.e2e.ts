@@ -139,7 +139,7 @@ describe('SCL — batch 23 scale (customers)', () => {
     await browser.setTimeout({ pageLoad: 300000, script: 300000 });
     // A wiped sandbox has no DB until the app boots and runs its migrations.
     await unlockIfNeeded();
-    resetData();
+    await resetData();
     seedProducts([
       { id: P, title: 'SCL Scale Phone', priceDa: 1000, stock: 1000 },
     ]);

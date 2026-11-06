@@ -55,7 +55,7 @@ describe('PROBE SAV helpers', () => {
       timeoutMsg: `live DB never appeared at ${DB_PATH}`,
     });
     await waitForSchemaSettled();
-    resetData();
+    await resetData();
     seedProducts([
       { id: 'PROBE-PART', title: 'PROBE PART', priceDa: 500, stock: 5, costDa: 200, barcode: 'PROBEPART01' },
       { id: 'PROBE-PHONE', title: 'PROBE PHONE', priceDa: 30000, stock: 1, costDa: 20000, isSerialized: true, barcode: 'PROBEPHONE1' },

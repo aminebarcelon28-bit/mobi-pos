@@ -15,7 +15,7 @@ describe('SCL — batch 23 scale (large WAL)', () => {
   before(async () => {
     await browser.setTimeout({ pageLoad: 300000, script: 300000 });
     await unlockIfNeeded();
-    resetData();
+    await resetData();
   });
 
   it('[SCL-83] restart after a large WAL has no recovery progress UI', async () => {

@@ -51,7 +51,7 @@ describe('PROBE-08 max-magnitude + locale', () => {
       timeoutMsg: `live DB never appeared at ${DB_PATH}`,
     });
     await waitForSchemaSettled();
-    resetData();
+    await resetData();
     seedProducts([
       { id: 'P8-MAX', title: 'P8 Max', priceDa: 999999999.99, stock: 200000 },
       { id: 'P8-FRAC', title: 'P8 Frac', priceDa: 33.33, stock: 100 },

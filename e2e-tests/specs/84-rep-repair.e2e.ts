@@ -115,7 +115,7 @@ describe('REP - repair / SAV matrix', () => {
     });
     await waitForSchemaSettled();
     await bootUnlock();
-    resetData();
+    await resetData();
     seedHistoricSession();
 
     seedProducts([

@@ -29,7 +29,7 @@ describe(`two-instance terminal ${INSTANCE}`, () => {
     await browser.setTimeout({ pageLoad: 120000, script: 120000 });
     await unlockIfNeeded(APP_PIN);
     await installErrorTrap();
-    resetData();
+    await resetData();
     seedProducts([
       {
         id: PRODUCT,

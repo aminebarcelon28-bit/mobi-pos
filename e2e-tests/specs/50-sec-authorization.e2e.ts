@@ -1088,7 +1088,7 @@ describe('SEC - roles, authorization & native hardening (batch 10 / part 1)', ()
       timeoutMsg: `live DB never appeared at ${DB_PATH}`,
     });
     await waitForSchemaSettled();
-    resetData();
+    await resetData();
     seedProducts([
       { id: P500, title: 'REF3 P500', priceDa: 500, stock: 500, costDa: 300 },
       { id: P700, title: 'REF3 P700', priceDa: 700, stock: 300, costDa: 400 },
@@ -4066,20 +4066,25 @@ describe('SEC - roles, authorization & native hardening (batch 10 / part 1)', ()
     const chain = all<Row>('SELECT rowid AS __rowid, event_id, prev_hash, entry_hash FROM audit_chain ORDER BY rowid');
     expect(chain.length).toBeGreaterThanOrEqual(3);
     const victim = chain[1] as Row;
-    run('DELETE FROM audit_chain WHERE event_id = ?', String(victim.event_id));
-    const afterDelete = await auditVerifyRaw();
-    const dF = verifyFields(afterDelete.state);
-    console.log(`[SEC-05] after middle-link deletion (${String(victim.event_id)}): linksVerified=${dF.linksVerified}/${dF.totalLinks} reason=${dF.reason.slice(0, 170)}`);
-    expect(fullLinkage(afterDelete.state)).toBe(false);
-    expect(dF.reason).toMatch(/link mismatch|no valid genesis/i);
-
-    run(
-      'INSERT INTO audit_chain (rowid, event_id, prev_hash, entry_hash) VALUES (?, ?, ?, ?)',
-      victim.__rowid as never,
-      String(victim.event_id),
-      String(victim.prev_hash),
-      String(victim.entry_hash),
-    );
+    // Restore in a `finally`: a failed assertion between the delete and the
+    // re-insert must not leave the chain broken for every later spec in the
+    // same process (the pre-refactor defect that made SEC-05 fail chained).
+    try {
+      run('DELETE FROM audit_chain WHERE event_id = ?', String(victim.event_id));
+      const afterDelete = await auditVerifyRaw();
+      const dF = verifyFields(afterDelete.state);
+      console.log(`[SEC-05] after middle-link deletion (${String(victim.event_id)}): linksVerified=${dF.linksVerified}/${dF.totalLinks} reason=${dF.reason.slice(0, 170)}`);
+      expect(fullLinkage(afterDelete.state)).toBe(false);
+      expect(dF.reason).toMatch(/link mismatch|no valid genesis/i);
+    } finally {
+      run(
+        'INSERT INTO audit_chain (rowid, event_id, prev_hash, entry_hash) VALUES (?, ?, ?, ?)',
+        victim.__rowid as never,
+        String(victim.event_id),
+        String(victim.prev_hash),
+        String(victim.entry_hash),
+      );
+    }
     const afterHeal = await auditVerifyRaw();
     const hF = verifyFields(afterHeal.state);
     console.log(`[SEC-05] after verbatim re-insert: linksVerified=${hF.linksVerified}/${hF.totalLinks} reason=${hF.reason.slice(0, 170)}`);

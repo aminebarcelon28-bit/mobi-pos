@@ -39,7 +39,7 @@ describe('INVARIANT-NC - negative controls for the global invariant harness', ()
       timeoutMsg: `live DB never appeared at ${DB_PATH}`,
     });
     await waitForSchemaSettled();
-    resetData();
+    await resetData();
     seedProducts([
       { id: 'NC-G04', title: 'NC G04', priceDa: 100, stock: 0 },
       { id: 'NC-G05', title: 'NC G05', priceDa: 100, stock: 2, isSerialized: true },

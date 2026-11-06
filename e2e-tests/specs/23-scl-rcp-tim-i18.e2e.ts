@@ -161,7 +161,7 @@ before(async () => {
   await installErrorTrap();
   // A wiped sandbox has no DB until the app boots and runs its migrations.
   await unlockIfNeeded(APP_PIN);
-  resetData();
+  await resetData();
   seedProducts([
     { id: P, title: 'SCL23 Phone', priceDa: 1000, stock: 100000, barcode: 'SCL23BAR', category: 'Test' },
   ]);

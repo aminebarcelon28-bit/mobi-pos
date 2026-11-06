@@ -145,7 +145,7 @@ describe('BATCH 27b — LBL/HW interactive', () => {
   before(async () => {
     await browser.setTimeout({ pageLoad: 120000, script: 120000 });
     await ensureDesktopSession();
-    resetData();
+    await resetData();
     seedProducts([
       { id: P_CART, title: 'B27 Cart Phone', priceDa: 12000, stock: 50, barcode: B_CART },
       { id: P_LABEL, title: 'B27 Label Phone', priceDa: 8000, stock: 50, barcode: B_LABEL },

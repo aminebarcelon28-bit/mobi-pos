@@ -36,7 +36,7 @@ describe('PROBE-09 mobile demo shell', () => {
       timeoutMsg: `live DB never appeared at ${DB_PATH}`,
     });
     await waitForSchemaSettled();
-    resetData();
+    await resetData();
     seedProducts([{ id: 'P9-FRAC', title: 'P9 Frac', priceDa: 1234.5, stock: 100 }]);
     await clearWebMirrors();
     await unlockIfNeeded();

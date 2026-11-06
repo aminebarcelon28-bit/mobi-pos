@@ -191,7 +191,30 @@ export async function unlockIfNeeded(pin = APP_PIN): Promise<void> {
     }
     const submit = await $(tid('login-submit'));
     if (await submit.isDisplayed().catch(() => false)) {
-      await submit.click();
+      // JS-click the DISPLAYED twin: WebDriver clicks on this button are
+      // intercepted whenever the overlay is mid-render (observed as
+      // "login-submit ... not clickable" in the before-all hook after a long
+      // chained spec). The button's own onClick is what the user's tap runs.
+      const clicked = (await browser.execute(() => {
+        const vis = (el: HTMLElement) => {
+          try {
+            const cs = getComputedStyle(el);
+            if (!cs || cs.display === 'none' || cs.visibility === 'hidden') return false;
+            const r = el.getBoundingClientRect();
+            return r.width > 0 && r.height > 0;
+          } catch {
+            return false;
+          }
+        };
+        const btns = [...document.querySelectorAll('[data-testid="login-submit"]')] as HTMLButtonElement[];
+        const b = btns.find((x) => vis(x) && !x.disabled);
+        if (!b) return false;
+        b.click();
+        return true;
+      })) as boolean;
+      if (!clicked) {
+        throw new Error('login-submit is not displayed/enabled after PIN entry (no clickable twin)');
+      }
     }
     // Proof of unlock is the OVERLAY DISAPPEARING, never `header`: the shell
     // renders behind the lock screen, so `header` is already visible while the

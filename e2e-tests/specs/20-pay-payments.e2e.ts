@@ -557,7 +557,7 @@ describe('PAY — payment tenders, split & credit (batch 2)', () => {
       timeoutMsg: `live DB never appeared at ${DB_PATH}`,
     });
     await waitForSchemaSettled();
-    resetData();
+    await resetData();
     seedProducts([
       { id: 'PAY-P500', title: 'PAY P500', priceDa: 500, stock: 100000, costDa: 100 },
       { id: 'PAY-P100', title: 'PAY P100', priceDa: 100, stock: 100000, costDa: 20 },

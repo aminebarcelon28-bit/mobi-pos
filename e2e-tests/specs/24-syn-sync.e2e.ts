@@ -134,7 +134,7 @@ describe('SYN — sync / multi-device matrix (batch 24)', () => {
     await browser.setTimeout({ pageLoad: 120000, script: 120000 });
     await unlockIfNeeded(APP_PIN);
     await installErrorTrap();
-    resetData();
+    await resetData();
     run('DELETE FROM sync_outbox');
     seedProducts([
       { id: P24, title: 'SYN24 Product', priceDa: 1000, stock: 10, barcode: '6130000024001', costDa: 500 },

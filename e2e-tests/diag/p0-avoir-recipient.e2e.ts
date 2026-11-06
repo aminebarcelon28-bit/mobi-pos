@@ -67,7 +67,7 @@ describe('P0 recipient rule — anonymous Avoir must not be written', () => {
     await installErrorTrap();
     await browser.waitUntil(() => fs.existsSync(DB_PATH), { timeout: 180000, interval: 1000, timeoutMsg: `no DB at ${DB_PATH}` });
     await waitForSchemaSettled();
-    resetData();
+    await resetData();
     seedProducts([{ id: P, title: 'REF4 PMAX', priceDa: 2000, stock: 10, costDa: 1000 }]);
     seedSettings([{ key: 'policy.offline_cash_refund_limit', valueJson: '500' }]); // refund of 2 000 DA must exceed it
     await clearWebMirrors();

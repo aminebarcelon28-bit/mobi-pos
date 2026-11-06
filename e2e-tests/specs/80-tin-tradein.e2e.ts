@@ -318,7 +318,7 @@ describe('TIN - trade-in / buyback edge matrix (batch 16)', () => {
       timeoutMsg: `live DB never appeared at ${DB_PATH}`,
     });
     await waitForSchemaSettled();
-    resetData();
+    await resetData();
     seedProducts([
       { id: P1000, title: 'TIN P1000', priceDa: 1000, stock: 100, costDa: 500, barcode: 'TIN1000000019' },
       { id: P500, title: 'TIN P500', priceDa: 500, stock: 100, costDa: 250, barcode: 'TIN5000000017' },

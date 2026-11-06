@@ -209,7 +209,7 @@ before(async function () {
   console.log(`SNAPSHOT=${SNAP} sha256=${SNAP_SHA_BEFORE} bytes=${fs.statSync(SNAP).size}`);
 
   // ── Seed ────────────────────────────────────────────────────────────────
-  resetData();
+  await resetData();
   seedProducts([
     { id: P_SALE, title: P_SALE_TITLE, priceDa: 500, stock: 50, costDa: 300, category: 'SCL' },
     { id: P_LOW, title: 'SCL27 STOCK BAS', priceDa: 100, stock: 2, costDa: 50, category: 'SCL' },

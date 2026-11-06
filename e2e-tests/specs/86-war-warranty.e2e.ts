@@ -89,7 +89,7 @@ describe('WAR - warranty / IMEI lifecycle matrix', () => {
     });
     await waitForSchemaSettled();
     await bootUnlock();
-    resetData();
+    await resetData();
     seedHistoricSession();
     seedProducts([
       { id: 'WAR1-STOCK', title: 'Galaxy A14 (stock)', priceDa: 30000, stock: 1, category: 'Smartphones' },

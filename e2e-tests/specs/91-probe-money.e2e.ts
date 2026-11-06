@@ -46,7 +46,7 @@ describe('PROBE-07 money semantics', () => {
       timeoutMsg: `live DB never appeared at ${DB_PATH}`,
     });
     await waitForSchemaSettled();
-    resetData();
+    await resetData();
     seedProducts([
       { id: 'P7-TINY', title: P.tiny, priceDa: 0.01, stock: 100 },
       { id: 'P7-ROUND', title: P.round, priceDa: 33.33, stock: 100 },

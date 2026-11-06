@@ -75,7 +75,7 @@ describe('SCL — batch 23 scale (10M ledger)', () => {
   before(async () => {
     await browser.setTimeout({ pageLoad: 300000, script: 600000 });
     await unlockIfNeeded();
-    resetData();
+    await resetData();
     seedProducts([{ id: P36, title: 'SCL36 Ledger Phone', priceDa: 1000, stock: N_LEDGER }]);
     run("DELETE FROM inventory_ledger WHERE id = 'E2E-BASE-SCL36-P'");
     await clearWebMirrors();

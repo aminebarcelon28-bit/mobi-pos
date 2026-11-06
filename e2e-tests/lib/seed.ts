@@ -482,6 +482,11 @@ const RESET_TABLES = [
   'trade_ins',
   'imei_records',
   'security_audit_logs',
+  // The chain links reference the rows above; wiping one without the other
+  // leaves a dangling link and every later `audit_verify` fails closed
+  // ("references missing log row"). Both go, and the sanctioned reset below
+  // re-anchors the head and logs the reset as the new genesis link.
+  'audit_chain',
   'held_orders',
   'warranty_claims',
   'debt_plans',
@@ -490,7 +495,7 @@ const RESET_TABLES = [
   'customers',
 ];
 
-export function resetData(): { tables: string[]; rowsDeleted: number } {
+function wipeDataTables(): { tables: string[]; rowsDeleted: number } {
   const cleared: string[] = [];
   let rowsDeleted = 0;
   tx((d) => {
@@ -507,6 +512,53 @@ export function resetData(): { tables: string[]; rowsDeleted: number } {
     d.prepare('DELETE FROM sqlite_sequence').run();
   });
   return { tables: cleared, rowsDeleted };
+}
+
+export interface SanctionedResetReport {
+  tables: string[];
+  rowsDeleted: number;
+  auditEventId: string;
+  auditChainLinks: number;
+  priorHeadSeq: number | null;
+  debtRepaired: number;
+}
+
+/**
+ * THE sanctioned reset. Every spec's `before` uses this and nothing else, so
+ * "isolated" and "chained" start from the same state:
+ *
+ *  1. wipe the data tables (audit log AND chain together — no dangling links);
+ *  2. `audit_reanchor` — proves the chain is empty, retires the keystore head
+ *     that belonged to the wiped chain, and appends the reset event as the new
+ *     genesis link (post-reset == fresh boot; a live chain is refused natively);
+ *  3. `repair_customer_debt_cache` — the E-0217 boot-heal, so a reset cannot
+ *     leave a lagged debt cache either.
+ *
+ * Every invocation logs `[reset]` with what it did; a native refusal throws,
+ * so a half-reset can never pass silently.
+ */
+export async function resetData(): Promise<SanctionedResetReport> {
+  const { invoke } = await import('./invoke');
+  const base = wipeDataTables();
+  const reanchor = await invoke<{
+    eventId: string;
+    chainLinks: number;
+    priorHeadSeq: number | null;
+  }>('audit_reanchor', { reason: 'e2e sanctioned reset' });
+  const debtRepaired = await invoke<number>('repair_customer_debt_cache');
+  const report: SanctionedResetReport = {
+    ...base,
+    auditEventId: reanchor.eventId,
+    auditChainLinks: reanchor.chainLinks,
+    priorHeadSeq: reanchor.priorHeadSeq,
+    debtRepaired,
+  };
+  console.log(
+    `[reset] sanctioned: tables=${base.tables.length} rows=${base.rowsDeleted} ` +
+      `auditEvent=${reanchor.eventId} chain=${reanchor.chainLinks} ` +
+      `priorHead=${reanchor.priorHeadSeq ?? 'none'} debtRepaired=${debtRepaired}`,
+  );
+  return report;
 }
 
 /** Remove every outbox row (sync residue from app-side backfills). */

@@ -85,7 +85,7 @@ describe('batch26 diagnostic — print seam', () => {
   before(async () => {
     await installErrorTrap();
     await unlockIfNeeded(APP_PIN);
-    resetData();
+    await resetData();
     seedProducts([
       { id: P1, title: 'Probe Phone', priceDa: 1000, stock: 100, barcode: 'PRBP1', category: 'Test' },
     ]);

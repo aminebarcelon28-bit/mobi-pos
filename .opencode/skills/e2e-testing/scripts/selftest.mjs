@@ -568,7 +568,7 @@ function proveFixTests() {
 
 async function preflightTests() {
   const dir = makeRepo('preflight');
-  const cargo = write(dir, 'src-tauri/Cargo.lock', 'version = 3\n');
+  const cargo = write(dir, 'Cargo.lock', 'version = 3\n');
   // Backdate every other app source so Cargo.lock alone decides "newest".
   const t0 = new Date('2020-01-01T00:00:00Z');
   for (const rel of ['src-tauri/tauri.conf.json']) fs.utimesSync(path.join(dir, rel), t0, t0);

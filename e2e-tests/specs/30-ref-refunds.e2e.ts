@@ -566,7 +566,7 @@ describe('REF — refunds, returns & avoirs (batch 3)', () => {
       timeoutMsg: `live DB never appeared at ${DB_PATH}`,
     });
     await waitForSchemaSettled();
-    resetData();
+    await resetData();
     // Deliberately deep stock: several cases consume units permanently
     // (defective refunds never restock, and failed cases leave sales
     // unrefunded). Run-01's stock-10 seed starved REF-47's second addSku

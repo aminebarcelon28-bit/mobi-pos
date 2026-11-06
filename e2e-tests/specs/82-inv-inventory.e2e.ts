@@ -275,7 +275,7 @@ describe('INV - inventory integrity matrix (batch 17)', () => {
       timeoutMsg: `live DB never appeared at ${DB_PATH}`,
     });
     await waitForSchemaSettled();
-    resetData();
+    await resetData();
     seedProducts([
       { id: 'INV-LAST', title: 'INV LAST', priceDa: 500, stock: 1, costDa: 250, barcode: 'INVLAST00019' },
       { id: 'INV-STK', title: 'INV STK', priceDa: 100, stock: 10, costDa: 50, barcode: 'INVSTK000017' },

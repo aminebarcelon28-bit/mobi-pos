@@ -369,7 +369,7 @@ describe('BATCH 27c — I18 interactive', () => {
   before(async () => {
     await browser.setTimeout({ pageLoad: 120000, script: 120000 });
     await ensureDesktopSession();
-    resetData();
+    await resetData();
     seedProducts([
       { id: P_SALE, title: P_SALE, priceDa: 12000, stock: 50, barcode: B_SALE },
       { id: 'B27-I18-MIXED', title: P_MIXED, priceDa: 45000, stock: 10, barcode: '6132700000024' },
