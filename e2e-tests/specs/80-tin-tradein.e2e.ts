@@ -29,6 +29,7 @@ import {
   typeMoneyInto,
   unlockIfNeeded,
 } from '../lib/pos';
+import { pageClick, pageClickSelector } from '../lib/pageClick';
 import { assertInvariants, captureInvariantBaseline, finalizeInvariants } from '../lib/invariants';
 import { resetData, seedBlockedImeis, seedCustomerFull, seedProducts } from '../lib/seed';
 
@@ -96,18 +97,13 @@ async function bootUnlock(): Promise<void> {
     .isDisplayed()
     .catch(() => false);
   if (!locked) return;
-  await browser.execute(() => {
-    const card = document.querySelector('[data-testid="lock-profile-usr-admin"]') as HTMLButtonElement | null;
-    card?.click();
-  });
+  await pageClick('lock-profile-usr-admin', { label: 'bootUnlock:profile', throwOnRefusal: false });
   await browser.pause(600);
   const input = await $(tid('login-pin-input'));
   if (await input.isDisplayed().catch(() => false)) {
     await typeReal(input, APP_PIN, false);
     await browser.pause(250);
-    await browser.execute(() => {
-      (document.querySelector('[data-testid="login-submit"]') as HTMLButtonElement | null)?.click();
-    });
+    await pageClick('login-submit', { label: 'bootUnlock:submit', throwOnRefusal: false });
   }
   await browser.waitUntil(
     async () => !(await $(tid('lock-screen')).isDisplayed().catch(() => false)),

@@ -6,6 +6,8 @@
 import { browser, $, $$, expect } from '@wdio/globals';
 import { APP_PIN } from './env';
 import { invoke } from './invoke';
+import { pageClick, pageClickElement } from './pageClick';
+import { ClickRefusedError, describeClickDecision, type ClickDecision } from './clickGuard';
 
 export { APP_PIN };
 
@@ -407,9 +409,11 @@ async function cartQtySum(): Promise<number> {
 
 /** Click a catalog tile without tripping over the sticky pricing-tier strip
  * (run-04: 'element click intercepted … Filtrer par niveau de tarification'):
- * centre it first, try the native click, and fall back to a JS click (React's
- * delegated handler fires either way) when any overlay intercepts the pointer
- * at the element's centre point. */
+ * centre it first, try the native (hit-tested) click, and fall back to a page
+ * click only when the guard says nothing blocking is over the tile. The old
+ * unconditional fallback fired through an open payment dialog and grew the cart
+ * behind the modal (CRT-15), so the fallback now refuses with a typed error
+ * instead of clicking. */
 async function clickTile(tile: Awaited<ReturnType<typeof findTile>>): Promise<void> {
   await browser.execute((el: HTMLElement) => {
     el.scrollIntoView({ block: 'center', inline: 'nearest' });
@@ -419,26 +423,17 @@ async function clickTile(tile: Awaited<ReturnType<typeof findTile>>): Promise<vo
     await tile.click();
     return;
   } catch (err) {
-    const overlays = await browser
-      .execute(() =>
-        ([...document.querySelectorAll('[role="dialog"]')] as HTMLElement[])
-          .filter((d) => {
-            try {
-              const r = d.getBoundingClientRect();
-              return r.width > 0 && r.height > 0;
-            } catch {
-              return false;
-            }
-          })
-          .map((d) => d.getAttribute('aria-label') ?? d.getAttribute('data-testid') ?? '?'),
-      )
-      .catch(() => [] as string[]);
+    const decision: ClickDecision = await pageClickElement(tile, {
+      label: 'addSku:tile',
+      throwOnRefusal: false,
+    });
     console.log(
-      `[addSku] native tile click intercepted — JS-click fallback (open dialogs: ${JSON.stringify(overlays)}): ${String((err as Error).message).slice(0, 140)}`,
+      `[addSku] native tile click intercepted — page fallback ${describeClickDecision(decision)}: ${String(
+        (err as Error)?.message ?? err,
+      ).slice(0, 140)}`,
     );
+    if (!decision.allow) throw new ClickRefusedError(decision);
   }
-  await browser.execute((el: HTMLElement) => el.click(), tile as unknown as HTMLElement);
-  await browser.pause(150);
 }
 
 /** Add a product via the catalog UI. `searchToken` must NOT be the product's
@@ -854,39 +849,57 @@ export async function drainCart(): Promise<void> {
 export async function clearCart(): Promise<void> {
   await browser.keys(['Escape']).catch(() => {});
   await closeDialogs(3);
-  // Page-context click: immune to overlay interception (a toast sits over the
-  // line's remove button for ~3 s after an action). Up to 12 rounds; each round
-  // clicks EVERY visible remove button, then re-reads the line count.
+  // Click the remove button through the guard: a toast over the line is fine
+  // (no dialog), but a line behind an open modal must not be removed by a page
+  // click that the user could not have made. Each round removes what it can
+  // reach, then re-reads the count.
+  let refusal: ClickDecision | null = null;
   for (let round = 0; round < 12; round += 1) {
-    const remaining = (await browser.execute(() => {
-      const vis = (d: HTMLElement) => {
-        try {
-          const cs = getComputedStyle(d);
-          if (!cs || cs.display === 'none' || cs.visibility === 'hidden') return false;
-          const r = d.getBoundingClientRect();
-          return r.width > 0 && r.height > 0;
-        } catch {
-          return false;
-        }
-      };
-      const btns = ([...document.querySelectorAll('[data-testid="cart-line-remove"]')] as HTMLElement[]).filter(vis);
-      for (const b of btns) b.click();
-      return btns.length;
-    })) as number;
-    if (remaining === 0) break;
-    await browser.pause(220);
+    if ((await cartLineCount()) === 0) break;
+    let clicked = 0;
+    refusal = null;
+    for (let i = 0; i < 24; i += 1) {
+      const decision = await pageClick('cart-line-remove', {
+        label: 'clearCart:remove',
+        throwOnRefusal: false,
+      });
+      if (!decision.allow) {
+        refusal = decision;
+        break;
+      }
+      clicked += 1;
+      await browser.pause(80);
+      if ((await cartLineCount()) === 0) break;
+    }
+    if (refusal) {
+      console.log(`[clearCart] stop: ${describeClickDecision(refusal)}`);
+      if (refusal.refusal === 'BLOCKED_BY_DIALOG') {
+        // A modal reopened mid-clear: close it and retry rather than reaching
+        // through it.
+        await closeDialogs(2);
+        continue;
+      }
+      break;
+    }
+    if (clicked === 0) break;
+    await browser.pause(180);
   }
   if ((await cartLineCount()) > 0) {
-    // One last settle + pass: the remove button is re-rendered per round.
+    // One last settle + guarded pass: the remove button is re-rendered per round.
     await browser.pause(500);
-    await browser.execute(() => {
-      const btns = [...document.querySelectorAll('[data-testid="cart-line-remove"]')] as HTMLElement[];
-      for (const b of btns) b.click();
+    const last = await pageClick('cart-line-remove', {
+      label: 'clearCart:final',
+      throwOnRefusal: false,
     });
+    if (!last.allow) refusal = last;
     await browser.pause(300);
   }
   if ((await cartLineCount()) > 0) {
-    throw new Error('clearCart: cart lines remain after page-context removal passes');
+    throw new Error(
+      `clearCart: cart lines remain after guarded removal passes${
+        refusal ? ` (${describeClickDecision(refusal)})` : ''
+      }`,
+    );
   }
 }
 /** Close any visible role=dialog overlays (Escape, bounded). */

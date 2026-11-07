@@ -27,6 +27,8 @@ import {
   typeMoneyInto,
   unlockIfNeeded,
 } from './pos';
+import { pageClick, pageClickByText, pageClickByTitle, pageClickSelector } from './pageClick';
+import { describeClickDecision } from './clickGuard';
 
 type Row = Record<string, unknown>;
 
@@ -120,17 +122,18 @@ export async function bootUnlock(): Promise<void> {
     .isDisplayed()
     .catch(() => false);
   if (!locked) return;
-  await browser.execute(() => {
-    (document.querySelector('[data-testid="lock-profile-usr-admin"]') as HTMLButtonElement | null)?.click();
+  // The profile tile and the submit button are page clicks: guard them so a
+  // late overlay (or a second modal) cannot swallow or redirect the unlock.
+  await pageClick('lock-profile-usr-admin', {
+    label: 'SAV bootUnlock:profile',
+    throwOnRefusal: false,
   });
   await browser.pause(600);
   const input = await $(tid('login-pin-input'));
   if (await input.isDisplayed().catch(() => false)) {
     await input.setValue(APP_PIN);
     await browser.pause(250);
-    await browser.execute(() => {
-      (document.querySelector('[data-testid="login-submit"]') as HTMLButtonElement | null)?.click();
-    });
+    await pageClick('login-submit', { label: 'SAV bootUnlock:submit', throwOnRefusal: false });
   }
   await browser.waitUntil(
     async () => !(await $(tid('lock-screen')).isDisplayed().catch(() => false)),
@@ -727,15 +730,9 @@ export async function repairModalOpen(): Promise<boolean> {
 export async function openRepairModal(): Promise<void> {
   if (await repairModalOpen()) return;
   await closeDialogs().catch(() => undefined);
-  const ok = (await browser.execute((title: string) => {
-    const b = ([...document.querySelectorAll('button')] as HTMLButtonElement[]).find(
-      (x) => (x.getAttribute('title') || '') === title,
-    );
-    if (!b) return false;
-    b.click();
-    return true;
-  }, REPAIR_MODAL_TITLE)) as boolean;
-  if (!ok) throw new Error('openRepairModal: header SAV button not found');
+  // Guarded: the header button is background UI; a modal that is still up must
+  // not be clicked through (the old page click did exactly that).
+  await pageClickByTitle(REPAIR_MODAL_TITLE, { label: 'openRepairModal' });
   await browser.waitUntil(repairModalOpen, {
     timeout: 15000,
     interval: 300,
@@ -745,25 +742,18 @@ export async function openRepairModal(): Promise<void> {
 }
 
 export async function closeRepairModal(): Promise<void> {
-  await browser.execute(() => {
-    const dialogs = [...document.querySelectorAll('[role="dialog"]')] as HTMLElement[];
-    const dlg = dialogs.find((d) => /RÉPARATIONS & TICKETS SAV/.test(d.innerText || ''));
-    if (!dlg) return;
-    const b = ([...dlg.querySelectorAll('button')] as HTMLButtonElement[]).find(
-      (x) => x.getAttribute('aria-label') === 'Fermer' || x.getAttribute('title') === 'Fermer',
-    );
-    b?.click();
-  });
+  const decision = await pageClickSelector(
+    '//div[@role="dialog"][contains(normalize-space(.), "RÉPARATIONS & TICKETS SAV")]//button[@aria-label="Fermer" or @title="Fermer"]',
+    { label: 'closeRepairModal', throwOnRefusal: false },
+  );
+  if (!decision.allow) {
+    console.log(`[closeRepairModal] not clicked: ${describeClickDecision(decision)}`);
+  }
   await browser.pause(300);
 }
 
 export async function openHistoryTab(): Promise<void> {
-  await browser.execute(() => {
-    const b = ([...document.querySelectorAll('button')] as HTMLButtonElement[]).find((x) =>
-      /Historique Atelier/.test(x.textContent || ''),
-    );
-    b?.click();
-  });
+  await pageClickByText('Historique Atelier', { label: 'openHistoryTab' });
   await browser.waitUntil(
     async () =>
       (await browser.execute(() => {
@@ -1018,12 +1008,10 @@ export interface IntakeOpts {
 }
 
 export async function fillIntake(o: IntakeOpts): Promise<void> {
-  await browser.execute(() => {
-    const b = ([...document.querySelectorAll('button')] as HTMLButtonElement[]).find((x) =>
-      /Nouveau Ticket SAV/.test(x.textContent || ''),
-    );
-    b?.click();
-  });
+  // Opening the intake is a click on the SAV modal's own control; the guard
+  // refuses it if a foreign modal is on top (the form-internal chip/radio
+  // clicks below are inside the same dialog by construction).
+  await pageClickByText('Nouveau Ticket SAV', { label: 'fillIntake:open' });
   await browser.pause(300);
   if (!(await browser.execute(() => Boolean(document.querySelector('#sav-intake-form'))))) {
     throw new Error('fillIntake: #sav-intake-form not visible');
@@ -1129,14 +1117,15 @@ export async function fillIntake(o: IntakeOpts): Promise<void> {
 }
 
 export async function clickSaveRepair(): Promise<boolean> {
-  return (await browser.execute(() => {
-    const b = ([...document.querySelectorAll('button')] as HTMLButtonElement[]).find((x) =>
-      /Enregistrer le Ticket SAV|Mettre à jour Ticket/.test(x.textContent || ''),
-    );
-    if (!b) return false;
-    b.click();
-    return true;
-  })) as boolean;
+  const decision = await pageClickSelector(
+    '//button[contains(normalize-space(.), "Enregistrer le Ticket SAV") or contains(normalize-space(.), "Mettre à jour Ticket")]',
+    { label: 'clickSaveRepair', throwOnRefusal: false },
+  );
+  if (!decision.allow) {
+    console.log(`[clickSaveRepair] not clicked: ${describeClickDecision(decision)}`);
+    return false;
+  }
+  return true;
 }
 
 export async function saveRepairWait(name: string, timeout = 25000): Promise<Row> {
@@ -1190,15 +1179,7 @@ export async function openInspector(): Promise<void> {
   const visible = (await browser.execute(() => /Inspecteur IMEI & Garantie/.test(document.body.innerText || ''))) as boolean;
   if (visible) return;
   await closeDialogs().catch(() => undefined);
-  const ok = (await browser.execute((title: string) => {
-    const b = ([...document.querySelectorAll('button')] as HTMLButtonElement[]).find(
-      (x) => (x.getAttribute('title') || '') === title,
-    );
-    if (!b) return false;
-    b.click();
-    return true;
-  }, INSPECTOR_TITLE)) as boolean;
-  if (!ok) throw new Error('openInspector: header inspector button not found');
+  await pageClickByTitle(INSPECTOR_TITLE, { label: 'openInspector' });
   await browser.waitUntil(
     async () =>
       (await browser.execute(() => /Inspecteur IMEI & Garantie/.test(document.body.innerText || ''))) as boolean,
@@ -1208,15 +1189,13 @@ export async function openInspector(): Promise<void> {
 }
 
 export async function closeInspector(): Promise<void> {
-  await browser.execute(() => {
-    const dialogs = [...document.querySelectorAll('[role="dialog"]')] as HTMLElement[];
-    const dlg = dialogs.find((d) => /Inspecteur IMEI & Garantie/.test(d.innerText || ''));
-    if (!dlg) return;
-    const b = ([...dlg.querySelectorAll('button')] as HTMLButtonElement[]).find(
-      (x) => x.getAttribute('aria-label') === 'Fermer' || x.getAttribute('title') === 'Fermer',
-    );
-    b?.click();
-  });
+  const decision = await pageClickSelector(
+    '//div[@role="dialog"][contains(normalize-space(.), "Inspecteur IMEI & Garantie")]//button[@aria-label="Fermer" or @title="Fermer"]',
+    { label: 'closeInspector', throwOnRefusal: false },
+  );
+  if (!decision.allow) {
+    console.log(`[closeInspector] not clicked: ${describeClickDecision(decision)}`);
+  }
   await browser.pause(250);
 }
 
@@ -1238,15 +1217,7 @@ export async function inspectorLookup(idValue: string, mode: 'imei' | 'serial' =
     el.dispatchEvent(new Event('change', { bubbles: true }));
   }, label, idValue);
   await browser.pause(150);
-  const clicked = (await browser.execute(() => {
-    const b = ([...document.querySelectorAll('button')] as HTMLButtonElement[]).find(
-      (x) => (x.textContent || '').trim() === 'Vérifier',
-    );
-    if (!b) return false;
-    b.click();
-    return true;
-  })) as boolean;
-  if (!clicked) throw new Error('inspectorLookup: Vérifier button missing');
+  await pageClickByText('Vérifier', { label: 'inspectorLookup:verifier' });
   await browser.pause(1200);
 }
 

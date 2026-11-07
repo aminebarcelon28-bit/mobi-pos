@@ -57,6 +57,7 @@ import {
   typeRefundPin,
   unlockIfNeeded,
 } from '../lib/pos';
+import { pageClick, pageClickSelector } from '../lib/pageClick';
 import { assertInvariants, captureInvariantBaseline, finalizeInvariants } from '../lib/invariants';
 import { resetData, seedCustomerFull, seedImeiRecords, seedProducts, seedSettings } from '../lib/seed';
 
@@ -3188,12 +3189,7 @@ describe('SEC - device, data & operational hardening (batch 10 / part 2)', () =>
     // interactable" after a submit that had actually succeeded), and the
     // button is only mounted at >= 6 digits on manager pads (:102-104).
     const jsClickSubmit = async (): Promise<boolean> =>
-      (await browser.execute(() => {
-        const b = document.querySelector('[data-testid="login-submit"]') as HTMLButtonElement | null;
-        if (!b) return false;
-        b.click();
-        return true;
-      })) as boolean;
+      (await pageClick('login-submit', { label: 'jsSubmit', throwOnRefusal: false })).allow;
     // Cashier profiles auto-submit at their fixed 4-digit length
     // (LockScreenOverlay.tsx:885-887); manager profiles (6-8 digits) always
     // confirm with Valider. Wait on STATE, never on a fixed budget: the native

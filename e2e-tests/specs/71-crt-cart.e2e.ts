@@ -47,6 +47,7 @@ import {
   typeRefundPin,
   unlockIfNeeded,
 } from '../lib/pos';
+import { pageClick, pageClickSelector } from '../lib/pageClick';
 import { cartLineTexts, lastQtyInput } from '../lib/pos';
 import { assertInvariants, captureInvariantBaseline, finalizeInvariants } from '../lib/invariants';
 import { resetData, seedCustomerFull, seedImeiRecords, seedProducts, seedSettings } from '../lib/seed';
@@ -3224,10 +3225,7 @@ describe('CRT - cart, scan, serial and discount edges (batch 14)', () => {
       return Number.isFinite(n) && n > 0 ? n : -1;
     };
     const selectCard = async (): Promise<number> => {
-      await browser.execute((sel: string) => {
-        const el = document.querySelector(sel) as HTMLElement | null;
-        el?.click();
-      }, cardSel);
+      await pageClickSelector(cardSel, { label: 'unlockViaProfile:card' });
       await browser.pause(400);
       return padMax();
     };
@@ -3258,12 +3256,7 @@ describe('CRT - cart, scan, serial and discount edges (batch 14)', () => {
       await browser.pause(300);
     };
     const jsSubmit = async (): Promise<boolean> =>
-      (await browser.execute(() => {
-        const b = document.querySelector('[data-testid="login-submit"]') as HTMLButtonElement | null;
-        if (!b) return false;
-        b.click();
-        return true;
-      })) as boolean;
+      (await pageClick('login-submit', { label: 'jsSubmit', throwOnRefusal: false })).allow;
 
     // Cashier pads auto-submit at 4 digits (LockScreenOverlay.tsx:885-887);
     // manager pads need an explicit submit at >= 6 digits.
