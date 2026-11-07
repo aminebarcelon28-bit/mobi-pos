@@ -337,12 +337,22 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
       site: 'createUISlice.closeModal',
       stack: (new Error().stack ?? '').split('\n').slice(1, 5).join(' | '),
     });
+    // Dismissing the payment modal ABANDONS its staging. The cashier saw a net
+    // that included the staged wallet credit / voucher; leaving it in the store
+    // made the next sale carry them invisibly, and the write layer then aborted
+    // it with AVOIR_STAGING_DROPPED while the dialog stayed open (PAY-11 leak
+    // probe). Clearing here is the same reset `clearCart` performs, at the
+    // moment the operator actually cancels.
+    const closingPayment = get().activeModal === 'payment';
     return set({
       activeModal: null,
       editingProduct: null,
       selectedTransactionForRefund: null,
       selectedRepairOrderForNotification: null,
       activeImeiDossier: null,
+      ...(closingPayment
+        ? { storeCreditApplied: 0, voucherCreditApplied: 0, voucherCode: null }
+        : {}),
     });
   },
 

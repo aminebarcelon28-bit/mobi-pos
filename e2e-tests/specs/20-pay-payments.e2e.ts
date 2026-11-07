@@ -51,7 +51,7 @@ import {
   typeReal,
   unlockIfNeeded,
 } from '../lib/pos';
-import { resetData, seedCreditVouchers, seedCustomerFull, seedProducts } from '../lib/seed';
+import { resetData, seedCreditVouchers, seedCustomerFull, seedCustomerDebts, seedProducts } from '../lib/seed';
 import { assertInvariants, captureInvariantBaseline, finalizeInvariants } from '../lib/invariants';
 
 const CUST_ALPHA = 'PAY-CUST-A'; // store credit 400
@@ -566,6 +566,19 @@ describe('PAY — payment tenders, split & credit (batch 2)', () => {
       { id: CUST_ALPHA, name: 'PAY Alpha', phone: '0550000001', storeCreditDa: 400 },
       { id: CUST_MIX, name: 'PAY Mix', phone: '0550000002', storeCreditDa: 500 },
       { id: CUST_LIMIT, name: 'PAY Limit', phone: '0550000003', currentDebtDa: 99500, debtLimitDa: 100000 },
+    ]);
+    // The opening debt must exist in the ledger too (fixture consistency:
+    // the app never writes a debt without the matching DEBT_ACQUIRED row).
+    seedCustomerDebts([
+      {
+        id: 'PAY-L-OPEN',
+        customerId: CUST_LIMIT,
+        customerName: 'PAY Limit',
+        type: 'DEBT_ACQUIRED',
+        amountDa: 99500,
+        balanceAfterDa: 99500,
+        kind: 'opening_balance',
+      },
     ]);
     seedCreditVouchers([
       { id: 'PAY-V-OK', code: 'AV-PAY11OK', initialAmountDa: 300 },
