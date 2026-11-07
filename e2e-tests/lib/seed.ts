@@ -495,23 +495,37 @@ const RESET_TABLES = [
   'customers',
 ];
 
-function wipeDataTables(): { tables: string[]; rowsDeleted: number } {
-  const cleared: string[] = [];
-  let rowsDeleted = 0;
-  tx((d) => {
-    d.pragma('foreign_keys = OFF');
-    for (const t of RESET_TABLES) {
-      const exists = d
-        .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?")
-        .get(t);
-      if (!exists) continue;
-      const n = d.prepare(`DELETE FROM "${t}"`).run().changes;
-      rowsDeleted += n;
-      cleared.push(t);
+async function wipeDataTables(): Promise<{ tables: string[]; rowsDeleted: number }> {
+  // The app keeps its own pool on the same WAL file. A store tick / invariant
+  // pass can hold the write lock while the harness wipes; a bare BEGIN then
+  // fails with SQLITE_BUSY and takes the whole spec's before-all down with it
+  // (sweep K lost all 30 WAR cases to one `database is locked`). Retry with
+  // backoff: this converges the fixture, never a verdict.
+  for (let attempt = 1; ; attempt += 1) {
+    const cleared: string[] = [];
+    let rowsDeleted = 0;
+    try {
+      tx((d) => {
+        d.pragma('foreign_keys = OFF');
+        for (const t of RESET_TABLES) {
+          const exists = d
+            .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?")
+            .get(t);
+          if (!exists) continue;
+          const n = d.prepare(`DELETE FROM "${t}"`).run().changes;
+          rowsDeleted += n;
+          cleared.push(t);
+        }
+        d.prepare('DELETE FROM sqlite_sequence').run();
+      });
+      return { tables: cleared, rowsDeleted };
+    } catch (e) {
+      const msg = String((e as Error)?.message ?? e);
+      if (!/database is locked|SQLITE_BUSY/i.test(msg) || attempt >= 6) throw e;
+      console.log(`[reset] wipe is busy on attempt ${attempt}/6 (${msg.slice(0, 80)}) — backing off`);
+      await new Promise((resolve) => setTimeout(resolve, 250 * attempt));
     }
-    d.prepare('DELETE FROM sqlite_sequence').run();
-  });
-  return { tables: cleared, rowsDeleted };
+  }
 }
 
 export interface SanctionedResetReport {
@@ -551,7 +565,7 @@ export async function resetData(): Promise<SanctionedResetReport> {
   // refuses (AUDIT_CHAIN_NOT_EMPTY — correct, it must never re-baseline a live
   // chain). Re-wipe and try again, bounded and loud: this converges the RESET,
   // it never retries a verdict. After the last attempt the refusal propagates.
-  let base = wipeDataTables();
+  let base = await wipeDataTables();
   let reanchor: {
     eventId: string;
     chainLinks: number;
@@ -573,7 +587,7 @@ export async function resetData(): Promise<SanctionedResetReport> {
         `[reset] re-anchor refused on attempt ${attempt}/3 (${lastRefusal.slice(0, 120)}) — re-wiping`,
       );
       await new Promise((resolve) => setTimeout(resolve, 400));
-      base = wipeDataTables();
+      base = await wipeDataTables();
     }
   }
   const debtRepaired = await invoke<number>('repair_customer_debt_cache');
