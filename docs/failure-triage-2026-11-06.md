@@ -461,3 +461,69 @@ spec booted to the **licence gate**:
   its own process, its cases stay in the census, and the chained suite is
   measured without a licence latch that has nothing to do with the code under
   test.
+
+## Task 6 — two chained sweeps on the final tree: 2-row variance → STOP (E-0226)
+
+Same container both times: 42 spec files (the five `23-scl-scale-*` stay
+process-isolated, and `26-rcp-tim` runs as its own process per the licence-latch
+STOP above), one wipe, filename order, `retries: 0`.
+
+| Run | Cases | Passing | Red total | Case-level FAIL | Hooks |
+|---|---|---|---|---|---|
+| tag-run rc-12 (43 specs) | 336 | — | 94 | 79 | 15 |
+| census-43 (43 specs, pre-fix) | 335 | 258 | 107 | 85 | 22 |
+| sweep B (42, pre-race-guard) | 436 | 336 | 127 | 130 | ~10 |
+| **sweep E (42, final)** | **471** | **373** | **131** | **133** | **10** |
+| **sweep F (42, final)** | **464** | **367** | **130** | **133** | **11** |
+
+### Variance: two rows, not zero — STOP
+
+`E ∩ F` is 131 of 133; the difference is exactly:
+
+- **only in E**: `IDN-13`, `REF-36` — both **pass isolated** (IDN-13 2m18s,
+  REF-36 57s), so ordering.
+- **only in F**: `CRT-15`, `SEC-07` — SEC-07 **passes isolated** (30s);
+  `CRT-15` **fails isolated** and its cause is now named: `addSku`'s
+  page-context JS-click fallback fires while the **payment dialog is open**
+  ("native tile click intercepted … open dialogs: [Encaissement et règlement]"),
+  and a page-context `element.click()` ignores hit-testing, so the tile behind
+  the modal is clicked and the cart grows. That is a harness defect (the same
+  page-click-bypasses-the-overlay class as B1/B2), not a product gap.
+
+Per the standing rule this is a **STOP-and-write-up, not a retry**: chained
+variance is 2 rows, the failure set is not identical across the two runs, so the
+line is not green and no tag is cut. The queued fix is narrow: `addSku` must
+refuse the JS-click fallback while a blocking dialog is visible and re-check the
+dialog after the click.
+
+### Census (sweep F, `scripts/triage-failures.cjs <log>`)
+
+```
+failing cases: 120   real-gap: 107   REGRESSION?: 9   BLOCKED: 1   N/A: 3
+real gaps by prefix: CRM 2, DAT 28, IDN 14, INV 4, LOY 7, PAY 1, RCP 1,
+                     REF 4, REP 16, SCL 9, SYN 3, TIM 1, TIN 6, WAR 14
+```
+
+The 9 baseline-PASS rows failing in the chained run are CRM-04, CRT-15,
+IDN-12, IDN-15, IDN-16, LOY-13, PAY-21, REF-35, SEC-07. Directly measured:
+REF-35/IDN-13/REF-36/SEC-07 pass isolated; CRT-15 fails isolated (cause above).
+The rest were already in B1's 3x-stable INV/REP chains or the earlier ordering
+set and need their own isolated confirmation.
+
+### Hooks, each named (F)
+
+`INV-17 after-all` and `REP-16/G-26 after-all` are invariant checks firing on
+their own failing case; `PROBE-4` and `WAR-28` after-all are the same G-26
+invariant in the probe/warranty specs; `PAY-21` after-all is the PAY batch-2
+invariant set (G-32/G-34/G-20); `CRM-04` after-all is G-23. The two
+`DRW` before-all "script timeout" hooks are the 300 s budget on a chained
+drawer spec, and `HARNESS smoke` saw one `SqliteError` at reset (the wipe
+racing the app's WAL write) plus one scan-double-dispatch after-all. Each has a
+screenshot under `results/artifacts/<stamp>/<spec>/`.
+
+### Bookkeeping gap found
+
+`verdicts.mjs --write-index` **refuses** this sweep: the log carries
+`ROBE-06..09`, ids that are not in `CASE_INDEX.csv`. The writer refusing is
+correct (no hand-typed verdicts), so CASE_INDEX/COVERAGE are untouched and that
+id family needs a ruling before the census can be stamped.
