@@ -166,13 +166,28 @@ const invViolated = new Set();
 for (const f of invFinalByLabel.values()) for (const id of f.ids) invViolated.add(id);
 
 /* ── 5. reduce ─────────────────────────────────────────────────────────── */
-const DASH = { total: active.length, PASS: 0, 'PASS-PARTIAL': 0, FAIL: 0, 'N/A': 0, BLOCKED: 0, REMAIN: 0 };
+const DASH = {
+  total: active.length,
+  PASS: 0,
+  'PASS-PARTIAL': 0,
+  FAIL: 0,
+  'N/A': 0,
+  BLOCKED: 0,
+  REMAIN: 0,
+  FLAKY: 0,
+  'PASS-NONFLAKY': 0,
+};
 const unknown = new Map();
 for (const r of active) {
   const v = String(r[col.verdict]).trim();
   if (DASH[v] === undefined) unknown.set(v, (unknown.get(v) ?? 0) + 1);
   else DASH[v]++;
+  // A PASS row whose evidence declares it order-dependent/flaky is counted in
+  // PASS but excluded from the headline. reconcile.mjs cross-checks both
+  // numbers against the CSV; without this the dashboard printed `undefined`.
+  if (v === 'PASS' && /FLAKY|order-dependent/i.test(String(r[col.evidence] ?? ''))) DASH.FLAKY++;
 }
+DASH['PASS-NONFLAKY'] = DASH.PASS - DASH.FLAKY;
 if (unknown.size) {
   console.error(`[coverage] unknown verdict(s): ${[...unknown].map(([v, n]) => `"${v}"x${n}`).join(', ')}`);
   process.exit(1);

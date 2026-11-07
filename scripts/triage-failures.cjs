@@ -27,11 +27,33 @@ const runLog = process.argv[2]
       .sort()
       .pop();
 const log = fs.readFileSync(runLog, 'utf8');
-const failing = new Set();
+// A case's own `VERDICT=<ID> X` line is authoritative when present: DAT-70
+// declares BLOCKED and REP-16 declares PASS even though an internal
+// assertion failed, so neither is a case failure. Without a declared verdict,
+// only a real failure line counts. The word FAILED inside a console payload
+// (PERSISTENCE_FAILED) is not a failure line: matching it produced six false
+// rows in the sweep-F census.
+const HOOK_LINE = /hook: wrappedHook|"(?:before|after) (?:all|each)" hook/;
+const CASE_ERROR = /(?:^|\])\s*(?:Error|SqliteError|script timeout|javascript error) in "|✖/;
+const DECLARED = /VERDICT=([A-Z][A-Z0-9]{1,3}-\d{2,3})\s+(PASS|FAIL|N\/A|BLOCKED)/;
+const DECLARED_BARE = /\[([A-Z][A-Z0-9]{1,3}-\d{2,3})\]\s+(PASS|FAIL|N\/A|BLOCKED)\b/;
+const declared = new Map();
+const caseError = new Set();
+const hooks = new Set();
 for (const line of log.split(/\r?\n/)) {
-  const m = /\[([A-Z]{2,4}-\d+)\]/.exec(line);
-  if (m && /Error in "|✖|FAILED/.test(line)) failing.add(m[1]);
+  const dm = DECLARED.exec(line) || DECLARED_BARE.exec(line);
+  if (dm) declared.set(dm[1], dm[2]);
+  const idm = /\[([A-Z][A-Z0-9]{1,3}-\d{2,3})\]/.exec(line);
+  if (!idm) continue;
+  if (HOOK_LINE.test(line)) {
+    hooks.add(idm[1]);
+    continue;
+  }
+  if (CASE_ERROR.test(line)) caseError.add(idm[1]);
 }
+const failing = new Set();
+for (const id of caseError) if (declared.get(id) !== 'PASS' && declared.get(id) !== 'BLOCKED' && declared.get(id) !== 'N/A') failing.add(id);
+for (const [id, v] of declared) if (v === 'FAIL') failing.add(id);
 
 // 3. Isolated scale runs
 const scale = [];

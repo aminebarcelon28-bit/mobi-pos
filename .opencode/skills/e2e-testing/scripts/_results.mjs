@@ -197,7 +197,11 @@ export function verdictsFromEvents(records, { since, until } = {}) {
     const t = rec.ts ? new Date(rec.ts).getTime() : NaN;
     if (since && Number.isFinite(t) && t < since) continue;
     if (until && Number.isFinite(t) && t > until) continue;
-    const m = /\[?([A-Z][A-Z0-9]{1,3}-\d{2,3})\]?/.exec(String(rec.fullTitle ?? ''));
+    // The id must be a whole bracketed token. Without the required `]`,
+    // `[PROBE-06]` matched as `ROBE-06` (5-letter prefix truncated) and
+    // `[REP-16/G-26]` matched as `REP-16`, letting a passing companion case
+    // overwrite the real verdict.
+    const m = /\[([A-Z][A-Z0-9]{1,3}-\d{2,3})\]/.exec(String(rec.fullTitle ?? ''));
     if (!m) continue;
     const id = m[1];
     const state = String(rec.state ?? rec.kind ?? '').toLowerCase();
