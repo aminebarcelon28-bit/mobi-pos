@@ -448,16 +448,20 @@ async function makeCreditSale(title: string, qty: number, customerName: string):
 // ---------------------------------------------------------------------------
 
 async function pickTicket(receipt: string): Promise<'clicked' | 'disabled' | 'no-row'> {
+  // Wait for the LIST state before typing. The old version treated "refund
+  // dialog absent" as settled and then conditionally opened it, so a stale
+  // dialog that was mid-close could satisfy the check, disappear, and leave
+  // refundSearch with twins=0/dialogs=[] (REF-36 in a chained sweep). The
+  // caller owns opening (`openRefund` force-closes stale dialogs and waits for
+  // this field); here we only wait for it to exist.
   await browser.waitUntil(
     async () => {
-      if (!(await refundDialogVisible())) return true;
       const inputs = await $$(tid('refund-search'));
       for (const i of inputs) if (await i.isDisplayed().catch(() => false)) return true;
       return false;
     },
-    { timeout: 8000, timeoutMsg: 'refund dialog never settled into a list state' },
+    { timeout: 15000, timeoutMsg: 'refund list state never rendered (no displayed refund-search)' },
   );
-  if (!(await refundDialogVisible())) await openRefund();
   await refundSearch(receipt);
   let out = await selectRefundTicket(receipt, 6000);
   if (out !== 'no-row') return out;
@@ -469,7 +473,10 @@ async function stageRefund(
   receipt: string,
   opts: { method?: 'Espèces' | 'Avoir Client'; qtyByKey?: Record<string, number> } = {},
 ): Promise<void> {
-  if (!(await refundDialogVisible())) await openRefund();
+  // Always go through openRefund: it force-closes a stale dialog, clicks the
+  // shell control through the guarded helper, and waits for the search field —
+  // the three things that used to race here.
+  await openRefund();
   const pick = await pickTicket(receipt);
   if (pick !== 'clicked') {
     throw new Error(`ticket ${receipt} not selectable (${pick}) :: ${await dumpRefundState('pick-ticket')}`);
