@@ -1067,7 +1067,10 @@ async function voidSaleViaReports(receipt: string, reason: string): Promise<{ sa
 // ---------------------------------------------------------------------------
 
 describe('DRW - cash drawer state, part 2 (batch 12 / DRW-16..30)', () => {
-  before(async () => {
+  before(async function () {
+  // Same measured 600 s before-all budget as part 1 (448 s solo; 300 s cap hit
+  // chained in sweep N) — REF-87 precedent.
+  this.timeout(600000);
     await installErrorTrap();
     await browser.waitUntil(() => fs.existsSync(DB_PATH), {
       timeout: 180000,
@@ -4083,7 +4086,9 @@ describe('DRW - cash drawer state, part 2 (batch 12 / DRW-16..30)', () => {
   }
 
   before(async function () {
-    this.timeout(300000);
+    // Measured: part 2's second block seeds a second roster and reloads; the
+    // 300 s cap was hit in a chained sweep (N). 600 s per the REF-87 precedent.
+    this.timeout(600000);
     await d2CloseAny();
     d2RosterWrite([
       { id: DE.id, name: DE.name, pin: '', role: DE.role, avatarColor: '#0ea5e9' },

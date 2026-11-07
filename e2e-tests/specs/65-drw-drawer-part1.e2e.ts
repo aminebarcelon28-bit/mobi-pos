@@ -1073,7 +1073,12 @@ async function voidSaleViaReports(receipt: string, reason: string): Promise<{ sa
 // ---------------------------------------------------------------------------
 
 describe('DRW - cash drawer state, part 1 (batch 12 / DRW-01..15)', () => {
-  before(async () => {
+  before(async function () {
+  // Measured budget, not a guess: this spec alone takes ~448 s, and under a
+  // chained predecessor the before-all alone hit mocha's 300 s cap and dropped
+  // all 15 cases from the sweep (sweep N). Same owner-authorized 600 s
+  // precedent as REF-87.
+  this.timeout(600000);
     await installErrorTrap();
     await browser.waitUntil(() => fs.existsSync(DB_PATH), {
       timeout: 180000,
@@ -3981,7 +3986,9 @@ describe('DRW - cash drawer state, part 1 (batch 12 / DRW-01..15)', () => {
   }
 
   before(async function () {
-    this.timeout(300000);
+    // Seeding hook: same measured 600 s budget as the file-level before (448 s
+    // solo; the 300 s cap was hit chained) — REF-87 precedent.
+    this.timeout(600000);
     await drwCloseAny();
     drwRosterWrite([
       { id: DA.id, name: DA.name, pin: '', role: DA.role, avatarColor: '#06b6d4' },
