@@ -143,10 +143,11 @@ export function clickGuardDecision(
 
   // Fallback for the case where the pointer lands on the document root (a
   // modal backdrop with pointer-events:none): a visible foreign dialog still
-  // swallows the click. When the hit point is a real element — including an
-  // overlay ABOVE the dialog, such as the lock screen — the hit test in the
-  // previous branch already decided, so the list must not veto it.
-  const hitIsRoot = !hit || !hit.found || /^(BODY|HTML)$/i.test(hit.tag);
+  // swallows the click. Only a REAL hit can veto — an element outside the
+  // viewport yields no hit at all (elementFromPoint(centre) is null), and a
+  // page-context click is precisely how the harness reaches a control that
+  // sits below the fold (e.g. login-submit while a payment dialog lingers).
+  const hitIsRoot = !!hit && hit.found && /^(BODY|HTML)$/i.test(hit.tag);
   const foreign = (probe.dialogs ?? []).find((d) => d.name !== target.dialog);
   if (hitIsRoot && foreign) {
     return {

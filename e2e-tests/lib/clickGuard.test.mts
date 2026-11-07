@@ -116,6 +116,22 @@ eq(
   'lock-screen click is not blocked by a dialog beneath it',
 );
 
+// 7c. An element outside the viewport has no hit point at all
+//     (elementFromPoint(centre) is null). The harness clicks those in page
+//     context on purpose (login-submit below the fold on a short window), so a
+//     dialog visible elsewhere on the page must not veto them.
+eq(
+  clickGuardDecision(
+    probe({
+      target: el({ testid: 'login-submit' }),
+      hit: { ...NO_ELEMENT },
+      dialogs: [payDialog],
+    }),
+  ).allow,
+  true,
+  'off-viewport target is not blocked by a dialog elsewhere on the page',
+);
+
 // 8. Two dialogs: a target inside A is still blocked by B.
 eq(
   clickGuardDecision(
