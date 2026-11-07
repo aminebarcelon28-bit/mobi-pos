@@ -597,3 +597,35 @@ explicit unit case: a real element at the click point wins over the dialog list.
   so the next isolated pass can rule each one.
 - The remaining DAT/WAR/REP/SCL/TIN/LOY/SYN rows are the backlog enumerated in
   the sweep-F census; DAT-40/48/82 stay STOP-PLAN (raw Node SQL probes).
+
+## Full sweeps G / H / I — arithmetic and the stability stop (E-0235, E-0236)
+
+| Sweep | Cases | Pass | Fail (runner) | Case FAILs | Refusals |
+|---|---|---|---|---|---|
+| G | 460 | 371 | 132 | 136 | 0 |
+| H | 460 | 372 | 130 | 135 | 0 |
+| I | 460 | 378 | 124 | **129** | 0 |
+
+`G ∩ H` is not the whole set: `CRT-09/13/22` failed only in G (native
+`checkout-button`/`cart-clear` clicks intercepted by a toast) and
+`REF-36/65` only in H (`stale element reference`; `refund search input is not
+displayed`). That is a 5-row variance, so per the rule this is a stop, not a
+retry.
+
+`I ⊆ H` exactly: nothing new failed, and six rows flipped green —
+`PAY-11` (staging cleared on cancel + the debt fixture now has its ledger row),
+`SEC-11/12/16` (the off-viewport guard rule) and `REF-36/65` (interaction
+races). The fixed rows are now PASS in `CASE_INDEX.csv`/`COVERAGE.md`
+(`CRT-15`, `INV-12`, `RCP-06`, `PAY-11`, `SEC-07`), dashboard FAIL 203 → 198,
+reconcile 0/687.
+
+Remaining red set (129): DAT 29, IDN 19, REP 16, SCL 23, WAR 14, LOY 8, TIN 6,
+INV 4, SYN 3, CRM 2, HW 1, I18 3, TIM 1. `DAT-28` stays red on its second
+assertion: no startup/daily `quick_check` exists in the TS app or native boot
+maintenance (only export-time `integrity_check`), so silent corruption is not
+scheduled — a real product gap, not a lane defect.
+
+Next stability work is interaction hardening, not product: bind
+`checkout-button`/`cart-clear` through the guarded page click, and make
+`refundSearch` wait for its input to mount before failing. Then two clean
+sweeps.

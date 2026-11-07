@@ -1,7 +1,7 @@
 # COVERAGE — POS Edge Case Encyclopedia vs. executed MobiPOS tests
 
-Generated: 2026-11-07T03:48:10.100Z  
-Batch: `sweep-f`  
+Generated: 2026-11-07T12:26:34.537Z  
+Batch: `sweep-i`  
 Verdict source: `e2e-tests/CASE_INDEX.csv` (single source of truth)  
 Source cases: `POS_EDGE_CASE_ENCYCLOPEDIA_and_LONG_SESSION.md` (local, not in repo)
 
@@ -10,11 +10,11 @@ Source cases: `POS_EDGE_CASE_ENCYCLOPEDIA_and_LONG_SESSION.md` (local, not in re
 | Metric | Count |
 |---|---|
 | Catalog cases (table rows) | 687 |
-| Passed (full) | 279 |
+| Passed (full) | 284 |
 | Passed (partial — unasserted facets listed) | 18 |
-| Passed (full, excluding flaky rows) | 278 |
+| Passed (full, excluding flaky rows) | 283 |
 | FLAKY (pass, order-dependent - excluded from the headline) | 1 |
-| **FAILED** | 203 |
+| **FAILED** | 198 |
 | N/A (absent or unobservable in harness) | 70 |
 | Remaining (doable today, not yet executed) | 0 |
 | BLOCKED (missing dependency — see Evidence) | 117 |
@@ -118,7 +118,7 @@ A verdict change from N/A to FAIL requires the case text to clearly assume the p
 | CRT-12 | P1 | Product with 0 stock, negative-stock allowed/forbidden | 71-crt-cart.e2e.ts | PASS |
 | CRT-13 | P1 | Deleting a product/customer referenced by old sales | 71-crt-cart.e2e.ts | PASS |
 | CRT-14 | P1 | Serial/IMEI-tracked item sold without selecting a serial | 71-crt-cart.e2e.ts | PASS |
-| CRT-15 | P1 | Add item while payment dialog open / double-click Add / hold-key repeat | 71-crt-cart.e2e.ts | FAIL |
+| CRT-15 | P1 | Add item while payment dialog open / double-click Add / hold-key repeat | 71-crt-cart.e2e.ts | PASS |
 | CRT-16 | P1 | Shelf/label price differs from cart price (stale label, LBL-04) | — | N/A — Feature not implemented - there is no separate shelf/label price source. Product has one c |
 | CRT-17 | P1 | Phone + accessories at one bundle price (e.g. free screen protector) | derived:REF-33 | PASS |
 | CRT-18 | P0 | Same IMEI added to two carts (two cashiers, desktop + mobile) or twice in one cart | 71-crt-cart.e2e.ts | PASS |
@@ -331,7 +331,7 @@ A verdict change from N/A to FAIL requires the case text to clearly assume the p
 | INV-09 | P1 | Reorder alerts/low-stock notifications | 82-inv-inventory.e2e.ts | PASS |
 | INV-10 | P1 | Product merge / barcode reassign | 82-inv-inventory.e2e.ts | PASS |
 | INV-11 | P1 | Expiry/batch items [if relevant] FEFO | 82-inv-inventory.e2e.ts | PASS |
-| INV-12 | P1 | Importing 10,000 products (CSV): bad rows, duplicates, Arabic names, price formats | 82-inv-inventory.e2e.ts | FAIL |
+| INV-12 | P1 | Importing 10,000 products (CSV): bad rows, duplicates, Arabic names, price formats | 82-inv-inventory.e2e.ts | PASS |
 | INV-13 | P0 | Receiving 500 phones from a supplier: scan IMEIs vs supplier file; missing, duplicate, ext | 82-inv-inventory.e2e.ts | FAIL |
 | INV-14 | P0 | IMEI stocktake by mobile scanning (offline, 2,000 units, two counters at once) | 82-inv-inventory.e2e.ts | PASS |
 | INV-15 | P1 | Reservation/hold of a phone for a customer (with deposit), expiry | 82-inv-inventory.e2e.ts | PASS |
@@ -453,7 +453,7 @@ A verdict change from N/A to FAIL requires the case text to clearly assume the p
 | PAY-08 | P0 | Payment while offline for tenders needing network | 20-pay-payments.e2e.ts | PASS |
 | PAY-09 | P0 | Deposit/advance payment then final payment on same document | 34-ref-refunds-part5.e2e.ts | PASS |
 | PAY-10 | P0 | Credit sale ("dette"/client account) [if exists]: limit exceeded, partial repayment, overp | 20-pay-payments.e2e.ts | PASS |
-| PAY-11 | P0 | Store credit / gift card: partial use, expiry, refund to store credit, negative balance at | 20-pay-payments.e2e.ts | FAIL |
+| PAY-11 | P0 | Store credit / gift card: partial use, expiry, refund to store credit, negative balance at | 20-pay-payments.e2e.ts | PASS |
 | PAY-12 | P0 | Cheque/bank transfer tender [if exists]: unpaid cheque reversal | 20-pay-payments.e2e.ts | PASS |
 | PAY-13 | P0 | Tip/service fee [if exists] | — | N/A — Feature not implemented — no tip / service-fee tender: no tip field in the payment modal,  |
 | PAY-14 | P0 | Payment method disabled mid-day / terminal config changed during open cart | — | N/A — Feature not implemented — payment methods are a static, always-enabled tab list; there is  |
@@ -486,7 +486,7 @@ A verdict change from N/A to FAIL requires the case text to clearly assume the p
 | RCP-03 | P1 | Receipt with 1, 7, 50, 200 lines; very long receipt | 26-rcp-tim.e2e.ts | PASS |
 | RCP-04 | P0 | Required content present: shop identity, document number, date/time, cashier, payment line | 23-scl-rcp-tim-i18.e2e.ts | PASS |
 | RCP-05 | P1 | Reprint: marked as copy; same number; no new sale | 26-rcp-tim.e2e.ts | FAIL |
-| RCP-06 | P0 | Printer offline / paper out / cover open / buffer full mid-receipt | 23-scl-rcp-tim-i18.e2e.ts | FAIL |
+| RCP-06 | P0 | Printer offline / paper out / cover open / buffer full mid-receipt | 23-scl-rcp-tim-i18.e2e.ts | PASS |
 | RCP-07 | P1 | Print queue: 20 receipts rapidly; app closed with jobs pending; printer reconnect | 26-rcp-tim.e2e.ts | FAIL |
 | RCP-08 | P1 | Print call blocks UI (hung USB/Bluetooth/network printer) | 26-rcp-tim.e2e.ts | PASS-PARTIAL |
 | RCP-09 | P1 | Two printers (receipt + label + A4 invoice): wrong printer routing, printer renamed/remove | 26-rcp-tim.e2e.ts | PASS |
@@ -751,7 +751,7 @@ A verdict change from N/A to FAIL requires the case text to clearly assume the p
 | SEC-04 | P0 | Secondary admin with cashier PIN receives the four-digit lock pad | 50-sec-authorization.e2e.ts | PASS |
 | SEC-05 | P0 | Audit entry for every mutation (G-08); tamper one byte → verifier fails; delete a row → ve | 50-sec-authorization.e2e.ts | PASS |
 | SEC-06 | P0 | Audit log growth, export, retention/purge with step-up | 50-sec-authorization.e2e.ts | PASS |
-| SEC-07 | P0 | PINs hashed with salt (no plaintext in DB, logs, memory dumps in e2e artifacts) | 50-sec-authorization.e2e.ts | FAIL |
+| SEC-07 | P0 | PINs hashed with salt (no plaintext in DB, logs, memory dumps in e2e artifacts) | 50-sec-authorization.e2e.ts | PASS |
 | SEC-08 | P0 | Customer personal data (phones, IDs, repair passcodes) not in logs/crash reports/e2e scree | 50-sec-authorization.e2e.ts | PASS |
 | SEC-09 | P0 | IPC surface: forged invoke args (negative qty, huge, wrong types, other user's IDs) | 50-sec-authorization.e2e.ts | PASS |
 | SEC-10 | P0 | Webview content-security: no remote content, no eval; e2e tooling absent in release | 50-sec-authorization.e2e.ts | PASS |
@@ -934,9 +934,9 @@ A verdict change from N/A to FAIL requires the case text to clearly assume the p
 | G-29 | pass | Refund conservation: for every sale line Σ refunded qty ≤ sold qty and Σ refunded amount ≤ net paid share; for |
 | G-30 | pass | No destructive cascade: deleting or merging a customer/product/user/device never deletes or edits ledger rows  |
 | G-31 | — | Scale budget: hot-path latency, DB size, WAL size and backup/restore time stay within owner-agreed budgets at  |
-| G-32 | **fail** | Account balance: per customer (credit sales, instalments, deposits, store credit) balance = Σ sales − Σ paymen |
+| G-32 | pass | Account balance: per customer (credit sales, instalments, deposits, store credit) balance = Σ sales − Σ paymen |
 | G-33 | pass | Type discipline: money, quantity and counter columns hold integers; IMEI, phone, receipt/ticket numbers and id |
-| G-34 | **fail** | Derived data is rebuildable: every derived table or column (counters, stock balances, summaries, FTS, normaliz |
+| G-34 | pass | Derived data is rebuildable: every derived table or column (counters, stock balances, summaries, FTS, normaliz |
 | G-35 | — | Destructive-change guard: an operation that deletes or overwrites more than N rows, or touches a ledger table, |
 | G-36 | — | Unique device identity: each live `device_id` appears once; ID and document-number ranges of different devices |
 

@@ -2,7 +2,6 @@ case_id,cluster_id,cluster_key,class,evidence,money,priority,catalog
 CRT-05,C01,REF-ALLOCATION,app,SQLite,money movement,P0,A (A1)
 LOY-05,C12,LOY-CLAWBACK,app,SQLite,money movement,P0,A
 LOY-08,C12,LOY-CLAWBACK,app,SQLite,money movement,P0,A
-PAY-11,C04,STAGED-CREDIT-LEAK,app,SQLite,money movement,P0,NEW
 LOY-07,C14,LOY-BUCKET,app,SQLite,money movement,P1,NEW
 LOY-14,C15,LOY-ZERO-COVER,app,SQLite,money movement,P1,G
 REP-01,C64,REP-WORKFLOW-GAPS,app,SQLite,money movement,P0,NEW
@@ -93,7 +92,6 @@ RCP-15,C18,PRINT-CONTENT,app,bytes,display only,P0,B (B1/B2)
 RCP-18,C18,PRINT-CONTENT,app,bytes,display only,P0,B (B1/B2)
 RCP-22,C18,PRINT-CONTENT,app,bytes,display only,P0,B (B1/B2)
 IDN-08,C18,PRINT-CONTENT,app,bytes,display only,P0,B (B1/B2)
-RCP-06,C19,PRINT-FAILURE-UX,app,bytes,display only,P0,B (B5/B6)
 RCP-07,C19,PRINT-FAILURE-UX,app,bytes,display only,P0,B (B5/B6)
 RCP-12,C16,PRINT-ENCODER,app,bytes,display only,P1,B (B4) + A (A4)
 RCP-23,C16,PRINT-ENCODER,app,bytes,display only,P1,B (B4) + A (A4)
@@ -194,12 +192,9 @@ MOB-11,C69,MOB-LAYOUT,app,DOM,none,P1,F
 SCL-76,C87,TRANSIENT-RETENTION,app,SQLite,none,P1,NEW
 DAT-34,C88,SEALED-KEY-COVERAGE,app,RUNTIME,none,P0,NEW
 REF-86,C89,OFFLINE-CASH-CAP,env,RUNTIME,none,P1,order-dependent offline cash-refund ceiling; own batch
-CRT-15,C90,PAGE-CLICK-BYPASS,harness,RUNTIME,none,P0,NEW
-SEC-07,C91,ORDER-DEPENDENT-UI,harness,RUNTIME,none,P1,NEW
 IDN-12,C91,ORDER-DEPENDENT-UI,harness,RUNTIME,none,P0,NEW
 IDN-15,C91,ORDER-DEPENDENT-UI,harness,RUNTIME,none,P0,NEW
 IDN-16,C91,ORDER-DEPENDENT-UI,harness,RUNTIME,none,P0,NEW
-INV-12,C92,NA-PROBE-ASSERTS,test,SOURCE,none,P1,NEW
 IDN-17,C92,NA-PROBE-ASSERTS,test,SOURCE,none,P1,NEW
 IDN-21,C92,NA-PROBE-ASSERTS,test,SOURCE,none,P1,NEW
 LOY-13,C91,ORDER-DEPENDENT-UI,harness,RUNTIME,none,P1,NEW
