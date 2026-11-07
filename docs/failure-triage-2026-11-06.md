@@ -527,3 +527,73 @@ screenshot under `results/artifacts/<stamp>/<spec>/`.
 `ROBE-06..09`, ids that are not in `CASE_INDEX.csv`. The writer refusing is
 correct (no hand-typed verdicts), so CASE_INDEX/COVERAGE are untouched and that
 id family needs a ruling before the census can be stamped.
+
+## Fix pass — corrected arithmetic and the page-click guard (E-0227..E-0231)
+
+### The census number is 134, not 120 and not 133
+
+`scripts/triage-failures.cjs` now treats a case's own declaration as
+authoritative and only counts real failure lines:
+
+- 4 census rows were **verdict=PASS false positives** (`CRM-04`, `PAY-21`,
+  `REF-35`, `REF-67`): the old regex matched the word `FAILED` inside console
+  payloads (`PERSISTENCE_FAILED`, "refused fail-closed").
+- `DAT-70` is **BLOCKED** (no previous-version installer); its helper throws, so
+  it is a resource gap, not a failure.
+- 19 rows were **missed entirely** because they only emit
+  `VERDICT=<ID> FAIL` (`DAT-34`, `HW-01`, `I18-01/03/09`, `SCL-02/03/04/06/10/23/27/31/57/62/71/74/76/88`).
+- `REP-16` is a **real failure**: its body assertion fails; the passing case in
+  the same file is `[REP-16/G-26]`, which the unanchored id regex used to
+  cross-match. Anchoring the regex (`\[([A-Z][A-Z0-9]{1,3}-\d{2,3})\]`) fixed both
+  this and the `ROBE-06..09` artefact from `[PROBE-06..09]`.
+
+So: **134 = 115 case-level + 19 VERDICT-only**, and the six old extras resolve
+to 4 PASS + 1 BLOCKED + REP-16 staying red.
+
+### Page-click guard (CRT-15)
+
+`pos.ts:clickTile` used to log the open dialog and then fire `el.click()`
+anyway; `Element.click()` bypasses hit-testing, so a product tile behind the
+payment dialog was added to the cart. The fallback now asks
+`clickGuardDecision` (pure, unit-tested) against a probe of the displayed twin,
+`document.elementFromPoint` at its centre and the visible dialogs, and throws a
+typed `ClickRefusedError` naming the dialog. CRT-15 was RED before
+(`crt15-before`) and GREEN 3/3 after, e.g.:
+
+```
+[addSku:tile] refused: refuse BLOCKED_BY_DIALOG via pay-dialog
+  (centre is covered by dialog pay-dialog, target product-tile is behind it)
+[CRT-15] addedBehindModal=false lines=1
+```
+
+The same helper routes `clearCart` (sequential, refuses behind a modal),
+`sav.ts` (boot unlock, repair modal open/close, history tab, intake open, save,
+inspector open/close/lookup) and the spec-local lock clicks in
+50/51/60/65/66/70/71/75/80/82. `guard-chain-1` exposed one false refusal — a
+lock-screen profile card above a lingering pay dialog — which is now an
+explicit unit case: a real element at the click point wins over the dialog list.
+
+### Fixed in this pass
+
+| Case | Root cause | Evidence |
+|---|---|---|
+| CRT-15 | page-context fallback clicked through the pay dialog | E-0228 |
+| INV-12 | baseline row asserted the importer was absent; it ships (`InventoryManagerModal.tsx:464-472`) | E-0229 |
+| DAT-28 | `PRAGMA quick_check` ran on the read-only WebView pool; FTS5 validation needs a temp write | E-0230 |
+| RCP-06 | `printReceipt` discarded `directPrintReceipt()`/`printViaWindowsSpooler()`'s boolean, so a failed reprint toasted success | E-0231 |
+
+### Still open (grind), with the first measured cause
+
+- `PAY-11`: the final walk-in sale leaves the pay dialog open and the G-32/G-34
+  invariant fires (`current_debt=500 != payload=100000` for `PAY-CUST-L`) — a
+  staged-credit/debt-cache defect on the money path; needs its own change with
+  the ledger snapshot before/after.
+- `DRW-01..27`: these cases did not execute in sweep F (both drawer specs died
+  in before-all on the 300 s budget), so they are newly visible product gaps:
+  `DRW-01` shows `name=true float=false sessionId=false openTime=true
+  drawerId=false` on the mobile drawer view.
+- `IDN-14/15/16/18/20/22`: middleware "did not become interactable" / script
+  timeouts remain for those six; the lock clicks they depend on are now guarded,
+  so the next isolated pass can rule each one.
+- The remaining DAT/WAR/REP/SCL/TIN/LOY/SYN rows are the backlog enumerated in
+  the sweep-F census; DAT-40/48/82 stay STOP-PLAN (raw Node SQL probes).
