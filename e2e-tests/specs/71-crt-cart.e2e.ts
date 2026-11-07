@@ -12,6 +12,7 @@ import { browser, expect } from '@wdio/globals';
 import { DB_PATH } from '../lib/env';
 import { all, count, one, run, scalar, waitForSchemaSettled } from '../lib/db';
 import {
+  clickControl,
   addSku,
   APP_PIN,
   applyCartDiscountPercent,
@@ -393,7 +394,7 @@ async function makeCreditSale(title: string, qty: number, customerName: string):
   await selectCustomer(customerName);
   for (let i = 0; i < qty; i++) await addSku(title);
   const before = txCount();
-  await (await $(tid('checkout-button'))).click();
+  await clickControl('checkout-button');
   await (await $(tid('pay-dialog'))).waitForDisplayed({ timeout: 20000 });
   const clicked = (await browser.execute(() => {
     const vis = (d: HTMLElement) => {
@@ -1693,7 +1694,7 @@ describe('CRT - cart, scan, serial and discount edges (batch 14)', () => {
   // --------------------------- Zero-total (REF-54) --------------------------
 
   async function commitZeroSale(): Promise<void> {
-    await (await $(tid('checkout-button'))).click();
+    await clickControl('checkout-button');
     await (await $(tid('pay-dialog'))).waitForDisplayed({ timeout: 20000 });
     const exact = await $(tid('pay-exact'));
     if ((await exact.isExisting().catch(() => false)) && (await exact.isDisplayed().catch(() => false))) {
@@ -2050,7 +2051,7 @@ describe('CRT - cart, scan, serial and discount edges (batch 14)', () => {
 
   /** Pay the open cart through the real CIB / Carte lane (card-funded sale). */
   async function payByCib(): Promise<void> {
-    await (await $(tid('checkout-button'))).click();
+    await clickControl('checkout-button');
     await (await $(tid('pay-dialog'))).waitForDisplayed({ timeout: 20000 });
     const picked = (await browser.execute(() => {
       const vis = (d: HTMLElement) => { try { const cs = getComputedStyle(d); if (!cs || cs.display === 'none' || cs.visibility === 'hidden') return false; const r = d.getBoundingClientRect(); return r.width > 0 && r.height > 0; } catch { return false; } };
@@ -2615,7 +2616,7 @@ describe('CRT - cart, scan, serial and discount edges (batch 14)', () => {
   // ---------------------------------------------------------------------------
 
   async function payByCheque(): Promise<void> {
-    await (await $(tid('checkout-button'))).click();
+    await clickControl('checkout-button');
     await (await $(tid('pay-dialog'))).waitForDisplayed({ timeout: 20000 });
     const picked = (await browser.execute(() => {
       const vis = (d: HTMLElement) => {
@@ -3806,7 +3807,7 @@ describe('CRT - cart, scan, serial and discount edges (batch 14)', () => {
     await clearCart();
     await addSku('REF3 PSER');
     const before = txCount();
-    await (await $(tid('checkout-button'))).click();
+    await clickControl('checkout-button');
     await (await $(tid('pay-dialog'))).waitForDisplayed({ timeout: 20000 });
     const imei = await $('[data-testid="pay-dialog"] input[placeholder^="Saisir ou scanner"]');
     await imei.waitForDisplayed({ timeout: 10000 });
@@ -3830,7 +3831,7 @@ describe('CRT - cart, scan, serial and discount edges (batch 14)', () => {
   it('[CRT-15] adding an item while the payment dialog is open is refused (cart must not grow behind the modal)', async () => {
     await clearCart();
     await addSku('REF3 P500');
-    await (await $(tid('checkout-button'))).click();
+    await clickControl('checkout-button');
     await (await $(tid('pay-dialog'))).waitForDisplayed({ timeout: 20000 });
     let added = false;
     try {
@@ -4113,7 +4114,7 @@ describe('CRT - cart, scan, serial and discount edges (batch 14)', () => {
     expect(resumedTotal).toBe(holdTotal);
 
     const blockedBefore = txCount();
-    await (await $(tid('checkout-button'))).click();
+    await clickControl('checkout-button');
     await (await $(tid('pay-dialog'))).waitForDisplayed({ timeout: 20000 });
     await (await $(tid('pay-exact'))).click();
     await (await $(tid('pay-confirm'))).click();

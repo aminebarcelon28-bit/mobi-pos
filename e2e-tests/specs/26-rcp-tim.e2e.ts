@@ -28,6 +28,7 @@ import { execFileSync } from 'node:child_process';
 import { $, browser, expect } from '@wdio/globals';
 import { all, count, one, run } from '../lib/db';
 import {
+  clickControl,
   APP_PIN,
   addSku,
   armPrintCounter,
@@ -1211,7 +1212,7 @@ describe('RCP/TIM — receipts, printing and clock edges (batch 26)', () => {
     // 'CIB / Edahabia' (PaymentModal.tsx:981).
     await armCapture('stub', true);
     await addSku('RCP26 Phone Standard');
-    await (await $(tid('checkout-button'))).click();
+    await clickControl('checkout-button');
     await (await $(tid('pay-dialog'))).waitForDisplayed({ timeout: 20000 });
     const cardClicked = await clickButtonText('CIB / Carte');
     await browser.pause(400);

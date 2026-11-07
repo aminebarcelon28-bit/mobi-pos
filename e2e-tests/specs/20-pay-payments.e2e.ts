@@ -35,6 +35,7 @@ import { browser, expect } from '@wdio/globals';
 import { DB_PATH } from '../lib/env';
 import { count, one, run, waitForSchemaSettled } from '../lib/db';
 import {
+  clickControl,
   addSku,
   APP_PIN,
   applyCartDiscountPercent,
@@ -176,7 +177,7 @@ async function openPay(): Promise<void> {
     console.log('[openPay] stale pay dialog visible — force-closing it first');
     await forceClosePay();
   }
-  await (await $(tid('checkout-button'))).click();
+  await clickControl('checkout-button');
   await (await $(tid('pay-dialog'))).waitForDisplayed({ timeout: 20000 });
   await browser.pause(300);
 }

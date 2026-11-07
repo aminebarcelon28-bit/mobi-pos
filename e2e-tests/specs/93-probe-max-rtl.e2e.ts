@@ -23,6 +23,7 @@ import { browser, $ } from '@wdio/globals';
 import { DB_PATH } from '../lib/env';
 import { all, count, one, waitForSchemaSettled } from '../lib/db';
 import {
+  clickControl,
   addSku,
   cartLineTexts,
   cartTotalMinor,
@@ -207,7 +208,7 @@ describe('PROBE-08 max-magnitude + locale', () => {
     const lines2 = await cartLineTexts();
     const errsBefore = (await readErrors()).filter((e) => !/wdio\.log_frontend/.test(e));
     const txBefore2 = count('transactions');
-    await (await $(tid('checkout-button'))).click();
+    await clickControl('checkout-button');
     let payOpen = false;
     let refused = false;
     await browser
@@ -302,7 +303,7 @@ describe('PROBE-08 max-magnitude + locale', () => {
       await typeReal(qty, String(q), true);
       await browser.pause(400);
       const tDisp = await cartTotalMinor();
-      await (await $(tid('checkout-button'))).click();
+      await clickControl('checkout-button');
       let payOpen = false;
       let refused = false;
       await browser

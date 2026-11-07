@@ -968,7 +968,7 @@ describe('BATCH 27c — I18 interactive', () => {
     // amount: paste an NBSP-grouped tender into an emptied field
     await pos.clearCart();
     await addSale();
-    await (await $(pos.tid('checkout-button'))).click();
+    await pos.clickControl('checkout-button');
     await (await $(pos.tid('pay-dialog'))).waitForDisplayed({ timeout: 20000 });
     const amountHandled = await pasteInto('[data-testid="tendered-input"]', '1\u00A0000', true);
     await browser.pause(700);

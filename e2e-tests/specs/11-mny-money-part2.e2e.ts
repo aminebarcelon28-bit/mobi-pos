@@ -39,6 +39,7 @@ import { browser, expect } from '@wdio/globals';
 import { DB_PATH } from '../lib/env';
 import { all, count, one, run, waitForSchemaSettled } from '../lib/db';
 import {
+  clickControl,
   addSku,
   APP_PIN,
   cartLineTexts,
@@ -700,7 +701,7 @@ describe('MNY — money, rounding, currency (batch 2)', () => {
 
     // Money containment: no negative sale may land.
     const before = txCount();
-    await (await $(tid('checkout-button'))).click().catch(() => undefined);
+    await clickControl('checkout-button').catch(() => undefined);
     await browser.pause(1500);
     const opened = await payDialogVisible();
     let surface = '';
@@ -750,7 +751,7 @@ describe('MNY — money, rounding, currency (batch 2)', () => {
     expect(staged).toBe(true);
     // Loyalty lane: attach customer (400 DA credit), apply all.
     await selectCustomer(CUST26_NAME);
-    await (await $(tid('checkout-button'))).click();
+    await clickControl('checkout-button');
     await (await $(tid('pay-dialog'))).waitForDisplayed({ timeout: 20000 });
     const applied = (await browser.execute(() => {
       const vis = (d: HTMLElement) => {
@@ -812,7 +813,7 @@ describe('MNY — money, rounding, currency (batch 2)', () => {
     const staged2 = await stageTradeIn(IMEI_B, 500);
     expect(staged2).toBe(true);
     const before2 = txCount();
-    await (await $(tid('checkout-button'))).click();
+    await clickControl('checkout-button');
     await browser.pause(1500);
     if (await payDialogVisible()) {
       const clampNet = displayedToMinor(await (await $(tid('pay-net'))).getText());

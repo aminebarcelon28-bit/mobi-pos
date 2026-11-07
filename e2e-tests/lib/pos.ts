@@ -978,8 +978,37 @@ export async function clickUnobstructed(testid: string, timeout = 20000): Promis
   await el.click();
 }
 
+/**
+ * Click a shell control (cart/checkout) that transient toasts routinely cover.
+ *
+ * The native WebDriver click is hit-tested, so a toast parked over the button
+ * makes it throw `element click intercepted` — that flake is what put
+ * CRT-09/13/22 into one sweep and not the next. Fall back to the guarded page
+ * click: it performs the same handler, and still refuses (typed) when a real
+ * modal covers the control.
+ */
+export async function clickControl(
+  testid: string,
+  options: { label?: string; allowBehindDialog?: boolean } = {},
+): Promise<void> {
+  const el = await $(tid(testid));
+  if (await el.isExisting().catch(() => false)) {
+    try {
+      await el.click();
+      return;
+    } catch (err) {
+      console.log(
+        `[clickControl] ${testid}: native click intercepted (${String(
+          (err as Error)?.message ?? err,
+        ).slice(0, 120)}) — guarded page click`,
+      );
+    }
+  }
+  await pageClick(testid, { label: options.label ?? `clickControl:${testid}`, ...options });
+}
+
 export async function payExactFlow(): Promise<void> {
-  await (await $(tid('checkout-button'))).click();
+  await clickControl('checkout-button');
   await (await $(tid('pay-dialog'))).waitForDisplayed({ timeout: 20000 });
   await (await $(tid('pay-exact'))).click();
   await (await $(tid('pay-confirm'))).click();
@@ -994,7 +1023,7 @@ export async function payExactFlow(): Promise<void> {
  * the payment immediately (PaymentModal onKeyDown) — the confirm button then
  * no longer exists. So type WITHOUT Enter (real keys only) and click confirm. */
 export async function payTenderedFlow(tenderedDa: number | string): Promise<void> {
-  await (await $(tid('checkout-button'))).click();
+  await clickControl('checkout-button');
   await (await $(tid('pay-dialog'))).waitForDisplayed({ timeout: 20000 });
   await typeReal(await $(tid('tendered-input')), String(tenderedDa), false);
   await browser.pause(300);
@@ -1625,9 +1654,29 @@ export async function openRefund(): Promise<void> {
     await forceCloseRefund();
   }
   await closeDialogs(2);
-  await (await $(tid('refund-button'))).click();
+  await clickControl('refund-button', { label: 'openRefund:refund-button' });
   await (await $(tid('refund-dialog'))).waitForDisplayed({ timeout: 20000 });
-  await browser.pause(350);
+  // The dialog mounts before its search field. Waiting on the field here keeps
+  // the first render from racing callers: REF-65 chained failed ten seconds
+  // later in refundSearch with no refund dialog in the DOM at all.
+  await browser.waitUntil(
+    async () =>
+      (await browser.execute(() => {
+        const vis = (n: HTMLElement) => {
+          try {
+            const cs = getComputedStyle(n);
+            if (!cs || cs.display === 'none' || cs.visibility === 'hidden') return false;
+            const r = n.getBoundingClientRect();
+            return r.width > 0 && r.height > 0;
+          } catch {
+            return false;
+          }
+        };
+        return ([...document.querySelectorAll('[data-testid="refund-search"]')] as HTMLElement[]).some(vis);
+      })) as boolean,
+    { timeout: 15000, interval: 150, timeoutMsg: 'refund dialog opened but its search field never rendered' },
+  );
+  await browser.pause(150);
 }
 
 export async function closeRefund(): Promise<void> {
@@ -1666,7 +1715,20 @@ export async function refundSearch(text: string): Promise<void> {
     if (input) break;
     await browser.pause(150);
   }
-  if (!input) throw new Error('refund search input is not displayed (both twins hidden)');
+  if (!input) {
+    const diag = (await browser.execute(() => ({
+      twins: document.querySelectorAll('[data-testid="refund-search"]').length,
+      dialogs: ([...document.querySelectorAll('[role="dialog"]')] as HTMLElement[])
+        .filter((d) => {
+          const r = d.getBoundingClientRect();
+          return r.width > 0 && r.height > 0;
+        })
+        .map((d) => d.getAttribute('data-testid') || d.getAttribute('aria-label') || d.tagName),
+    }))) as { twins: number; dialogs: string[] };
+    throw new Error(
+      `refund search input is not displayed (twins=${diag.twins}, dialogs=${JSON.stringify(diag.dialogs)})`,
+    );
+  }
   if (index > 0) {
     console.log(`[refundSearch] bound displayed twin #${index} (first DOM twin is hidden)`);
   }

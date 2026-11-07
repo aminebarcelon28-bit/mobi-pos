@@ -41,7 +41,8 @@ import fs from 'node:fs';
 import { browser, expect } from '@wdio/globals';
 import { DB_PATH } from '../lib/env';
 import { all, count, one, run, scalar, waitForSchemaSettled } from '../lib/db';
-import { clickUnobstructed,
+import {
+  clickControl, clickUnobstructed,
   addSku,
   APP_PIN,
   applyCartDiscountPercent,
@@ -2066,7 +2067,7 @@ describe('REF — refunds, returns & avoirs (batch 4 / part 2)', () => {
     const netA = await cartTotalMinor();
     console.log(`[REF-71] net-negative basket total: ${netA}`);
     const txBeforeA = txCount();
-    await (await $(tid('checkout-button'))).click().catch(() => undefined);
+    await clickControl('checkout-button').catch(() => undefined);
     await browser.pause(1500);
     const payOpenedA = await payDialogVisible();
     let landedA = false;
@@ -2094,7 +2095,7 @@ describe('REF — refunds, returns & avoirs (batch 4 / part 2)', () => {
     console.log(`[REF-71] net-positive basket total: ${netB}`);
     const txBeforeB = txCount();
     const movesBeforeB = count('cash_movements');
-    await (await $(tid('checkout-button'))).click().catch(() => undefined);
+    await clickControl('checkout-button').catch(() => undefined);
     await browser.pause(1500);
     const payOpenedB = await payDialogVisible();
     let landedB = false;

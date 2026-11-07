@@ -9,6 +9,7 @@ import { browser, expect } from '@wdio/globals';
 import { DB_PATH } from '../lib/env';
 import { all, count, one, run, waitForSchemaSettled } from '../lib/db';
 import {
+  clickControl,
   addSku,
   APP_PIN,
   closeRefund,
@@ -75,7 +76,7 @@ async function settleRefund(ticketId: string, ms = 120000): Promise<Row | undefi
 
 async function payExactSlow(priceDa: number, ms = 180000): Promise<void> {
   const before = Number(one<{ n: number }>('SELECT COUNT(*) AS n FROM transactions')?.n ?? 0);
-  await (await $(tid('checkout-button'))).click();
+  await clickControl('checkout-button');
   await (await $(tid('pay-dialog'))).waitForDisplayed({ timeout: 30000 });
   await (await $(tid('pay-exact'))).click();
   await (await $(tid('pay-confirm'))).click();

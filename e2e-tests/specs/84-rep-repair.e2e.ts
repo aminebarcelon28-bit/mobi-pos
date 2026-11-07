@@ -18,6 +18,7 @@ import { $, browser, expect } from '@wdio/globals';
 import { DB_PATH } from '../lib/env';
 import { all, columnNames, one, waitForSchemaSettled } from '../lib/db';
 import {
+  clickControl,
   APP_PIN,
   closeDialogs,
   drainCart,
@@ -338,7 +339,7 @@ describe('REP - repair / SAV matrix', () => {
     console.log(`[REP-07] settle clicked=${clicked} before=${String(before?.status)} remaining=${Number(before?.total_cost) - Number(before?.deposit_amount)}`);
     await browser.pause(1200);
     await overrideLastLinePrice('100', { pin: APP_PIN });
-    await (await $(tid('checkout-button'))).click();
+    await clickControl('checkout-button');
     await (await $(tid('pay-dialog'))).waitForDisplayed({ timeout: 20000 });
     const payBody = await bodyText();
     const split = /répartition|split|paiement mixte espèces.*carte|espèces.*carte.*mixte/i.test(payBody);

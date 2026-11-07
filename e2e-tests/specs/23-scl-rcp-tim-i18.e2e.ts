@@ -15,6 +15,7 @@ import { $, $$, browser, expect } from '@wdio/globals';
 import { all, count, db, one, openDb, run } from '../lib/db';
 import { invokeRaw } from '../lib/invoke';
 import {
+  clickControl,
   APP_PIN,
   addSku,
   clearWebMirrors,
@@ -449,7 +450,7 @@ describe('SCL/RCP/TIM/I18 — batch 23 functional', () => {
   it('[I18-05] Arabic-Indic digits in the tendered field parse to the exact minor amount', async () => {
     await ensureShiftJs();
     await addSku('SCL23 Phone', { expectTitle: 'SCL23 Phone' });
-    await (await $(tid('checkout-button'))).click();
+    await clickControl('checkout-button');
     await (await $(tid('pay-dialog'))).waitForDisplayed({ timeout: 20000 });
     const input = await $(tid('tendered-input'));
     await input.click();

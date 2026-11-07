@@ -28,6 +28,7 @@ import { browser, expect } from '@wdio/globals';
 import { DB_PATH } from '../lib/env';
 import { all, closeDb, count, one, run, waitForSchemaSettled } from '../lib/db';
 import {
+  clickControl,
   addSku,
   applyCartDiscountPercent,
   APP_PIN,
@@ -351,7 +352,7 @@ describe('MNY — money, rounding, currency (batch 1)', () => {
     const linesNeg = await cartLineTexts();
     let openErr = '';
     try {
-      await (await $(tid('checkout-button'))).click();
+      await clickControl('checkout-button');
       const opened = await $(tid('pay-dialog'))
         .waitForDisplayed({ timeout: 8000 })
         .then(() => true)
@@ -583,7 +584,7 @@ describe('MNY — money, rounding, currency (batch 1)', () => {
   it('[MNY-29] fat-finger cash tender (100× ticket) must not be accepted silently', async () => {
     const txBefore = count('transactions');
     await addSku('MNY PriceB'); // ticket 500 DA
-    await (await $(tid('checkout-button'))).click();
+    await clickControl('checkout-button');
     await (await $(tid('pay-dialog'))).waitForDisplayed({ timeout: 20000 });
 
     const tender = async (digits: string) => {
@@ -648,7 +649,7 @@ describe('MNY — money, rounding, currency (batch 1)', () => {
 
     // ── Leg 4: an ordinary tender never sees the guard ────────────────────
     await addSku('MNY PriceB');
-    await (await $(tid('checkout-button'))).click();
+    await clickControl('checkout-button');
     await (await $(tid('pay-dialog'))).waitForDisplayed({ timeout: 20000 });
     await tender('600');
     await (await $(tid('pay-confirm'))).click();
@@ -712,7 +713,7 @@ describe('MNY — money, rounding, currency (batch 1)', () => {
     let realErrs: string[] = [];
     let uiErrors: string[] = [];
     try {
-      await (await $(tid('checkout-button'))).click();
+      await clickControl('checkout-button');
       payOpened = await $(tid('pay-dialog'))
         .waitForDisplayed({ timeout: 9000 })
         .then(() => true)
