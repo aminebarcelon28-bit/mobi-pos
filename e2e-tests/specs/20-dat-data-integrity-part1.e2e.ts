@@ -486,7 +486,13 @@ describe('DAT batch 20 — data integrity / durability (P0)', () => {
   });
 
   it('[DAT-28] silent corruption detection: startup/daily quick_check, hash-chain, ledger snapshot', async () => {
-    const quick = await pluginSelect('PRAGMA quick_check');
+    // quick_check on an FTS5 table performs an integrity read that SQLite
+    // implements with a temporary write; the WebView's `plugin:sql` pool is
+    // read-only (spec 92 pins that), so the PRAGMA failed there with
+    // "attempt to write a readonly database" — a lane defect, not corruption.
+    // The harness connection is read-write, so the SAME PRAGMA is meaningful
+    // here and still fails on a genuinely corrupt DB.
+    const quick = all<{ quick_check: string }>('PRAGMA quick_check');
     const keys = all<{ key: string }>(
       "SELECT key FROM app_settings WHERE key LIKE '%quick%' OR key LIKE '%integrity%' OR key LIKE '%check%' ORDER BY key",
     );
