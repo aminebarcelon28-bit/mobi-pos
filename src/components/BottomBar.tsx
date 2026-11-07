@@ -199,8 +199,16 @@ export const BottomBar: React.FC = () => {
           <button
             onClick={() => {
               if (lastTransaction) {
-                reprintReceipt(lastTransaction);
-                showToast(`Réimpression du ticket #${lastTransaction.receiptNumber} envoyée.`, 'info');
+                void reprintReceipt(lastTransaction).then((outcome) => {
+                  if (outcome.ok) {
+                    showToast(`Réimpression du ticket #${lastTransaction.receiptNumber} envoyée.`, 'info');
+                  } else {
+                    showToast(
+                      'Échec de la réimpression : imprimante hors ligne ou indisponible. Le ticket reste enregistré.',
+                      'error',
+                    );
+                  }
+                });
               } else {
                 showToast('Aucun ticket récent à réimprimer.', 'warning');
               }

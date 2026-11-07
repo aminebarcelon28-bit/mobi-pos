@@ -267,7 +267,9 @@ export interface OrderSlice {
   quickCashPayment: () => Promise<{ success: boolean; reason?: string }>;
   voidTransaction: (transactionId: string, reason: string, cashierName?: string) => Promise<{ success: boolean; reason?: string }>;
   processRefund: (payload: ProcessRefundPayload) => Promise<{ success: boolean; refundTransaction?: SaleTransaction; reason?: string }>;
-  reprintReceipt: (transaction: SaleTransaction) => void;
+  /** Re-print a committed sale. Resolves with the print outcome so the caller
+   *  can tell the user the truth (success toast only when something printed). */
+  reprintReceipt: (transaction: SaleTransaction) => Promise<{ ok: boolean; error?: string }>;
   setSelectedTransactionForRefund: (t: SaleTransaction | null) => void;
 }
 

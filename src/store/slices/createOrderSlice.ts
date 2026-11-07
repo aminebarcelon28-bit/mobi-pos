@@ -253,7 +253,10 @@ async function checkoutDeviceTrustRefusal(
 // chain (spooler + serial + label builder) loads on first use, not at boot.
 // Exchange tickets (tradeInId present) print the revived net receipt
 // (items + reprise deduction + net/soulte) instead of the standard one.
-async function printReceipt(transaction: SaleTransaction, settings: ReceiptSettings): Promise<void> {
+async function printReceipt(
+  transaction: SaleTransaction,
+  settings: ReceiptSettings,
+): Promise<{ ok: boolean; error?: string }> {
   try {
     if (transaction.tradeInId) {
       try {
@@ -273,11 +276,13 @@ async function printReceipt(transaction: SaleTransaction, settings: ReceiptSetti
             liveState.activeShift?.openedBy ?? liveState.activeShift?.cashierName ?? null
           );
           const target = resolvePrinterForDocument('receipt', settings?.printerRouting);
-          await printViaWindowsSpooler(target.printerName, bytes);
+          const tradePrinted = await printViaWindowsSpooler(target.printerName, bytes);
           if (settings?.kickCashDrawerOnCash !== false) {
             void openCashDrawerViaSpooler(target.printerName);
           }
-          return;
+          return tradePrinted
+            ? { ok: true }
+            : { ok: false, error: 'spooler refused the exchange receipt' };
         }
       } catch (err) {
         console.warn('[print] net exchange receipt failed, falling back:', err);
@@ -288,14 +293,22 @@ async function printReceipt(transaction: SaleTransaction, settings: ReceiptSetti
     // paths; the commit-time snapshot always wins when present.
     const { usePosStore: liveStore } = await import('../usePosStore');
     const liveShift = liveStore.getState().activeShift;
-    await directPrintReceipt(
+    // `directPrintReceipt` resolves FALSE when the spooler path failed (it
+    // catches internally), so the boolean is the outcome — discarding it was
+    // why a failed reprint still toasted success (RCP-06).
+    const printed = await directPrintReceipt(
       transaction,
       settings,
       undefined,
       liveShift?.openedBy ?? liveShift?.cashierName ?? null
     );
+    return printed ? { ok: true } : { ok: false, error: 'printer unavailable or offline' };
   } catch (err) {
-    console.warn('[print] receipt printing skipped:', err);
+    // A print failure must be observable: the caller used to have no way to
+    // know, so the UI toasted success while nothing reached the printer
+    // (RCP-06). Return the outcome instead of swallowing it.
+    console.warn('[print] receipt printing failed:', err);
+    return { ok: false, error: String((err as Error)?.message ?? err) };
   }
 }
 
@@ -312,10 +325,10 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
   setCashTendered: (amount) => set({ cashTendered: amount }),
   setSelectedTransactionForRefund: (t) => set({ selectedTransactionForRefund: t }),
 
-  reprintReceipt: (transaction) => {
+  reprintReceipt: async (transaction) => {
     set({ lastTransaction: transaction });
     const settings = get().receiptSettings;
-      void printReceipt(transaction, settings);
+    return printReceipt(transaction, settings);
   },
 
   processPayment: async (tenders?: PaymentTender[]) => {

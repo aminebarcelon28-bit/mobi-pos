@@ -368,7 +368,21 @@ describe('SCL/RCP/TIM/I18 — batch 23 functional', () => {
         btn.click();
         return true;
       })) as boolean;
-      await browser.pause(900);
+      // The print attempt is asynchronous (spooler round-trip), so wait for the
+      // outcome toast instead of a fixed pause — a 900 ms sleep read the DOM
+      // before the failure toast had rendered and reported "no status at all".
+      await browser
+        .waitUntil(
+          async () =>
+            (await browser.execute(
+              () =>
+                /R[eé]impression du ticket #|[EÉ]chec de la r[eé]impression/.test(
+                  document.body.innerText || '',
+                ),
+            )) as boolean,
+          { timeout: 15000, interval: 250 },
+        )
+        .catch(() => undefined);
     } finally {
       await browser.execute(() => {
         const w = window as unknown as {
