@@ -850,7 +850,18 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
 
         const earnedPoints =
           earnAllowed && remainingToPay > 0
-            ? calculateNetPaidEarnedPoints(cart, remainingToPay, grossSubtotal, currentTier.pointsMultiplier, loyaltyCfg, earnCampaignMult)
+            ? // The per-line base already has the line discount removed, so the
+              // ratio must be taken against the POST-discount subtotal. Using
+              // grossSubtotal applied the discount twice (LOY-02: 1 800 net on a
+              // 2 000 cart earned 32 points instead of 36).
+              calculateNetPaidEarnedPoints(
+                cart,
+                remainingToPay,
+                totals.subtotalAfterDiscount,
+                currentTier.pointsMultiplier,
+                loyaltyCfg,
+                earnCampaignMult,
+              )
             : 0;
 
         // Net-paid progression (anti-self-funding): the Avoir-funded slice
