@@ -116,7 +116,7 @@ const vis = `const vis = (d) => { try { const cs = getComputedStyle(d); if (!cs 
 
 async function openCustomers(): Promise<void> {
   await pos.closeDialogs(3);
-  await (await $(pos.tid('clients-button'))).click();
+  await pos.clickControl('clients-button');
   await (await $(pos.tid('customers-dialog'))).waitForDisplayed({ timeout: 20000 });
   await browser.pause(500);
 }

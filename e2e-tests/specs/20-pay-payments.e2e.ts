@@ -442,9 +442,8 @@ async function cartTotalQty(): Promise<number> {
  * The button pops window.confirm when total quantity > 1, so callers must
  * gate on cartTotalQty() <= 1. Returns true when the cart ended empty. */
 async function wipeCartViaUi(): Promise<boolean> {
-  const btn = await $(tid('cart-clear'));
-  if (!(await btn.isDisplayed().catch(() => false))) return false;
-  await btn.click().catch(() => {});
+  if (!(await (await $(tid('cart-clear'))).isDisplayed().catch(() => false))) return false;
+  await clickControl('cart-clear').catch(() => {});
   await browser.pause(300);
   return (await cartTotalQty()) === 0;
 }

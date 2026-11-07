@@ -834,9 +834,11 @@ export async function drainCart(): Promise<void> {
   await browser.execute(() => {
     window.confirm = () => true;
   });
-  const clear = await $(tid('cart-clear'));
-  if (await clear.isDisplayed().catch(() => false)) {
-    await clear.click().catch(() => undefined);
+  if (await (await $(tid('cart-clear'))).isDisplayed().catch(() => false)) {
+    // Same interception class as checkout: a toast parked over the clear-all
+    // button makes the native click throw; the guarded page click still fires
+    // the handler (and refuses if a modal is genuinely over it).
+    await clickControl('cart-clear').catch(() => undefined);
     await browser.pause(400);
   }
   if ((await cartLineCount()) > 0) {
@@ -1010,8 +1012,10 @@ export async function clickControl(
 export async function payExactFlow(): Promise<void> {
   await clickControl('checkout-button');
   await (await $(tid('pay-dialog'))).waitForDisplayed({ timeout: 20000 });
-  await (await $(tid('pay-exact'))).click();
-  await (await $(tid('pay-confirm'))).click();
+  // Controls inside the dialog: the guard allows them (the target lives in the
+  // modal) while still surviving a toast/re-render interception (CRT-09).
+  await clickControl('pay-exact');
+  await clickControl('pay-confirm');
   await browser.waitUntil(
     async () => !(await $(tid('pay-dialog')).isDisplayed().catch(() => false)),
     { timeout: 45000, timeoutMsg: 'pay dialog did not close' },

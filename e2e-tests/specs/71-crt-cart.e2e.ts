@@ -1370,7 +1370,7 @@ describe('CRT - cart, scan, serial and discount edges (batch 14)', () => {
   // ------------------------------ CRM (REF-15) ------------------------------
 
   async function openCustomersDialog(): Promise<boolean> {
-    await (await $(tid('clients-button'))).click();
+    await clickControl('clients-button');
     const ok = await pollUntil(async () => (await $(tid('customers-dialog')).isDisplayed().catch(() => false)) === true, 20000, 'customers dialog did not open');
     await browser.pause(500);
     return ok;
@@ -3958,9 +3958,8 @@ describe('CRT - cart, scan, serial and discount edges (batch 14)', () => {
 
   async function crtClearBulk(): Promise<void> {
     await crtStubConfirm(true);
-    const btn = await $(tid('cart-clear'));
-    if (await btn.isDisplayed().catch(() => false)) {
-      await btn.click();
+    if (await (await $(tid('cart-clear'))).isDisplayed().catch(() => false)) {
+      await clickControl('cart-clear');
       await browser.waitUntil(async () => (await cartLineCount()) === 0, {
         timeout: 20000,
         interval: 250,

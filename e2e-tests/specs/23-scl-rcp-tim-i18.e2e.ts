@@ -179,7 +179,7 @@ describe('SCL/RCP/TIM/I18 — batch 23 functional', () => {
   it('[SCL-07] duplicate phone is accepted by the UI and the phone index is non-unique', async () => {
     // Real negative control: create two customers with the same canonical
     // phone through the actual CustomersModal form.
-    await (await $(tid('clients-button'))).click();
+    await clickControl('clients-button');
     await (await $(tid('customers-dialog'))).waitForDisplayed({ timeout: 20000 });
     const add = await clickButtonText('Ajouter un Client');
     expect(add).toBe(true);

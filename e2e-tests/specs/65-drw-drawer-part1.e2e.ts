@@ -1363,7 +1363,7 @@ describe('DRW - cash drawer state, part 1 (batch 12 / DRW-01..15)', () => {
   // ------------------------------ CRM (REF-15) ------------------------------
 
   async function openCustomersDialog(): Promise<boolean> {
-    await (await $(tid('clients-button'))).click();
+    await clickControl('clients-button');
     const ok = await pollUntil(async () => (await $(tid('customers-dialog')).isDisplayed().catch(() => false)) === true, 20000, 'customers dialog did not open');
     await browser.pause(500);
     return ok;

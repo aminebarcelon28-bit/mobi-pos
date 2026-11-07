@@ -1404,7 +1404,7 @@ describe('LOY - loyalty earn, redeem, refund, campaign and adjustment (batch 15)
   // ------------------------------ CRM (REF-15) ------------------------------
 
   async function openCustomersDialog(): Promise<boolean> {
-    await (await $(tid('clients-button'))).click();
+    await clickControl('clients-button');
     const ok = await pollUntil(async () => (await $(tid('customers-dialog')).isDisplayed().catch(() => false)) === true, 20000, 'customers dialog did not open');
     await browser.pause(500);
     return ok;
@@ -3782,7 +3782,7 @@ describe('LOY - loyalty earn, redeem, refund, campaign and adjustment (batch 15)
   }
 
   async function loyOpenProfile(name: string): Promise<void> {
-    await (await $(tid('clients-button'))).click();
+    await clickControl('clients-button');
     await (await $(tid('customers-dialog'))).waitForDisplayed({ timeout: 20000 });
     const search = await $(tid('customer-search'));
     if (await search.isDisplayed().catch(() => false)) {

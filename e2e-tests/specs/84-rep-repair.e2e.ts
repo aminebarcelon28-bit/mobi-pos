@@ -552,8 +552,7 @@ describe('REP - repair / SAV matrix', () => {
       async () => (await $(tid('cart-clear')).isDisplayed().catch(() => false)),
       { timeout: 15000, interval: 250 },
     ).catch(() => undefined);
-    const clearButton = await $(tid('cart-clear'));
-    const clearVisible = await clearButton.isDisplayed().catch(() => false);
+    const clearVisible = await (await $(tid('cart-clear'))).isDisplayed().catch(() => false);
     if (clearVisible) {
       await browser.execute(() => {
         window.confirm = () => true;

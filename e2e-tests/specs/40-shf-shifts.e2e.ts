@@ -1342,7 +1342,7 @@ describe('SHF — shifts, drawers & cash control (batch 9)', () => {
   // ------------------------------ CRM (REF-15) ------------------------------
 
   async function openCustomersDialog(): Promise<boolean> {
-    await (await $(tid('clients-button'))).click();
+    await clickControl('clients-button');
     const ok = await pollUntil(async () => (await $(tid('customers-dialog')).isDisplayed().catch(() => false)) === true, 20000, 'customers dialog did not open');
     await browser.pause(500);
     return ok;
