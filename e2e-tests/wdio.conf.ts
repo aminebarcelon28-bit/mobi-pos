@@ -215,12 +215,21 @@ const ARTIFACT_STAMP = () =>
   new Date().toISOString().replace(/[:.]/g, '-');
 
 function maskPii(input: string): string {
+  // scan-pii.mjs is the contract: phones (8-15 digits with separators), IPs,
+  // PIN/password hashes, UUIDs and device-id keys must never leave the machine
+  // in an artifact. Specific shapes first, then any remaining run of 8-15
+  // digits — artifacts are evidence, so over-masking a number is acceptable
+  // and under-masking is not.
   return String(input ?? '')
-    .replace(/(?<!\d)0[5-7][\s.-]?\d{2}[\s.-]?\d{2}[\s.-]?\d{2}[\s.-]?\d{2}(?!\d)/g, '<phone>')
-    .replace(/(?<!\d)0[5-7]\d{8}(?!\d)/g, '<phone>')
     .replace(/(\+213|00213)[\s.-]?\d{3}[\s.-]?\d{3}[\s.-]?\d{3}/g, '<phone>')
+    .replace(/(?<!\d)0[5-7][\s.-]?\d{2}[\s.-]?\d{2}[\s.-]?\d{2}[\s.-]?\d{2}(?!\d)/g, '<phone>')
+    .replace(/(argon2(?:id|i|d)?\$|\$2[aby]\$|scrypt\$|pbkdf2\$)[^\s"'<]{8,}/gi, '<hash>')
+    .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, '<uuid>')
+    .replace(/((?:device|device_|deviceId|device_id)["']?\s*[:=]\s*["']?)[^"',\s}<]{4,}/gi, '$1<masked>')
+    .replace(/\b\d{1,3}(?:\.\d{1,3}){3}\b/g, '<ip>')
     .replace(/("?(?:pin|password|passcode|secret|token|appPin)"?\s*[:=]\s*"?)[^",\s}]{3,}/gi, '$1<masked>')
-    .replace(/(pin\s*[:=]\s*)(\d{4,8})/gi, '$1<masked>');
+    .replace(/(pin\s*[:=]\s*)(\d{4,8})/gi, '$1<masked>')
+    .replace(/(?<!\d)(?:\d[\s.\-()]*){8,15}(?!\d)/g, '<num>');
 }
 
 function caseArtifactBase(test: { fullTitle?: string; title?: string; file?: string }): {
