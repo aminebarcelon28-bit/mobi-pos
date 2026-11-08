@@ -1698,12 +1698,12 @@ describe('CRT - cart, scan, serial and discount edges (batch 14)', () => {
     await (await $(tid('pay-dialog'))).waitForDisplayed({ timeout: 20000 });
     const exact = await $(tid('pay-exact'));
     if ((await exact.isExisting().catch(() => false)) && (await exact.isDisplayed().catch(() => false))) {
-      await exact.click().catch(() => {});
+      await clickControl('pay-exact').catch(() => {});
       await browser.pause(300);
     }
     const confirm = await $(tid('pay-confirm'));
     if ((await confirm.isExisting().catch(() => false)) && (await confirm.isDisplayed().catch(() => false))) {
-      await confirm.click().catch(() => {});
+      await clickControl('pay-confirm').catch(() => {});
     }
     await browser
       .waitUntil(async () => !(await $(tid('pay-dialog')).isDisplayed().catch(() => false)), {
@@ -3817,8 +3817,8 @@ describe('CRT - cart, scan, serial and discount edges (batch 14)', () => {
       el.dispatchEvent(new Event('input', { bubbles: true }));
     }, imei as unknown as HTMLInputElement);
     await browser.pause(200);
-    await (await $(tid('pay-exact'))).click();
-    await (await $(tid('pay-confirm'))).click();
+    await clickControl('pay-exact');
+    await clickControl('pay-confirm');
     await browser.pause(1500);
     const stillOpen = await payDialogVisible();
     const after = txCount();
@@ -4115,8 +4115,8 @@ describe('CRT - cart, scan, serial and discount edges (batch 14)', () => {
     const blockedBefore = txCount();
     await clickControl('checkout-button');
     await (await $(tid('pay-dialog'))).waitForDisplayed({ timeout: 20000 });
-    await (await $(tid('pay-exact'))).click();
-    await (await $(tid('pay-confirm'))).click();
+    await clickControl('pay-exact');
+    await clickControl('pay-confirm');
     await browser.pause(1800);
     const payOpen = await payDialogVisible();
     const stockBlocked = /Stock insuffisant|stock insuffisant|quantité disponible/i.test(await bodyTail());
