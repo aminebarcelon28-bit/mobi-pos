@@ -3985,7 +3985,10 @@ describe('LOY - loyalty earn, redeem, refund, campaign and adjustment (batch 15)
   // -------------------------------------------------------------------------
 
   function loySpent(id: string): number {
-    return Number(one<{ s: number }>('SELECT total_spent FROM customers WHERE id = ?', id)?.s ?? NaN);
+    // Alias the column: better-sqlite3 returns { total_spent }, so the old
+    // shape read `undefined` and this helper reported NaN forever (the waits
+    // silently fell back to the payload).
+    return Number(one<{ s: number }>('SELECT total_spent AS s FROM customers WHERE id = ?', id)?.s ?? NaN);
   }
 
   function loyCfg(): Row {

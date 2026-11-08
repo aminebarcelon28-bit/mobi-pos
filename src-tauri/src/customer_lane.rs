@@ -28,6 +28,8 @@ pub struct UpsertCustomerRequest {
     pub store_credit: i64,
     pub pricing_tier: String,
     pub total_spent: i64,
+    #[serde(default)]
+    pub loyalty_tier: Option<String>,
     pub current_debt: Option<i64>,
     pub json_payload: String,
     pub updated_at: String,
@@ -71,22 +73,24 @@ pub fn upsert_customer_core(
         return Err("upsert_customer: payload oversized".to_string());
     }
     let sql = if req.guarded {
-        "INSERT INTO customers (id, name, phone, email, loyalty_points, store_credit, pricing_tier, total_spent, json_payload, updated_at, deleted, version, idempotency_key, created_at, current_debt)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 0, ?11, ?12, ?10, ?14)
+        "INSERT INTO customers (id, name, phone, email, loyalty_points, store_credit, pricing_tier, total_spent, loyalty_tier, json_payload, updated_at, deleted, version, idempotency_key, created_at, current_debt)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, COALESCE(?15, 'Bronze'), ?9, ?10, 0, ?11, ?12, ?10, ?14)
          ON CONFLICT(id) DO UPDATE SET name=excluded.name, phone=excluded.phone, email=excluded.email,
            loyalty_points=excluded.loyalty_points, store_credit=excluded.store_credit,
            pricing_tier=excluded.pricing_tier, total_spent=excluded.total_spent,
+           loyalty_tier=COALESCE(?15, customers.loyalty_tier),
            json_payload=excluded.json_payload, updated_at=excluded.updated_at, deleted=0,
            current_debt=COALESCE(excluded.current_debt, customers.current_debt),
            version = excluded.version,
            created_at = CASE WHEN COALESCE(customers.created_at, '') = '' THEN excluded.created_at ELSE customers.created_at END
          WHERE customers.version = ?13"
     } else {
-        "INSERT INTO customers (id, name, phone, email, loyalty_points, store_credit, pricing_tier, total_spent, json_payload, updated_at, deleted, version, idempotency_key, created_at, current_debt)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 0, ?11, ?12, ?10, ?14)
+        "INSERT INTO customers (id, name, phone, email, loyalty_points, store_credit, pricing_tier, total_spent, loyalty_tier, json_payload, updated_at, deleted, version, idempotency_key, created_at, current_debt)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, COALESCE(?15, 'Bronze'), ?9, ?10, 0, ?11, ?12, ?10, ?14)
          ON CONFLICT(id) DO UPDATE SET name=excluded.name, phone=excluded.phone, email=excluded.email,
            loyalty_points=excluded.loyalty_points, store_credit=excluded.store_credit,
            pricing_tier=excluded.pricing_tier, total_spent=excluded.total_spent,
+           loyalty_tier=COALESCE(?15, customers.loyalty_tier),
            json_payload=excluded.json_payload, updated_at=excluded.updated_at, deleted=0,
            current_debt=COALESCE(excluded.current_debt, customers.current_debt),
            version = excluded.version,
@@ -110,6 +114,7 @@ pub fn upsert_customer_core(
                 req.idempotency_key,
                 req.base_version,
                 req.current_debt,
+                req.loyalty_tier,
             ],
         )
         .map_err(|e| format!("upsert_customer: {e}"))?;
@@ -289,6 +294,7 @@ mod tests {
                 id TEXT PRIMARY KEY, name TEXT NOT NULL, phone TEXT NOT NULL, email TEXT,
                 loyalty_points INTEGER DEFAULT 0, store_credit INTEGER DEFAULT 0,
                 pricing_tier TEXT DEFAULT 'Retail', total_spent INTEGER DEFAULT 0,
+                loyalty_tier TEXT DEFAULT 'Bronze',
                 json_payload TEXT NOT NULL, updated_at TEXT NOT NULL,
                 deleted INTEGER NOT NULL DEFAULT 0, version INTEGER NOT NULL DEFAULT 1,
                 idempotency_key TEXT, created_at TEXT, current_debt INTEGER,
@@ -315,6 +321,7 @@ mod tests {
             store_credit: 500,
             pricing_tier: "Retail".to_string(),
             total_spent: 1000,
+            loyalty_tier: Some("Silver".to_string()),
             current_debt: Some(250),
             json_payload: "{\"id\":\"C-1\",\"name\":\"Ali\",\"version\":1}".to_string(),
             updated_at: "2026-11-04T10:00:00.000Z".to_string(),
@@ -540,16 +547,19 @@ mod tests {
         let third = upsert_customer_core(&conn, &stale).expect("stale");
         assert_eq!(third.changes, 0, "CAS loses the race");
 
-        let (name, version, debt): (String, i64, i64) = conn
+        let (name, version, debt, tier): (String, i64, i64, String) = conn
             .query_row(
-                "SELECT name, version, current_debt FROM customers WHERE id='C-1'",
+                "SELECT name, version, current_debt, loyalty_tier FROM customers WHERE id='C-1'",
                 [],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
             )
             .unwrap();
         assert_eq!(name, "Ali B");
         assert_eq!(version, 2);
         assert_eq!(debt, 250);
+        // LOY-08: the tier COLUMN must carry the promotion, not only the JSON
+        // payload (the customer card reads the column first).
+        assert_eq!(tier, "Silver", "loyalty_tier column follows the save");
     }
 
     #[test]

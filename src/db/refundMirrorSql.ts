@@ -85,6 +85,7 @@ export function buildRefundMirrorStatements(
                    END,
                    total_spent = COALESCE($3, total_spent),
                    loyalty_points = COALESCE($4, loyalty_points),
+                   loyalty_tier = COALESCE($6, loyalty_tier),
                    updated_at = $5,
                    version = version + 1
              WHERE id = $1
@@ -99,6 +100,7 @@ export function buildRefundMirrorStatements(
           ? customer.loyaltyPoints
           : null,
         now,
+        typeof customer.loyaltyTier === 'string' && customer.loyaltyTier ? customer.loyaltyTier : null,
       ],
     },
   ];

@@ -23,6 +23,8 @@ pub struct LoyaltyMirrorRequest {
     pub patch_json: String,
     pub total_spent: Option<i64>,
     pub loyalty_points: Option<i64>,
+    #[serde(default)]
+    pub loyalty_tier: Option<String>,
     pub updated_at: String,
     /// Ledger entries as JSON strings; appended by id, never duplicated.
     #[serde(default)]
@@ -105,6 +107,7 @@ pub fn apply_loyalty_mirror_tx(
                     END,
                     total_spent = COALESCE(?3, total_spent),
                     loyalty_points = COALESCE(?4, loyalty_points),
+                    loyalty_tier = COALESCE(?6, loyalty_tier),
                     updated_at = ?5,
                     version = version + 1
               WHERE id = ?1 AND deleted = 0",
@@ -113,7 +116,8 @@ pub fn apply_loyalty_mirror_tx(
                 req.patch_json,
                 req.total_spent,
                 req.loyalty_points,
-                req.updated_at
+                req.updated_at,
+                req.loyalty_tier
             ],
         )
         .map_err(|e| format!("loyalty mirror patch: {e}"))?;
@@ -581,6 +585,7 @@ mod tests {
             "CREATE TABLE customers (
                 id TEXT PRIMARY KEY, deleted INTEGER NOT NULL DEFAULT 0,
                 json_payload TEXT NOT NULL, total_spent INTEGER, loyalty_points INTEGER,
+                loyalty_tier TEXT,
                 updated_at TEXT, version INTEGER NOT NULL DEFAULT 1);
              CREATE TABLE store_expenses (
                 id TEXT PRIMARY KEY, category TEXT, title TEXT, amount INTEGER,
@@ -603,6 +608,7 @@ mod tests {
             patch_json: "{\"loyaltyPoints\":12,\"currentCashier\":\"Ali\"}".to_string(),
             total_spent: Some(1500),
             loyalty_points: Some(12),
+            loyalty_tier: Some("Silver".to_string()),
             updated_at: "2026-11-04T10:00:00.000Z".to_string(),
             ledger_entries: entries.into_iter().map(|s| s.to_string()).collect(),
         }
@@ -620,11 +626,11 @@ mod tests {
         assert_eq!(report.ledger_appended, 2);
         assert!(report.ledger_missing.is_empty());
 
-        let (payload, spent, points, version): (String, i64, i64, i64) = conn
+        let (payload, spent, points, version, tier): (String, i64, i64, i64, String) = conn
             .query_row(
-                "SELECT json_payload, total_spent, loyalty_points, version FROM customers WHERE id='C1'",
+                "SELECT json_payload, total_spent, loyalty_points, version, loyalty_tier FROM customers WHERE id='C1'",
                 [],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
             )
             .unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&payload).unwrap();
@@ -634,6 +640,8 @@ mod tests {
         assert_eq!(spent, 1500);
         assert_eq!(points, 12);
         assert_eq!(version, 6);
+        // LOY-08 parity: the refund's tier demotion reaches the derived column.
+        assert_eq!(tier, "Silver");
     }
 
     #[test]

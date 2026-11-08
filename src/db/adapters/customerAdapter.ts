@@ -147,6 +147,10 @@ export const customerAdapter = {
             storeCredit: customer.storeCredit || 0,
             pricingTier: customer.pricingTier || 'Retail',
             totalSpent: customer.totalSpent || 0,
+            loyaltyTier:
+              typeof customer.loyaltyTier === 'string' && customer.loyaltyTier
+                ? customer.loyaltyTier
+                : null,
             currentDebt: debtArg,
             jsonPayload: rowJson,
             updatedAt: now,
@@ -159,11 +163,12 @@ export const customerAdapter = {
         return;
       }
       await db.execute(
-        `INSERT INTO customers (id, name, phone, email, loyalty_points, store_credit, pricing_tier, total_spent, json_payload, updated_at, deleted, version, idempotency_key, created_at, current_debt)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 0, $11, $12, $10, $14)
+        `INSERT INTO customers (id, name, phone, email, loyalty_points, store_credit, pricing_tier, total_spent, loyalty_tier, json_payload, updated_at, deleted, version, idempotency_key, created_at, current_debt)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, COALESCE($15, 'Bronze'), $9, $10, 0, $11, $12, $10, $14)
          ON CONFLICT(id) DO UPDATE SET name=excluded.name, phone=excluded.phone, email=excluded.email,
            loyalty_points=excluded.loyalty_points, store_credit=excluded.store_credit,
            pricing_tier=excluded.pricing_tier, total_spent=excluded.total_spent,
+           loyalty_tier=COALESCE($15, customers.loyalty_tier),
            json_payload=excluded.json_payload, updated_at=excluded.updated_at, deleted=0,
            current_debt=COALESCE(excluded.current_debt, customers.current_debt),
          version = excluded.version,
@@ -176,6 +181,7 @@ export const customerAdapter = {
           idemKey,
           baseVersion,
           debtArg,
+          typeof customer.loyaltyTier === 'string' && customer.loyaltyTier ? customer.loyaltyTier : null,
         ],
       );
     };
@@ -314,6 +320,10 @@ export const customerAdapter = {
           loyaltyPoints:
             typeof customer.loyaltyPoints === 'number' && Number.isFinite(customer.loyaltyPoints)
               ? customer.loyaltyPoints
+              : null,
+          loyaltyTier:
+            typeof customer.loyaltyTier === 'string' && customer.loyaltyTier
+              ? customer.loyaltyTier
               : null,
           updatedAt: utcNowIso(),
           ledgerEntries: newLedgerEntries.map((entry) => JSON.stringify(entry)),
