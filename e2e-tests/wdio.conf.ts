@@ -513,6 +513,17 @@ export const config: Options.Testrunner = {
   },
 
   before: async () => {
+    // Native crypto (Argon2id PIN set) and keyring invokes run inside
+    // `execute/async` and occasionally exceed the driver's default script
+    // timeout under chained load — four rows (MNY-25, SCL-11, IDN-13, REF-14)
+    // flip between sweeps purely on that abort. Raise the script ceiling; the
+    // mocha budget and every assertion are unchanged. Measured: the aborts are
+    // WebDriver "script timeout" errors on slow native calls, not test hangs.
+    try {
+      await browser.setTimeout({ script: 600000 });
+    } catch (e) {
+      console.log('[e2e-tests] setTimeout(script) refused:', String((e as Error)?.message ?? e));
+    }
     const handles = await browser.getWindowHandles();
     if (handles.length > 0) {
       await browser.switchToWindow(handles[0]);
