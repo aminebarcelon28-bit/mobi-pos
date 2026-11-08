@@ -34,6 +34,16 @@ jobs:
           node src/utils/runLoyaltyTests.cjs
           node src/utils/runSystemTests.cjs
 
+      # Licensing security suites (M0 rotation + red-team hardening):
+      # the crypto/rotation suite, the worker contract suite and the
+      # tracked-files secret scan are RELEASE BLOCKERS — a licence-format
+      # or key-continuity regression must never ship.
+      - name: Licensing Security Gates (rotation, worker contract, secrets)
+        run: |
+          npm run test:license
+          npm run test:licensing-worker
+          node scripts/check-secrets.mjs
+
       - name: Production Build & Prod-Fold Proof (FT-06/B)
         run: |
           npm run build
@@ -137,6 +147,11 @@ jobs:
             yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "ndk;26.1.10909125"
           fi
           echo "NDK_HOME=$ANDROID_HOME/ndk/26.1.10909125" >> $GITHUB_ENV
+          # SEC-ROT-03: the SSAID hardware-identity lane compiles the `jni`
+          # crate — expose the NDK toolchain the same way the local build does.
+          echo "$ANDROID_HOME/ndk/26.1.10909125/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_PATH
+          echo "CC_aarch64_linux_android=$ANDROID_HOME/ndk/26.1.10909125/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang" >> $GITHUB_ENV
+          echo "AR_aarch64_linux_android=$ANDROID_HOME/ndk/26.1.10909125/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" >> $GITHUB_ENV
 
       - name: Setup Rust Stable
         uses: dtolnay/rust-toolchain@stable

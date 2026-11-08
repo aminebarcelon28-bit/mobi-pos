@@ -27,6 +27,20 @@ const SKIP_FILE = /(^|\/)(package-lock\.json|pnpm-lock\.yaml|Cargo\.lock)$/;
 
 const RULES = [
   { name: 'private-key-block', re: /-----BEGIN (RSA |EC |OPENSSH |PGP )?PRIVATE KEY-----/ },
+  {
+    // Ed25519 JWK private scalar (SEC-ROT-02): the 'd' component of an OKP
+    // JWK is 43 chars of base64url. Seeing it in a tracked file means a
+    // signing key is committed.
+    name: 'ed25519-jwk-private-scalar',
+    re: /["']d["']\s*:\s*["'][A-Za-z0-9_-]{43}["']/,
+  },
+  {
+    // Licensing secrets by name (SEC-ROT-02): these exact env names must never
+    // carry a literal value in a tracked file — only env references.
+    name: 'licensing-secret-literal',
+    re: /(MASTER_ENCRYPTION_KEY|LICENSE_PEPPER|IP_PEPPER|MASTER_TURSO_TOKEN)\s*[:=|]+\s*['"`][A-Za-z0-9+/_=-]{16,}['"`]/,
+    allow: (m) => /process\.env|env\./.test(m[0]) || /\$\{/.test(m[2]),
+  },
   { name: 'aws-access-key', re: /\bAKIA[0-9A-Z]{16}\b/ },
   { name: 'google-api-key', re: /\bAIza[0-9A-Za-z_-]{35}\b/ },
   { name: 'github-token', re: /\bgh[pousr]_[A-Za-z0-9]{36,}\b/ },

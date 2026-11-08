@@ -211,11 +211,13 @@ function formatWhatsAppLink(customer, storeName) {
   return `https://wa.me/${norm.whatsAppFormat}?text=${encodeURIComponent(message)}`;
 }
 
-// Case A: Mobilis number with spaces
+// Case A: Ooredoo number with spaces (privacy-scrubbed fixture — e37f509
+// replaced the real shop number but left the old expectations; corrected to
+// match the scrubbed input)
 const mobilis = normalizeAlgerianPhoneMock('0550 00 33 33');
-assert.strictEqual(mobilis.operator, 'Mobilis');
-assert.strictEqual(mobilis.telUri, 'tel:0661887755', 'tel: URI must contain ZERO spaces for native OS dialer');
-assert.strictEqual(mobilis.whatsAppFormat, '213661887755');
+assert.strictEqual(mobilis.operator, 'Ooredoo');
+assert.strictEqual(mobilis.telUri, 'tel:0550003333', 'tel: URI must contain ZERO spaces for native OS dialer');
+assert.strictEqual(mobilis.whatsAppFormat, '213550003333');
 
 // Case B: Djezzy number with international +213 prefix
 const djezzy = normalizeAlgerianPhoneMock('+213 770 12 34 56');

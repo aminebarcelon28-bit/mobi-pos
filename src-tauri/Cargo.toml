@@ -68,6 +68,15 @@ fastembed = { version = "3.9", optional = true }
 # Embedded W3C WebDriver server — test surface, enabled ONLY by `e2e`.
 tauri-plugin-wdio-webdriver = { version = "1", optional = true }
 
+# Android device identity (SEC-ROT-03): ANDROID_ID (SSAID) via JNI.
+# SSAID is scoped to the APK signing key and SURVIVES UNINSTALL, so a
+# reinstall can no longer mint a fresh device identity (the old
+# .android_device_id file was wiped by uninstall = free new trial).
+# Versions pinned to match the transitive Tauri JNI stack (single copy).
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21.1"
+ndk-context = "0.1.1"
+
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"

@@ -7,6 +7,7 @@ import { sanitizeLicenseKey } from './keyFormat';
 import { verifyLicenseToken, type LicenseTokenPayload } from './token';
 import { resolveDeviceFingerprint } from './hwid';
 import { LicenseClockGuard } from './clockGuard';
+import { APP_VERSION } from '../types/pos';
 import {
   loadStoredLicenseToken,
   persistLicenseToken,
@@ -95,6 +96,7 @@ export async function activateLicense(params: {
             hardware_hash: hwid.hash,
             friendly_name: params.friendlyName || hwid.formatted,
             client_nonce: clientNonce,
+            app_version: APP_VERSION,
           }),
         },
         params.serverUrl ? 8000 : 3500
@@ -114,6 +116,7 @@ export async function activateLicense(params: {
                 hardware_hash: hwid.hash,
                 friendly_name: params.friendlyName || hwid.formatted,
                 client_nonce: clientNonce,
+                app_version: APP_VERSION,
               }),
             },
             3000
@@ -139,8 +142,10 @@ export async function activateLicense(params: {
       return { success: false, message: 'Le serveur n’a pas renvoyé de jeton signé.' };
     }
 
-    // 1. Verify Ed25519 cryptographic signature on received token
-    const verification = await verifyLicenseToken(data.token);
+    // 1. Verify Ed25519 cryptographic signature on received token.
+    // Activation path: k2 only — a burned k1 token can never create a licence
+    // (SEC-ROT-02 continuity rule).
+    const verification = await verifyLicenseToken(data.token, { mode: 'activation' });
     if (!verification.valid || !verification.payload) {
       return {
         success: false,
@@ -231,8 +236,9 @@ export async function activateWithOfflineToken(
 
   const hwid = await resolveDeviceFingerprint();
 
-  // 1. Cryptographic Ed25519 signature verification against embedded root public key
-  const verification = await verifyLicenseToken(cleanToken);
+  // 1. Cryptographic Ed25519 signature verification against pinned root keys.
+  // Activation path (pasted offline token): k2 only — SEC-ROT-02 continuity rule.
+  const verification = await verifyLicenseToken(cleanToken, { mode: 'activation' });
   if (!verification.valid || !verification.payload) {
     return {
       success: false,
@@ -322,6 +328,16 @@ export async function checkBootLicense(options?: {
       message: `Jeton de licence corrompu ou falsifié: ${verification.error}`,
     };
   }
+
+  // RT-1b (red-team): k1's private half is public, so a k1-signed token can
+  // be forged by anyone for their OWN machine (device binding passes). The
+  // only server-side anchor is the DB-backed activation check, so a legacy
+  // k1 token must NEVER be trusted offline: no grace fallback, every boot
+  // needs a successful server verification. Honest legacy customers pass
+  // this once online and are silently migrated to a k2 token (below), after
+  // which normal offline grace applies again.
+  const isLegacyK1 = !verification.kid || verification.kid === 'k1';
+  let migratedToK2 = false;
 
   const payload = verification.payload;
   saveLastActiveLicenseKey(payload.lic_key);
@@ -434,18 +450,59 @@ export async function checkBootLicense(options?: {
         ...current,
         lastVerifiedAt: Date.now(),
       });
+
+      // RT-1b silent migration: the legacy k1 token just proved itself against
+      // the server's DB (activation row + licence status). Re-activate now to
+      // swap it for a k2-signed token; activateLicense persists the new token
+      // and re-syncs the kernel, so the NEXT boot is offline-trusted again.
+      // Best effort: failure keeps the k1 token working (online-verified) and
+      // migration simply retries on a future boot.
+      if (isLegacyK1) {
+        try {
+          const migration = await activateLicense({ licenseKey: payload.lic_key });
+          if (migration.success) {
+            // E1 (red-team round 2): activateLicense already persisted the k2
+            // token AND kernel-synced it. The boot-end trustSyncLicense below
+            // still holds the STALE k1 token — re-syncing it would fail once
+            // the kernel sunsets k1 and could fail-close the kernel right
+            // after the good k2 sync. Skip it; the k2 sync already happened.
+            migratedToK2 = true;
+            console.info('[licensing] legacy k1 token migrated to k2 (silent re-activation).');
+          } else {
+            console.warn('[licensing] k1 migration re-activation failed:', migration.message);
+          }
+        } catch (err) {
+          console.warn('[licensing] k1 migration re-activation threw:', err);
+        }
+      }
     }
   } catch {
+    // RT-1b: for legacy k1 tokens there is NO offline fallback — the token's
+    // signature alone proves nothing (the key is public). Require the server.
+    if (isLegacyK1) {
+      return {
+        licensed: false,
+        status: 'UNLICENSED',
+        message:
+          'Connexion Internet requise: cette licence utilise l’ancienne clé de signature et doit être vérifiée (et migrée) une fois en ligne.',
+        payload,
+      };
+    }
     // Silent fallback to offline token within grace period if network unreachable
   }
 
   // Phase 1: boot-time kernel sync — the stored token was just verified
   // above (signature + device binding), so bring the kernel to the same
   // verdict. Heals transient sync failures from earlier activations.
-  try {
-    await trustSyncLicense(token);
-  } catch (err) {
-    console.warn('[licensing] native kernel sync failed at boot:', err);
+  // E1: skipped when the silent migration already synced a fresh k2 token —
+  // the stale k1 token must never overwrite that kernel state (and will be
+  // rejected by the kernel outright once k1 is sunset kernel-side).
+  if (!migratedToK2) {
+    try {
+      await trustSyncLicense(token);
+    } catch (err) {
+      console.warn('[licensing] native kernel sync failed at boot:', err);
+    }
   }
 
   return {
@@ -659,6 +716,10 @@ export async function unlinkLicense(serverUrl?: string): Promise<void> {
             body: JSON.stringify({
               license_key: v.payload.lic_key,
               device_id: v.payload.device_id,
+              // RT-3 (red-team): the deactivate route now requires proof of
+              // possession of this device's activation token — key + device_id
+              // alone are no longer accepted (they leak trivially).
+              token,
             }),
           },
           3000

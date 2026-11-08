@@ -4,7 +4,10 @@
  * Conforms to RFC 7515 (JWS) and RFC 8037 (EdDSA).
  */
 
-import { ED25519_PUBLIC_KEY_RAW_B64URL } from './publicKey.ts';
+import {
+  ED25519_PUBLIC_KEYS_BY_KID,
+  type LicenseKeyKid,
+} from './publicKey.ts';
 
 export interface LicenseTokenPayload {
   iss: string;
@@ -40,12 +43,58 @@ export function base64UrlToUtf8(base64url: string): string {
 }
 
 /**
- * Cryptographically verifies an Ed25519 license token against the embedded root public key.
+ * Verification context (SEC-ROT-02 continuity rule, trial plan §5.6):
+ * - 'boot'       — a token already stored on this device (OS keychain). Accepts
+ *                  k1 (legacy tokens keep the pre-rotation customers booting) and k2.
+ * - 'activation' — a token just received for a NEW activation (server response or
+ *                  pasted offline token). Accepts k2 ONLY: k1's private half is
+ *                  publicly burned, so a k1 token must never be able to create a
+ *                  licence on a fresh install.
+ * An explicit `publicKeyB64Url` (tests) bypasses kid gating entirely.
+ */
+export type VerifyMode = 'boot' | 'activation';
+
+export interface VerifyOptions {
+  /** Explicit key override (tests only). Skips kid resolution and gating. */
+  publicKeyB64Url?: string;
+  /** Defaults to 'boot'. */
+  mode?: VerifyMode;
+}
+
+function resolveKidHeader(header: { alg?: string; typ?: string; kid?: string }):
+  | { ok: true; kid: LicenseKeyKid | null }
+  | { ok: false; error: string } {
+  if (header.kid === undefined || header.kid === null) {
+    // Legacy tokens minted before the kid header existed are k1 by definition.
+    return { ok: true, kid: 'k1' };
+  }
+  if (header.kid === 'k1' || header.kid === 'k2') {
+    return { ok: true, kid: header.kid };
+  }
+  return { ok: false, error: `Clé de signature inconnue (kid: ${String(header.kid).slice(0, 16)}).` };
+}
+
+/**
+ * Result of licence-token verification. `kid` reports which root-of-trust key
+ * verified the token ('k1' legacy / 'k2' current) so callers can apply
+ * key-age policy (e.g. RT-1b: k1 tokens are never trusted offline).
+ */
+export interface VerifyLicenseResult {
+  valid: boolean;
+  payload?: LicenseTokenPayload;
+  error?: string;
+  /** Resolved signing-key id; null only for legacy tokens without a kid header. */
+  kid?: LicenseKeyKid | null;
+}
+
+/**
+ * Cryptographically verifies an Ed25519 license token against the pinned
+ * root-of-trust keys, selecting the key by the token header's `kid`.
  */
 export async function verifyLicenseToken(
   token: string,
-  rawPublicKeyB64Url: string = ED25519_PUBLIC_KEY_RAW_B64URL
-): Promise<{ valid: boolean; payload?: LicenseTokenPayload; error?: string }> {
+  opts: VerifyOptions = {}
+): Promise<VerifyLicenseResult> {
   try {
     if (!token || typeof token !== 'string') {
       return { valid: false, error: 'Jeton de licence vide ou manquant.' };
@@ -69,6 +118,26 @@ export async function verifyLicenseToken(
     if (header.alg !== 'EdDSA') {
       return { valid: false, error: `Algorithme non supporté: ${header.alg}` };
     }
+
+    // 1b. Resolve the signing key by kid and enforce the continuity rule.
+    const kidRes = resolveKidHeader(header);
+    if (!kidRes.ok) {
+      return { valid: false, error: kidRes.error };
+    }
+    const kid = kidRes.kid;
+    if (!opts.publicKeyB64Url) {
+      const allowed: LicenseKeyKid[] = opts.mode === 'activation' ? ['k2'] : ['k1', 'k2'];
+      if (kid === null || !allowed.includes(kid)) {
+        return {
+          valid: false,
+          error:
+            opts.mode === 'activation'
+              ? 'Jeton refusé: seule la clé de signature actuelle (k2) peut créer une licence.'
+              : 'Jeton refusé: clé de signature non reconnue pour ce contexte.',
+        };
+      }
+    }
+    const rawPublicKeyB64Url = opts.publicKeyB64Url ?? ED25519_PUBLIC_KEYS_BY_KID[kid ?? 'k1'];
 
     // 2. Import Ed25519 Public Key (32 bytes raw)
     const pubKeyBytes = base64UrlToBytes(rawPublicKeyB64Url);
@@ -104,6 +173,20 @@ export async function verifyLicenseToken(
 
     const payload = JSON.parse(base64UrlToUtf8(payloadB64)) as LicenseTokenPayload;
 
+    // 3b. SEC-ROT-02 hardening (red-team finding RT-1): a k1-signed token with
+    // an empty or wildcard device binding is a universal skeleton key — k1's
+    // private half is public, so anyone could mint one token that unlocks
+    // every install at boot. Legacy (pre-rotation) tokens were all issued
+    // device-bound by the server, so rejecting unbound k1 tokens breaks no
+    // legitimate customer. k2 tokens may keep the wildcard (only the holder
+    // of the k2 private key — the vendor — can mint them).
+    if (kid === 'k1' && (!payload.device_id || payload.device_id === '*')) {
+      return {
+        valid: false,
+        error: 'Jeton refusé: un jeton de la clé historique doit être lié à un appareil.',
+      };
+    }
+
     // 4. Temporal validity (signature alone does not expire a token):
     // future-dated tokens are rejected, expired ones are rejected. A small
     // leeway absorbs clock skew between issuer and device (mirrors the
@@ -123,7 +206,7 @@ export async function verifyLicenseToken(
       return { valid: false, error: 'Dates du jeton illisibles.' };
     }
 
-    return { valid: true, payload };
+    return { valid: true, payload, kid };
   } catch (err: unknown) {
     return { valid: false, error: (err as Error).message };
   }

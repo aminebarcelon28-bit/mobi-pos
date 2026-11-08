@@ -12,7 +12,7 @@ if (!globalThis.crypto) {
   globalThis.crypto = webcrypto;
 }
 
-const { signCanonicalLicense, verifyCanonicalLicense, generateLicenseKey } =
+const { signCanonicalLicense, verifyCanonicalLicense, generateLicenseKey, pickSigningKey, semverGte, FIRST_K2_VERSION } =
   await import('../workers/licensing/src/crypto.ts');
 
 // A real Ed25519 key pair, generated for the test run only.
@@ -390,6 +390,140 @@ if (LIVE_TEST && LIVE_ENDPOINT && LIVE_TOKEN && (!isProduction || LIVE_ALLOW_PRO
     assert.equal(res.status, 401);
   });
 }
+
+// ---------------------------------------------------------------------------
+// SEC-ROT-02: signing-key rotation gate (k1 legacy / k2 current)
+// ---------------------------------------------------------------------------
+
+check('semverGte orders versions correctly', () => {
+  assert.equal(semverGte('1.8.0', '1.8.0'), true);
+  assert.equal(semverGte('1.8.1', '1.8.0'), true);
+  assert.equal(semverGte('2.0.0', '1.8.0'), true);
+  assert.equal(semverGte('1.7.9', '1.8.0'), false);
+  assert.equal(semverGte('1.7.0', '1.8.0'), false);
+  assert.equal(semverGte('0.9.4', '1.8.0'), false);
+});
+
+check('pickSigningKey: old clients keep k1', () => {
+  const env = { LICENSE_ED25519_PRIVATE_JWK: 'JWK1', LICENSE_ED25519_PRIVATE_JWK_K2: 'JWK2' };
+  const pick = pickSigningKey(env, '1.7.0');
+  assert.equal(pick.kid, 'k1');
+  assert.equal(pick.jwk, 'JWK1');
+});
+
+check('pickSigningKey: clients at FIRST_K2_VERSION get k2', () => {
+  const env = { LICENSE_ED25519_PRIVATE_JWK: 'JWK1', LICENSE_ED25519_PRIVATE_JWK_K2: 'JWK2' };
+  const pick = pickSigningKey(env, FIRST_K2_VERSION);
+  assert.equal(pick.kid, 'k2');
+  assert.equal(pick.jwk, 'JWK2');
+});
+
+check('pickSigningKey: newer clients get k2', () => {
+  const env = { LICENSE_ED25519_PRIVATE_JWK: 'JWK1', LICENSE_ED25519_PRIVATE_JWK_K2: 'JWK2' };
+  assert.equal(pickSigningKey(env, '2.3.4').kid, 'k2');
+});
+
+check('pickSigningKey: missing k2 secret falls back to k1 (fail soft for old clients)', () => {
+  const env = { LICENSE_ED25519_PRIVATE_JWK: 'JWK1' };
+  const pick = pickSigningKey(env, '9.9.9');
+  assert.equal(pick.kid, 'k1');
+  assert.equal(pick.jwk, 'JWK1');
+});
+
+check('pickSigningKey: missing app_version treated as legacy (k1)', () => {
+  const env = { LICENSE_ED25519_PRIVATE_JWK: 'JWK1', LICENSE_ED25519_PRIVATE_JWK_K2: 'JWK2' };
+  assert.equal(pickSigningKey(env, undefined).kid, 'k1');
+});
+
+// --- RT-3: deactivate-route token proof (verifyLicenseJwt) -----------------
+
+const { signLicenseJwt, verifyLicenseJwt } = await import('../workers/licensing/src/crypto.ts');
+
+const claims = {
+  lic_key: 'MOBI-TEST-KEY1-ABCD',
+  device_id: 'devicehashabc',
+  device_type: 'desktop',
+  lic_type: 'LIFETIME',
+  exp: 0,
+  iat: Math.floor(Date.now() / 1000),
+};
+
+const goodToken = await signLicenseJwt(claims, jwkString, 'k2');
+
+await (async () => {
+  try {
+    const v = await verifyLicenseJwt(goodToken, [undefined, jwkString]);
+    assert.equal(v.valid, true, 'valid token verifies');
+    assert.equal(v.payload.lic_key, claims.lic_key);
+    assert.equal(v.payload.device_id, claims.device_id);
+    passed += 1;
+    console.log('  ok   verifyLicenseJwt: valid k2 token verifies with matching claims');
+  } catch (err) {
+    failures.push('verifyLicenseJwt valid');
+    console.log(`  FAIL verifyLicenseJwt valid: ${err.message}`);
+  }
+
+  try {
+    const parts = goodToken.split('.');
+    const tamperedPayload = Buffer.from(
+      JSON.stringify({ ...claims, device_id: 'VICTIM-HASH' })
+    ).toString('base64url');
+    const v = await verifyLicenseJwt(
+      `${parts[0]}.${tamperedPayload}.${parts[2]}`,
+      [undefined, jwkString]
+    );
+    assert.equal(v.valid, false, 'tampered payload refused');
+    passed += 1;
+    console.log('  ok   verifyLicenseJwt: tampered payload refused');
+  } catch (err) {
+    failures.push('verifyLicenseJwt tampered');
+    console.log(`  FAIL verifyLicenseJwt tampered: ${err.message}`);
+  }
+
+  try {
+    const v = await verifyLicenseJwt('not.a.token', [undefined, jwkString]);
+    assert.equal(v.valid, false, 'garbage refused');
+    const v2 = await verifyLicenseJwt('', [undefined, jwkString]);
+    assert.equal(v2.valid, false, 'empty refused');
+    passed += 1;
+    console.log('  ok   verifyLicenseJwt: garbage/empty tokens refused');
+  } catch (err) {
+    failures.push('verifyLicenseJwt garbage');
+    console.log(`  FAIL verifyLicenseJwt garbage: ${err.message}`);
+  }
+
+  try {
+    // kid selection: a k1-claimed token must verify against the k1 key, not k2
+    const k1Token = await signLicenseJwt(claims, jwkString, 'k1');
+    const vWrong = await verifyLicenseJwt(k1Token, [undefined, jwkString]);
+    assert.equal(vWrong.valid, false, 'k1 token must not verify against k2 key');
+    const vRight = await verifyLicenseJwt(k1Token, [jwkString, undefined]);
+    assert.equal(vRight.valid, true, 'k1 token verifies against k1 key');
+    passed += 1;
+    console.log('  ok   verifyLicenseJwt: kid selects the verification key');
+  } catch (err) {
+    failures.push('verifyLicenseJwt kid');
+    console.log(`  FAIL verifyLicenseJwt kid: ${err.message}`);
+  }
+
+  try {
+    // The helper must never enable signing: strip-d public import is verify-only
+    const pubOnly = JSON.parse(jwkString);
+    delete pubOnly.d;
+    let signingBlocked = false;
+    try {
+      await crypto.subtle.importKey('jwk', pubOnly, { name: 'Ed25519' }, false, ['sign']);
+    } catch {
+      signingBlocked = true;
+    }
+    assert.ok(signingBlocked, 'public half cannot be imported for signing');
+    passed += 1;
+    console.log('  ok   verifyLicenseJwt: public half is verify-only (no signing)');
+  } catch (err) {
+    failures.push('verifyLicenseJwt no-sign');
+    console.log(`  FAIL verifyLicenseJwt no-sign: ${err.message}`);
+  }
+})();
 
 console.log(`\n${passed} passed, ${failures.length} failed`);
 if (failures.length) {

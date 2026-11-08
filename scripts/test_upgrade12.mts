@@ -169,8 +169,12 @@ console.log('\n--- Part 3: single-claim wiring ---');
   const cmdModal = src('src/components/modals/CommandTicketDashboardModal.tsx');
   const holdModal = src('src/components/modals/HoldSalesModal.tsx');
 
-  check('adapter imports the exported statements', adapter.includes(`from './heldOrdersSql'`) && adapter.includes('HELD_ORDER_CLAIM_SQL') && adapter.includes('HELD_ORDER_RELEASE_SQL'));
-  check('claim: rowsAffected === 1 CAS', /claimHeldOrder[\s\S]{0,900}?rowsAffected[\s\S]{0,120}?=== 1/.test(adapter));
+  // SEC-01 native lane: the claim/release CAS moved to held_order_lane.rs;
+  // the adapter marshals the IPC calls and maps `changes` to the outcome.
+  const heldLane = src('src-tauri/src/held_order_lane.rs');
+  check('adapter rides the native claim lane', adapter.includes("invokeCommand<{ changes: number }>('claim_held_order'") && adapter.includes("invokeCommand<{ changes: number }>('delete_held_order'"));
+  check('native lane keeps the tombstone CAS', heldLane.includes('UPDATE held_orders SET deleted = ?3, updated_at = ?1, version = version + 1') && heldLane.includes('deleted = 1, updated_at = ?1, version = version + 1 WHERE id = ?2'));
+  check('claim: rowsAffected === 1 CAS', /claimHeldOrder[\s\S]{0,900}?changes[\s\S]{0,120}?=== 1/.test(adapter));
   check('claim fails closed on error', /claimHeldOrder[\s\S]{0,900}?return 'claim_failed'/.test(adapter));
   check('web mode: no shared store, claim reports claimed', /if \(!isTauriEnv\(\)\) return 'claimed'/.test(adapter));
   check('release is exported and conditional on deleted = 1', /export async function releaseHeldOrderClaim/.test(adapter) && HELD_ORDER_RELEASE_SQL.includes('deleted = 1'));

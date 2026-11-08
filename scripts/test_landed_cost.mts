@@ -189,8 +189,8 @@ const src = (p: string) => readFileSync(`${process.cwd()}/${p}`, 'utf8');
 
   check('migration v122 present', libRs.includes('version: 122,'));
   // UPGRADE-09 bumped the ceiling to v124; the pin re-bumps with each upgrade
-  // (v127 = refund root rebuild).
-  check('EXPECTED_MAX_DB_USER_VERSION = 127', /EXPECTED_MAX_DB_USER_VERSION: u32 = 127;/.test(libRs));
+  // (v129 = SEC-18 audit app_version + session_id, native self-heal).
+  check('EXPECTED_MAX_DB_USER_VERSION = 129', /EXPECTED_MAX_DB_USER_VERSION: u32 = 129;/.test(libRs));
   check('v122 adds freight_per_unit', libRs.includes('ALTER TABLE stock_batches ADD COLUMN freight_per_unit REAL NOT NULL DEFAULT 0;'));
   check('v122 creates po_freight', libRs.includes('CREATE TABLE IF NOT EXISTS po_freight'));
   check('v122 creates supplier_price_history', libRs.includes('CREATE TABLE IF NOT EXISTS supplier_price_history'));

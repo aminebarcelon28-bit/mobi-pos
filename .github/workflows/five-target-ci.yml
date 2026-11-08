@@ -2,7 +2,9 @@ name: Five-Target CI Matrix (Desktop + Mobile)
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+      - c01-rc6-work
   pull_request:
     branches: [main]
   workflow_dispatch:

@@ -527,6 +527,17 @@ fn get_platform_raw_hwid() -> (String, String) {
 
 #[cfg(target_os = "android")]
 fn get_platform_raw_hwid(app: &tauri::AppHandle) -> (String, String) {
+    // SEC-ROT-03: the device identity must SURVIVE UNINSTALL. The old scheme
+    // minted a random UUID into `.android_device_id` in the app data dir —
+    // uninstalling the app wiped the file, so a reinstall presented a brand
+    // new identity (free new trial). The fix reads ANDROID_ID (SSAID) via
+    // JNI: it is scoped to the APK signing key, so the same installation
+    // identity returns after any reinstall, and only a factory reset or a
+    // re-signed build changes it. The file scheme is demoted to a
+    // last-resort fallback for devices where the JNI read fails.
+    if let Some(ssaid) = read_android_ssaid(app) {
+        return (format!("android:ssaid:{}", ssaid), "android".to_string());
+    }
     if let Ok(dir) = app.path().app_data_dir() {
         let path = dir.join(".android_device_id");
         if let Ok(existing) = std::fs::read_to_string(&path) {
@@ -545,6 +556,94 @@ fn get_platform_raw_hwid(app: &tauri::AppHandle) -> (String, String) {
         return (format!("android:{}", minted), "android".to_string());
     }
     ("android:fallback-device-id".to_string(), "android".to_string())
+}
+
+/// Read `Settings.Secure.ANDROID_ID` through JNI. Returns `None` when the
+/// read fails or yields an implausible value (null/empty/too short), letting
+/// the caller fall back instead of trusting garbage.
+///
+/// Perf (SEC-ROT-03 optimization): the SSAID is stable for the install's
+/// lifetime, so the first successful read is memoized in a process-wide
+/// `OnceLock` — subsequent fingerprint calls (boot, activation, every 120 s
+/// heartbeat) skip the JNI round-trip entirely. A failed read is NOT cached:
+/// a transient failure retries on the next call.
+///
+/// Exception hygiene: any Java exception thrown mid-read is cleared before
+/// returning, so a pending exception can never poison unrelated JNI users
+/// later in the process.
+#[cfg(target_os = "android")]
+fn read_android_ssaid(_app: &tauri::AppHandle) -> Option<String> {
+    use std::sync::OnceLock;
+    static SSAID_CACHE: OnceLock<String> = OnceLock::new();
+    if let Some(cached) = SSAID_CACHE.get() {
+        return Some(cached.clone());
+    }
+
+    let outcome: jni::errors::Result<Option<String>> = (|| {
+        let ctx = ndk_context::android_context();
+        // Safety: ndk-context guarantees a valid VM and Context for the
+        // lifetime of the Android runtime (its documented contract); both are
+        // JNI global references owned by the runtime, never mutated here.
+        let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) }?;
+        let mut env = vm.attach_current_thread()?;
+        let context = unsafe { jni::objects::JObject::from_raw(ctx.context().cast()) };
+
+        // ContentResolver resolver = context.getContentResolver();
+        let resolver = env
+            .call_method(
+                &context,
+                "getContentResolver",
+                "()Landroid/content/ContentResolver;",
+                &[],
+            )?
+            .l()?;
+
+        let secure_class = env.find_class("android/provider/Settings$Secure")?;
+        let android_id_field = env
+            .get_static_field(&secure_class, "ANDROID_ID", "Ljava/lang/String;")?
+            .l()?;
+
+        // String ssaid = Settings.Secure.getString(resolver, ANDROID_ID);
+        let result = env
+            .call_static_method(
+                &secure_class,
+                "getString",
+                "(Landroid/content/ContentResolver;Ljava/lang/String;)Ljava/lang/String;",
+                &[
+                    jni::objects::JValue::Object(&resolver),
+                    jni::objects::JValue::Object(&android_id_field),
+                ],
+            )?
+            .l()?;
+
+        let jstr = jni::objects::JString::from(result);
+        let ssaid: String = env.get_string(&jstr)?.into();
+        let trimmed = ssaid.trim().to_ascii_lowercase();
+        // SSAID is 16 hex chars on modern Android; accept a tolerant window
+        // and reject null/empty/degenerate values rather than deriving
+        // identity from garbage.
+        if trimmed.len() < 8 || trimmed.chars().any(|c| !c.is_ascii_hexdigit()) {
+            return Ok(None);
+        }
+        Ok(Some(trimmed))
+    })();
+
+    // Clear any pending Java exception from a failed read before returning.
+    if let Ok(vm) = unsafe { jni::JavaVM::from_raw(ndk_context::android_context().vm().cast()) } {
+        if let Ok(env) = vm.attach_current_thread() {
+            if matches!(env.exception_check(), Ok(true)) {
+                let _ = env.exception_clear();
+            }
+        }
+    }
+
+    match outcome {
+        Ok(Some(trimmed)) => {
+            let _ = SSAID_CACHE.set(trimmed.clone());
+            Some(trimmed)
+        }
+        _ => None,
+    }
 }
 
 #[cfg(not(any(target_os = "windows", target_os = "android")))]

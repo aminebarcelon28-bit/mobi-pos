@@ -7,6 +7,8 @@ import {
   generateLicenseKey,
   type LicenseTokenClaims,
 } from './crypto';
+import { notifyOwner } from './notify';
+import { pickSigningKey, verifyLicenseJwt } from './crypto';
 
 export interface Env {
   MASTER_TURSO_URL: string;
@@ -15,8 +17,13 @@ export interface Env {
   LICENSE_PEPPER: string;
   IP_PEPPER: string;
   LICENSE_ED25519_PRIVATE_JWK: string;
+  /** Current signing root (k2, SEC-ROT-02). New activations only. */
+  LICENSE_ED25519_PRIVATE_JWK_K2?: string;
   /** KV namespace anchoring audit checkpoints, one JSON doc per client_id. */
   AUDIT_KV: KVNamespace;
+  /** Owner doorbell (fail-open, optional — see src/notify.ts). */
+  TELEGRAM_TOKEN?: string;
+  TELEGRAM_CHAT_ID?: string;
 }
 
 interface SignLicenseRequest {
@@ -52,6 +59,8 @@ interface VerifyRequestBody {
 interface DeactivateRequestBody {
   license_key: string;
   device_id: string;
+  /** RT-3: proof of possession of this device's activation token. */
+  token?: string;
 }
 
 function jsonResponse(data: unknown, status = 200): Response {
@@ -84,6 +93,14 @@ const DUMMY_CIPHERTEXT =
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
+    // Fail closed on missing peppers (SEC-ROT-02/F8): a default pepper would
+    // make blind indexes guessable. Never fall back.
+    if (!env.LICENSE_PEPPER || !env.IP_PEPPER) {
+      return jsonResponse(
+        { error: 'MISCONFIGURED', message: 'Peppers de hachage manquants sur le worker.' },
+        503
+      );
+    }
     if (request.method === 'OPTIONS') {
       return new Response(null, {
         status: 204,
@@ -119,7 +136,7 @@ export default {
         return jsonResponse({ error: 'INVALID_JSON', message: 'Payload JSON invalide.' }, 400);
       }
 
-      const { license_key, device_id, device_type, hardware_hash, friendly_name = '', client_nonce } = body;
+      const { license_key, device_id, device_type, hardware_hash, friendly_name = '', client_nonce, app_version } = body;
 
       if (!license_key || !device_id || !device_type) {
         return jsonResponse(
@@ -133,8 +150,8 @@ export default {
       }
 
       const normalizedKey = normalizeLicenseKey(license_key);
-      const keyHash = await hashHmac(normalizedKey, env.LICENSE_PEPPER || 'default-pepper');
-      const ipHash = await hashHmac(clientIp, env.IP_PEPPER || 'default-ip-pepper');
+      const keyHash = await hashHmac(normalizedKey, env.LICENSE_PEPPER);
+      const ipHash = await hashHmac(clientIp, env.IP_PEPPER);
 
       const db = createClient({
         url: env.MASTER_TURSO_URL,
@@ -295,7 +312,11 @@ export default {
 
       let token: string;
       try {
-        token = await signLicenseJwt(claims, env.LICENSE_ED25519_PRIVATE_JWK);
+        // SEC-ROT-02: version-gated signing key. Clients at/after FIRST_K2_VERSION
+        // receive k2-signed tokens (their verifier enforces k2 at activation);
+        // older clients keep receiving k1 (they cannot understand k2).
+        const signing = pickSigningKey(env, typeof app_version === 'string' ? app_version : undefined);
+        token = await signLicenseJwt(claims, signing.jwk, signing.kid);
       } catch (signErr: any) {
         return jsonResponse(
           { error: 'SIGNING_FAILED', message: `Échec de signature de la licence: ${signErr.message}` },
@@ -319,6 +340,14 @@ export default {
       });
     }
 
+    // Helper for Admin Authentication (declared before all routes that use it)
+    const isAuthorizedAdmin = (req: Request): boolean => {
+      const auth = req.headers.get('Authorization');
+      if (!auth || !auth.startsWith('Bearer ')) return false;
+      const token = auth.slice(7).trim();
+      return Boolean(env.MASTER_ENCRYPTION_KEY && token === env.MASTER_ENCRYPTION_KEY);
+    };
+
     // 3. Heartbeat & Verification Route
     if (request.method === 'POST' && (path === '/api/v1/license/verify' || path === '/api/license/verify')) {
       let body: VerifyRequestBody;
@@ -334,7 +363,7 @@ export default {
       }
 
       const normalizedKey = normalizeLicenseKey(license_key);
-      const keyHash = await hashHmac(normalizedKey, env.LICENSE_PEPPER || 'default-pepper');
+      const keyHash = await hashHmac(normalizedKey, env.LICENSE_PEPPER);
 
       const db = createClient({
         url: env.MASTER_TURSO_URL,
@@ -419,6 +448,12 @@ export default {
     }
 
     // 4. Deactivate / Unbind Route
+    // RT-3 (red-team, CONFIRMED live): this route previously accepted a bare
+    // (license_key, device_id) pair with NO authentication — anyone who
+    // learned both values could unbind a victim's device. Now the caller must
+    // either be the admin (Bearer) or present the device's own activation
+    // token, verified against the worker's signing keys with matching
+    // lic_key + device_id claims.
     if (request.method === 'POST' && (path === '/api/v1/license/deactivate' || path === '/api/license/deactivate')) {
       let body: DeactivateRequestBody;
       try {
@@ -427,9 +462,36 @@ export default {
         return jsonResponse({ error: 'INVALID_JSON', message: 'Payload JSON invalide.' }, 400);
       }
 
-      const { license_key, device_id } = body;
+      const { license_key, device_id, token } = body;
       const normalizedKey = normalizeLicenseKey(license_key);
-      const keyHash = await hashHmac(normalizedKey, env.LICENSE_PEPPER || 'default-pepper');
+
+      if (!isAuthorizedAdmin(request)) {
+        if (!token) {
+          return jsonResponse(
+            { error: 'TOKEN_REQUIRED', message: 'Jeton d’activation requis pour désactiver un appareil.' },
+            401
+          );
+        }
+        const verdict = await verifyLicenseJwt(token, [
+          env.LICENSE_ED25519_PRIVATE_JWK,
+          env.LICENSE_ED25519_PRIVATE_JWK_K2,
+        ]);
+        if (!verdict.valid || !verdict.payload) {
+          return jsonResponse(
+            { error: 'INVALID_TOKEN', message: 'Jeton d’activation invalide.' },
+            401
+          );
+        }
+        const claimsOk =
+          verdict.payload.lic_key === normalizedKey && verdict.payload.device_id === device_id;
+        if (!claimsOk) {
+          return jsonResponse(
+            { error: 'TOKEN_MISMATCH', message: 'Le jeton ne correspond pas à cette licence/appareil.' },
+            403
+          );
+        }
+      }
+      const keyHash = await hashHmac(normalizedKey, env.LICENSE_PEPPER);
 
       const db = createClient({
         url: env.MASTER_TURSO_URL,
@@ -458,13 +520,7 @@ export default {
       });
     }
 
-    // Helper for Admin Authentication
-    const isAuthorizedAdmin = (req: Request): boolean => {
-      const auth = req.headers.get('Authorization');
-      if (!auth || !auth.startsWith('Bearer ')) return false;
-      const token = auth.slice(7).trim();
-      return Boolean(env.MASTER_ENCRYPTION_KEY && token === env.MASTER_ENCRYPTION_KEY);
-    };
+    // Admin authentication helper moved above the routes that use it.
 
     // 5. Admin: Sync License(s) to Cloud Master DB
     if (request.method === 'POST' && path === '/api/v1/admin/sync') {
@@ -491,7 +547,7 @@ export default {
         let keyHash = lic.key_hash;
         if (!keyHash && lic.license_key) {
           const norm = normalizeLicenseKey(lic.license_key);
-          keyHash = await hashHmac(norm, env.LICENSE_PEPPER || 'default-pepper');
+          keyHash = await hashHmac(norm, env.LICENSE_PEPPER);
         }
         if (!keyHash) continue;
 
@@ -557,7 +613,7 @@ export default {
       }
 
       const normalizedKey = normalizeLicenseKey(license_key);
-      const keyHash = await hashHmac(normalizedKey, env.LICENSE_PEPPER || 'default-pepper');
+      const keyHash = await hashHmac(normalizedKey, env.LICENSE_PEPPER);
 
       const db = createClient({
         url: env.MASTER_TURSO_URL,
@@ -605,7 +661,7 @@ export default {
       }
 
       const normalizedKey = normalizeLicenseKey(license_key);
-      const keyHash = await hashHmac(normalizedKey, env.LICENSE_PEPPER || 'default-pepper');
+      const keyHash = await hashHmac(normalizedKey, env.LICENSE_PEPPER);
 
       const db = createClient({
         url: env.MASTER_TURSO_URL,
@@ -700,7 +756,7 @@ export default {
       }
 
       const normalizedKey = normalizeLicenseKey(license_key);
-      const keyHash = await hashHmac(normalizedKey, env.LICENSE_PEPPER || 'default-pepper');
+      const keyHash = await hashHmac(normalizedKey, env.LICENSE_PEPPER);
 
       const db = createClient({
         url: env.MASTER_TURSO_URL,
@@ -750,7 +806,7 @@ export default {
       }
 
       const normalizedKey = normalizeLicenseKey(license_key);
-      const keyHash = await hashHmac(normalizedKey, env.LICENSE_PEPPER || 'default-pepper');
+      const keyHash = await hashHmac(normalizedKey, env.LICENSE_PEPPER);
 
       const db = createClient({
         url: env.MASTER_TURSO_URL,
@@ -834,12 +890,28 @@ export default {
 
       try {
         const licenseKey = generateLicenseKey(formula.toUpperCase());
-        const signature = await signCanonicalLicense(env.LICENSE_ED25519_PRIVATE_JWK, canonicalData);
+        // Canonical signature: minted artifacts have no verifier in the app yet;
+        // sign with the current root (k2) when available and name it in the
+        // response so any future verifier can pin the right key.
+        const canonicalKid: 'k1' | 'k2' = env.LICENSE_ED25519_PRIVATE_JWK_K2 ? 'k2' : 'k1';
+        const canonicalJwk = canonicalKid === 'k2' ? env.LICENSE_ED25519_PRIVATE_JWK_K2! : env.LICENSE_ED25519_PRIVATE_JWK;
+        const signature = await signCanonicalLicense(canonicalJwk, canonicalData);
+        // Owner doorbell (§11.5): every issued licence pings the owner's phone
+        // with the customer name. Fail-open — never blocks or fails the mint.
+        await notifyOwner(env, {
+          headline: `🔑 Licence émise : ${customer.trim()} · ${formula.toUpperCase()}`,
+          lines: [
+            `Clé : ${licenseKey}`,
+            seatsPos || seatsDesk ? `Postes : ${seatsDesk} PC · ${seatsPos} mobile(s)` : '',
+            expires_at ? `Expire : ${expires_at}` : 'Durée : à vie',
+          ].filter(Boolean),
+        });
         return jsonResponse({
           status: 'success',
           license_key: licenseKey,
           token_signature: signature,
           canonical_data: canonicalData,
+          signed_with_kid: canonicalKid,
           issued_at: new Date().toISOString(),
         });
       } catch (err) {

@@ -63,7 +63,7 @@ function utf8ToBase64Url(str) {
   return bytesToBase64Url(Buffer.from(str, 'utf8'));
 }
 
-async function signToken(payload, privateJwk) {
+async function signToken(payload, privateJwk, kid) {
   const privateKey = await crypto.subtle.importKey(
     'jwk',
     privateJwk,
@@ -72,7 +72,10 @@ async function signToken(payload, privateJwk) {
     ['sign']
   );
 
+  // kid header (SEC-ROT-02): verifiers resolve the pinned root from it and
+  // reject unknown kids. The local dev server signs with k2 when available.
   const header = { alg: 'EdDSA', typ: 'JWT' };
+  if (kid) header.kid = kid;
   const headerB64 = utf8ToBase64Url(JSON.stringify(header));
   const payloadB64 = utf8ToBase64Url(JSON.stringify(payload));
   const signingInput = `${headerB64}.${payloadB64}`;
@@ -152,10 +155,14 @@ const server = http.createServer(async (req, res) => {
           return;
         }
 
-        // Get Ed25519 Private JWK
+        // Get Ed25519 Private JWK — prefer the current root (k2, SEC-ROT-02):
+        // the activation path in the app only accepts k2-signed tokens, so a
+        // local dev server must sign with k2 for the loop to close.
         let privateJwk;
         try {
-          privateJwk = JSON.parse(process.env.LICENSE_ED25519_PRIVATE_JWK);
+          privateJwk = JSON.parse(
+            process.env.LICENSE_ED25519_PRIVATE_JWK_K2 || process.env.LICENSE_ED25519_PRIVATE_JWK
+          );
         } catch {
           res.writeHead(500, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'CONFIG_ERROR', message: 'Clé privée Ed25519 absente de .env.licensing' }));
@@ -187,7 +194,11 @@ const server = http.createServer(async (req, res) => {
           turso_token: match.tursoToken || match.encryptedTursoToken || '',
         };
 
-        const token = await signToken(payload, privateJwk);
+        const token = await signToken(
+          payload,
+          privateJwk,
+          process.env.LICENSE_ED25519_PRIVATE_JWK_K2 ? 'k2' : 'k1'
+        );
 
         console.log(`[license-server] ✅ Activation réussie pour "${match.customer}" (${match.licenseKey}) -> Appareil: ${device_id.slice(0, 8)}...`);
 

@@ -55,8 +55,9 @@ loadEnv();
 
 const PORT = process.env.LICENSE_PORTAL_PORT || 4200;
 const CLOUD_ENDPOINT = process.env.LICENSING_ENDPOINT || 'https://mobi-licensing.aminebarcelon28.workers.dev';
-const MASTER_KEY = process.env.MASTER_ENCRYPTION_KEY || 'zuYAeOahzvQXtv+Ib20DWmUQxiPxSkSMY8PgMzV9X28=';
-const PEPPER = process.env.LICENSE_PEPPER || '8151b8bd90b28fd747511025fa6d38625515e57aca46dcb75841383cd0f0bf58';
+// SEC-ROT-02: no fallback secrets. Missing env = fail closed at use time.
+const MASTER_KEY = process.env.MASTER_ENCRYPTION_KEY || '';
+const PEPPER = process.env.LICENSE_PEPPER || '';
 
 // Crockford Base32
 const CROCKFORD_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';

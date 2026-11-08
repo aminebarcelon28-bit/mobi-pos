@@ -303,9 +303,9 @@ const base: TradeInInspectionMarkers = {
 
 {
   const lib = src('src-tauri/src/lib.rs');
-  // The ceiling pin re-bumps with each upgrade; the refund root rebuild
-  // landed v127 (line identity + restored COGS + debt/IMEI columns).
-  check('lib.rs: expected version bumped to 127', lib.includes('const EXPECTED_MAX_DB_USER_VERSION: u32 = 127;'));
+  // The ceiling pin re-bumps with each upgrade; v129 = SEC-18 audit
+  // app_version + session_id (native self-heal).
+  check('lib.rs: expected version bumped to 129', lib.includes('const EXPECTED_MAX_DB_USER_VERSION: u32 = 129;'));
   check('lib.rs: v123 migration present', norm(lib).includes('version: 123, description: "UPGRADE-08: trade_ins.inspection_json, blocked_imeis, imei_events"'));
 
   const v123Stmts = [
@@ -337,7 +337,10 @@ const base: TradeInInspectionMarkers = {
   check('adapter: blocked read filters active=1', adapter.includes('WHERE imei = $1 AND active = 1 LIMIT 1'));
   check('adapter: unblock deactivates', adapter.includes('UPDATE blocked_imeis SET active = 0 WHERE imei = $1'));
   check('adapter: block upsert reactivates', adapter.includes('ON CONFLICT(imei) DO UPDATE SET') && adapter.includes('active=1'));
-  check('adapter: ledger insert-or-ignore', adapter.includes('INSERT OR IGNORE INTO imei_events'));
+  // SEC-01 native lane: the generic ledger append moved to the kernel
+  // (`append_imei_event`, idempotent by canonical event id); the renderer
+  // adapter only marshals the request.
+  check('adapter: ledger append rides the native lane', adapter.includes("invokeCommand<{ changes: number }>('append_imei_event'") && adapter.includes('imeiTrustEventId(event.kind, event.refType, event.refId, canonical)'));
   check('adapter: unknown state is a distinct verdict', adapter.includes("status: 'unknown'"));
   check('adapter: outside-Tauri reads answer clear', adapter.includes("if (!isTauriEnv()) return { status: 'clear' };"));
 
@@ -373,7 +376,11 @@ const base: TradeInInspectionMarkers = {
   check('transactionAdapter: BOTH release lanes append RETURN_IN', returnInCount === 2 && txAdapter.includes("imeiTrustEventId('RETURN_IN', 'order', voidedTransaction.id, imei)") && txAdapter.includes("imeiTrustEventId(release.kind, 'order', refundTransaction.id, imei)") && txAdapter.includes("kind: 'RETURN_IN' as const"));
 
   const opsAdapter = src('src/db/adapters/operationsAdapter.ts');
-  check('operationsAdapter: trade_ins carries inspection_json', opsAdapter.includes('inspection_json') && opsAdapter.includes('buildTradeInInspectionJson(trade.inspectionMarkers, trade.conditionGrade)'));
+  // SEC-01 native lane: the trade-in upsert (and its inspection_json column
+  // write) lives in operations_lane.rs; the adapter builds the rubric JSON
+  // and marshals it.
+  const opsLane = src('src-tauri/src/operations_lane.rs');
+  check('operationsAdapter: trade_ins carries inspection_json', opsAdapter.includes('buildTradeInInspectionJson(trade.inspectionMarkers, trade.conditionGrade)') && opsLane.includes('inspection_json=excluded.inspection_json'));
 
   const voucher = src('src/utils/tradeInVoucherBuilder.ts');
   check('voucher: prints rubric markers', voucher.includes('tradeIn.inspectionMarkers') && voucher.includes('INSPECTION_SCREEN_LABELS[m.screen]'));

@@ -8,7 +8,7 @@
 import type { DomainEvent, Envelope } from '../bindings/bindings.ts';
 import { ClientHlcClock } from '../bindings/bindings.ts';
 import { reduceEnvelope, type SqlExecutor } from '../domain/reducers.ts';
-import { isTauriEnv } from '../db/adapters/base';
+import { isTauriEnv } from '../db/adapters/base.ts';
 
 // Crockford Base32 charset for ULID generation
 const ENCODING = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';

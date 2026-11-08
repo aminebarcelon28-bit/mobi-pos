@@ -103,6 +103,28 @@ async function main() {
   let masterUrl = process.env.MASTER_TURSO_URL;
   let masterToken = process.env.MASTER_TURSO_TOKEN;
 
+  // Incident 2026-11-09: stale placeholder values from the env file were
+  // uploaded as worker secrets, taking every DB route down (500s). The DB
+  // connection is now PROVEN before anything is uploaded — a bad value
+  // aborts the deploy instead of silently bricking production.
+  if (masterUrl && masterToken) {
+    const probeUrl = masterUrl.replace(/^libsql:\/\//, 'https://') + '/v2/pipeline';
+    try {
+      const probeRes = await fetch(probeUrl, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${masterToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ requests: [{ type: 'execute', stmt: { sql: 'SELECT 1' } }] }),
+      });
+      if (!probeRes.ok) {
+        throw new Error(`HTTP ${probeRes.status}`);
+      }
+      console.log('   ✅ Connexion Master Turso validée avant configuration.');
+    } catch (e) {
+      console.error(`   ❌ FATAL: MASTER_TURSO_URL/TOKEN invalides (${e.message}). Déploiement annulé — secrets existants NON écrasés.`);
+      process.exit(1);
+    }
+  }
+
   if (!masterUrl || !masterToken) {
     console.log('   La base Master centralise l\'état des licences et l\'allocation des sièges.');
     masterUrl = await askQuestion('   URL de la base Master Turso (ex: libsql://mobi-master.turso.io)');
@@ -131,7 +153,11 @@ async function main() {
     // Sync local ledger keys to Master DB
     if (fs.existsSync(LEDGER_PATH)) {
       const ledger = JSON.parse(fs.readFileSync(LEDGER_PATH, 'utf8'));
-      const pepper = process.env.LICENSE_PEPPER || '8151b8bd90b28fd747511025fa6d38625515e57aca46dcb75841383cd0f0bf58';
+      const pepper = process.env.LICENSE_PEPPER;
+      if (!pepper) {
+        console.error('❌ LICENSE_PEPPER manquant (.env.licensing). Refus — aucun fallback.');
+        process.exit(1);
+      }
       let syncedCount = 0;
 
       for (const lic of ledger) {
@@ -170,17 +196,24 @@ async function main() {
 
   // Step 4: Configure Cloudflare Worker Secrets
   console.log('\n🔒 Étape 4/5 : Configuration sécurisée des secrets Cloudflare Worker...');
+  // SEC-ROT-02: no fallback secrets. A missing env value is SKIPPED with a loud
+  // warning — never replaced by a literal (the old literals were publicly burned
+  // in git history and had to be rotated for exactly this reason).
   const secrets = {
     MASTER_TURSO_URL: masterUrl,
     MASTER_TURSO_TOKEN: masterToken,
-    MASTER_ENCRYPTION_KEY: process.env.MASTER_ENCRYPTION_KEY || 'zuYAeOahzvQXtv+Ib20DWmUQxiPxSkSMY8PgMzV9X28=',
-    LICENSE_PEPPER: process.env.LICENSE_PEPPER || '8151b8bd90b28fd747511025fa6d38625515e57aca46dcb75841383cd0f0bf58',
-    IP_PEPPER: process.env.IP_PEPPER || '9395b7bbaa6fca32827f78c9aa131db515f5a2fa7ef74f7ead5b79734b0c6537',
+    MASTER_ENCRYPTION_KEY: process.env.MASTER_ENCRYPTION_KEY || '',
+    LICENSE_PEPPER: process.env.LICENSE_PEPPER || '',
+    IP_PEPPER: process.env.IP_PEPPER || '',
     LICENSE_ED25519_PRIVATE_JWK: process.env.LICENSE_ED25519_PRIVATE_JWK || '',
+    LICENSE_ED25519_PRIVATE_JWK_K2: process.env.LICENSE_ED25519_PRIVATE_JWK_K2 || '',
   };
 
   for (const [keyName, secretVal] of Object.entries(secrets)) {
-    if (!secretVal) continue;
+    if (!secretVal) {
+      console.log(`   ⚠️  Secret "${keyName}" absent de l'environnement — non configuré (fail closed).`);
+      continue;
+    }
     try {
       execSync(`npx wrangler secret put ${keyName}`, {
         input: secretVal,

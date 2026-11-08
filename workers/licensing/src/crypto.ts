@@ -53,6 +53,45 @@ export function uint8ArrayToBase64(bytes: Uint8Array): string {
   return btoa(binStr);
 }
 
+// ---------------------------------------------------------------------------
+// Signing-key rotation (SEC-ROT-02, trial plan §5.6)
+// ---------------------------------------------------------------------------
+// k1's private half is publicly burned in git history; k2 is the only key that
+// may create a licence. Version gate: clients older than FIRST_K2_VERSION can
+// only understand k1 (their verifier pins it), so they keep receiving k1-signed
+// tokens. Clients at/after FIRST_K2_VERSION ship the k2-aware verifier and the
+// activation-path k2-only rule, so they receive k2-signed tokens.
+export const FIRST_K2_VERSION = '1.8.0';
+
+export function semverGte(version: string, target: string): boolean {
+  const parse = (v: string) =>
+    v
+      .split('.')
+      .map((p) => parseInt(p, 10) || 0)
+      .slice(0, 3);
+  const a = parse(version);
+  const b = parse(target);
+  for (let i = 0; i < 3; i += 1) {
+    if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) > (b[i] ?? 0);
+  }
+  return true;
+}
+
+export interface SigningKeyEnv {
+  LICENSE_ED25519_PRIVATE_JWK: string;
+  LICENSE_ED25519_PRIVATE_JWK_K2?: string;
+}
+
+export function pickSigningKey(
+  env: SigningKeyEnv,
+  appVersion: string | undefined
+): { jwk: string; kid: 'k1' | 'k2' } {
+  if (env.LICENSE_ED25519_PRIVATE_JWK_K2 && semverGte(appVersion ?? '0.0.0', FIRST_K2_VERSION)) {
+    return { jwk: env.LICENSE_ED25519_PRIVATE_JWK_K2, kid: 'k2' };
+  }
+  return { jwk: env.LICENSE_ED25519_PRIVATE_JWK, kid: 'k1' };
+}
+
 // HMAC-SHA256 blind indexing and IP pseudonymization
 export async function hashHmac(value: string, pepper: string): Promise<string> {
   const enc = new TextEncoder();
@@ -156,10 +195,15 @@ export interface LicenseTokenClaims {
 /**
  * Signs a license claim set with the vendor Ed25519 private key.
  * Produces standard Compact JWS: header.payload.signature
+ *
+ * `kid` identifies which root key signed (SEC-ROT-02): 'k1' legacy,
+ * 'k2' current. Verifiers resolve the pinned public key from it and
+ * reject unknown kids (fail closed).
  */
 export async function signLicenseJwt(
   payload: LicenseTokenClaims,
-  privateKeyJwkString: string
+  privateKeyJwkString: string,
+  kid?: 'k1' | 'k2'
 ): Promise<string> {
   const jwk = JSON.parse(privateKeyJwkString);
   if (jwk.alg) {
@@ -173,7 +217,10 @@ export async function signLicenseJwt(
     ['sign']
   );
 
-  const header = { alg: 'EdDSA', typ: 'JWT' };
+  const header: Record<string, string> = { alg: 'EdDSA', typ: 'JWT' };
+  if (kid) {
+    header.kid = kid;
+  }
   const headerB64 = utf8ToBase64Url(JSON.stringify(header));
   const payloadB64 = utf8ToBase64Url(JSON.stringify(payload));
   const signingInput = `${headerB64}.${payloadB64}`;
@@ -241,6 +288,63 @@ export function generateLicenseKey(formula: string): string {
 }
 
 /** Exports a public key as JWK, for publishing alongside signed licenses. */
+/**
+ * RT-3 (red-team): verifies a licence JWS against the worker's own signing
+ * keys, so a device can PROVE possession of its activation token when calling
+ * privileged self-service routes (deactivate). The private JWK carries the
+ * public half (`x`), so verification needs no extra secret; `d` is stripped
+ * before import so the key can never be re-used for signing here.
+ *
+ * Accepts both root-of-trust keys (k1 legacy + k2 current): stored legacy
+ * tokens must keep working until the M2 sunset migration completes.
+ */
+export async function verifyLicenseJwt(
+  token: string,
+  privateJwkStrings: (string | undefined)[]
+): Promise<{ valid: boolean; payload?: Record<string, unknown>; error?: string }> {
+  try {
+    if (!token || typeof token !== 'string') {
+      return { valid: false, error: 'Jeton manquant.' };
+    }
+    const parts = token.trim().split('.');
+    if (parts.length !== 3) {
+      return { valid: false, error: 'Structure de jeton invalide.' };
+    }
+    const [headerB64, payloadB64, sigB64] = parts;
+    const header = JSON.parse(base64UrlToUtf8(headerB64));
+    if (header.alg !== 'EdDSA') {
+      return { valid: false, error: 'Algorithme non supporté.' };
+    }
+    const kid = header.kid === 'k2' ? 'k2' : 'k1';
+    const jwkString = kid === 'k2' ? privateJwkStrings[1] : privateJwkStrings[0];
+    if (!jwkString) {
+      return { valid: false, error: 'Clé de vérification indisponible.' };
+    }
+    const full = JSON.parse(jwkString);
+    const publicJwk: Record<string, string> = { kty: full.kty, crv: full.crv, x: full.x };
+    const publicKey = await crypto.subtle.importKey(
+      'jwk',
+      publicJwk as unknown as JsonWebKey,
+      { name: 'Ed25519' },
+      false,
+      ['verify']
+    );
+    const ok = await crypto.subtle.verify(
+      { name: 'Ed25519' },
+      publicKey,
+      base64UrlToBytes(sigB64) as unknown as BufferSource,
+      new TextEncoder().encode(`${headerB64}.${payloadB64}`)
+    );
+    if (!ok) {
+      return { valid: false, error: 'Signature invalide.' };
+    }
+    const payload = JSON.parse(base64UrlToUtf8(payloadB64)) as Record<string, unknown>;
+    return { valid: true, payload };
+  } catch (err) {
+    return { valid: false, error: `Jeton illisible: ${String(err).slice(0, 80)}` };
+  }
+}
+
 export async function exportPublicJwk(jwkString: string): Promise<string> {
   const jwk = JSON.parse(jwkString);
   if (jwk.alg) delete jwk.alg;

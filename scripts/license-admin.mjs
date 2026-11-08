@@ -274,13 +274,17 @@ async function executeMint(args) {
 
   const masterKey =
     args['master-key'] ||
-    process.env.MASTER_ENCRYPTION_KEY ||
-    'zuYAeOahzvQXtv+Ib20DWmUQxiPxSkSMY8PgMzV9X28=';
+    process.env.MASTER_ENCRYPTION_KEY;
+  if (!masterKey) {
+    console.error('❌ MASTER_ENCRYPTION_KEY manquant (.env.licensing). Refus — aucun fallback.');
+    process.exit(1);
+  }
 
-  const pepper =
-    args.pepper ||
-    process.env.LICENSE_PEPPER ||
-    '8151b8bd90b28fd747511025fa6d38625515e57aca46dcb75841383cd0f0bf58';
+  const pepper = args.pepper || process.env.LICENSE_PEPPER;
+  if (!pepper) {
+    console.error('❌ LICENSE_PEPPER manquant (.env.licensing). Refus — aucun fallback.');
+    process.exit(1);
+  }
 
   let typeTag = 'LIFE';
   let expiresAt = null;
@@ -438,8 +442,12 @@ async function executeSyncAll() {
     console.log('\nAucune licence locale dans le registre.');
     return;
   }
-  const masterKey = process.env.MASTER_ENCRYPTION_KEY || 'zuYAeOahzvQXtv+Ib20DWmUQxiPxSkSMY8PgMzV9X28=';
-  const pepper = process.env.LICENSE_PEPPER || '8151b8bd90b28fd747511025fa6d38625515e57aca46dcb75841383cd0f0bf58';
+  const masterKey = process.env.MASTER_ENCRYPTION_KEY;
+  const pepper = process.env.LICENSE_PEPPER;
+  if (!pepper) {
+    console.error('❌ LICENSE_PEPPER manquant (.env.licensing). Refus — aucun fallback.');
+    process.exit(1);
+  }
 
   const payload = {
     licenses: ledger.map((l) => ({
@@ -490,7 +498,7 @@ async function executeResetSeats(args) {
     console.error('\n❌ Veuillez spécifier une clé : node scripts/license-admin.mjs reset-seats --key MOBI-LIFE-...');
     return;
   }
-  const masterKey = process.env.MASTER_ENCRYPTION_KEY || 'zuYAeOahzvQXtv+Ib20DWmUQxiPxSkSMY8PgMzV9X28=';
+  const masterKey = process.env.MASTER_ENCRYPTION_KEY;
   try {
     const res = await fetch(`${CLOUD_LICENSING_ENDPOINT}/api/v1/admin/reset-seats`, {
       method: 'POST',
@@ -525,7 +533,7 @@ async function executeUpdateSeats(args) {
     console.error('\n❌ Veuillez spécifier la clé : node scripts/license-admin.mjs update-seats --key MOBI-... --desktops 2');
     return;
   }
-  const masterKey = process.env.MASTER_ENCRYPTION_KEY || 'zuYAeOahzvQXtv+Ib20DWmUQxiPxSkSMY8PgMzV9X28=';
+  const masterKey = process.env.MASTER_ENCRYPTION_KEY;
   try {
     const res = await fetch(`${CLOUD_LICENSING_ENDPOINT}/api/v1/admin/update-seats`, {
       method: 'POST',
@@ -554,7 +562,7 @@ async function executeUpdateSeats(args) {
  * Queries live Cloud Master for active licenses and connected devices
  */
 async function executeCloudList() {
-  const masterKey = process.env.MASTER_ENCRYPTION_KEY || 'zuYAeOahzvQXtv+Ib20DWmUQxiPxSkSMY8PgMzV9X28=';
+  const masterKey = process.env.MASTER_ENCRYPTION_KEY;
   try {
     const res = await fetch(`${CLOUD_LICENSING_ENDPOINT}/api/v1/admin/list`, {
       headers: {

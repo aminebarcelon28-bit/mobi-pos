@@ -1068,7 +1068,7 @@ pub fn sync_verified_license(
     now_sec: u64,
 ) -> Result<LicenseState, TrustError> {
     use super::license_token as lt;
-    let verified = lt::verify_license_token(token, lt::PRODUCTION_PUBLIC_KEY_B64URL, now_sec)?;
+    let verified = lt::verify_license_token(token, now_sec)?;
     if !lt::device_binding_ok(&verified.device_id, native_hwid_hash) {
         // Token belongs to another terminal (e.g. a cloned database moved
         // across devices): fail closed to CORRUPTED so only re-activation
@@ -1770,7 +1770,7 @@ mod tests {
         let _g = serial_test_lock();
         global_kernel().reset_for_tests();
         set(LicenseState::Expired);
-        let r = super::super::license_token::verify_license_token(
+        let r = super::super::license_token::verify_license_token_with_key(
             "forged.token.here",
             super::super::license_token::PRODUCTION_PUBLIC_KEY_B64URL,
             1_800_000_000,
