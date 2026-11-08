@@ -209,7 +209,7 @@ const objects = master.map((row) => {
     obj.columns = db
       .prepare(`PRAGMA index_xinfo(${quote(row.name)})`)
       .all()
-      .map((c) => ({ seqno: c.seqno, cid: c.cid, name: c.name ?? null, desc: c.desc, coll: c.coll ?? null, key: c.key }))
+      .map((c) => ({ seqno: c.seqno, name: c.name ?? null, desc: c.desc, coll: c.coll ?? null, key: c.key }))
       .sort((a, b) => a.seqno - b.seqno);
   }
   return obj;

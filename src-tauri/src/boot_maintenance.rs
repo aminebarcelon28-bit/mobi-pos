@@ -261,6 +261,7 @@ pub const LEGACY_EXTRA_INDEXES: &[&str] = &[
     "idx_purchase_orders_created",
     "idx_repair_orders_created",
     "idx_trade_ins_created",
+    "idx_sync_conflicts_row",
 ];
 
 /// Compare the migrated schema with the golden manifest:
@@ -271,6 +272,12 @@ pub const LEGACY_EXTRA_INDEXES: &[&str] = &[
 /// after the first migration. They are allowed by exact name; anything else
 /// extra is a mismatch.
 pub const NATIVE_OWNED_TABLES: &[&str] = &["time_anchor", "import_batches", "import_staging_rows"];
+
+/// TS-runtime-created local tables the golden manifest (generated from the
+/// frozen renderer-heal reference DB) predates. `sync_conflicts` is a
+/// local-only diagnostics quarantine (src/sync/conflictWatch.ts) — never
+/// synced, no money semantics, no native writers.
+pub const LEGACY_EXTRA_TABLES: &[&str] = &["sync_conflicts"];
 
 pub fn manifest_compatible(golden: &str, actual: &str) -> Result<(), String> {
     let g: serde_json::Value = serde_json::from_str(golden)
@@ -310,7 +317,8 @@ pub fn manifest_compatible(golden: &str, actual: &str) -> Result<(), String> {
         let name = o.get("name").and_then(|v| v.as_str()).unwrap_or("");
         let typ = o.get("type").and_then(|v| v.as_str()).unwrap_or("");
         let allowed = (typ == "index" && LEGACY_EXTRA_INDEXES.contains(&name))
-            || (typ == "table" && NATIVE_OWNED_TABLES.contains(&name));
+            || (typ == "table"
+                && (NATIVE_OWNED_TABLES.contains(&name) || LEGACY_EXTRA_TABLES.contains(&name)));
         if !allowed {
             return Err(format!("unexpected schema object: {k}"));
         }
@@ -426,10 +434,15 @@ pub fn schema_manifest(conn: &Connection) -> Result<String, String> {
             Some(format!(
                 "[{}]",
                 cols.iter()
-                    .map(|(seqno, cid, n, desc, coll, key)| format!(
-                        "{{\"seqno\":{},\"cid\":{},\"name\":{},\"desc\":{},\"coll\":{},\"key\":{}}}",
+                    .map(|(seqno, _cid, n, desc, coll, key)| format!(
+                        // cid (the column's physical ordinal in the table) is
+                        // deliberately EXCLUDED: upgraded databases carry
+                        // ALTER-appended legacy columns that shift every later
+                        // ordinal without changing the logical schema. The
+                        // table side already ignores column order; the index
+                        // side must too, or no upgraded DB can ever match.
+                        "{{\"seqno\":{},\"name\":{},\"desc\":{},\"coll\":{},\"key\":{}}}",
                         seqno,
-                        cid,
                         n.as_ref().map(|x| json_str(x)).unwrap_or_else(|| "null".into()),
                         desc,
                         coll.as_ref().map(|x| json_str(x)).unwrap_or_else(|| "null".into()),
@@ -1583,6 +1596,38 @@ mod tests {
 
     fn hashes(stmts: &[&str]) -> Vec<u64> {
         stmts.iter().map(|s| fnv(s)).collect()
+    }
+
+    #[test]
+    fn manifest_ignores_physical_column_order_on_indexes() {
+        // Upgraded databases carry ALTER-appended legacy columns that shift
+        // the physical ordinal (cid) of every later column. The logical schema
+        // is unchanged, so the manifest must be identical — the golden
+        // manifest is generated from a fresh reference DB whose column order
+        // no upgraded DB can reproduce. Regression for the v1.8.0 upgrade
+        // failure: "schema object changed: index:idx_outbox_signed_drain".
+        let (path_a, conn_a) = tmp_db("manifest-order-fresh");
+        conn_a
+            .execute_batch(
+                "CREATE TABLE outbox (idempotency_key TEXT, entity_type TEXT, status TEXT, device_id TEXT, seq_no INTEGER);
+                 CREATE INDEX idx_drain ON outbox(status, device_id, seq_no) WHERE seq_no IS NOT NULL;",
+            )
+            .unwrap();
+        let (path_b, conn_b) = tmp_db("manifest-order-upgraded");
+        conn_b
+            .execute_batch(
+                // Same logical schema and column SET, different physical
+                // order (as ALTER-appended migrations produce) — the index
+                // column ordinals (cid) differ but the schema is identical.
+                "CREATE TABLE outbox (seq_no INTEGER, device_id TEXT, status TEXT, entity_type TEXT, idempotency_key TEXT);
+                 CREATE INDEX idx_drain ON outbox(status, device_id, seq_no) WHERE seq_no IS NOT NULL;",
+            )
+            .unwrap();
+        let ma = schema_manifest(&conn_a).unwrap();
+        let mb = schema_manifest(&conn_b).unwrap();
+        assert_eq!(ma, mb, "column order must not change the manifest");
+        cleanup(&path_a);
+        cleanup(&path_b);
     }
 
     #[test]

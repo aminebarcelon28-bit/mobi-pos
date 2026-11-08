@@ -1,0 +1,3 @@
+device_identity already canonical
+golden objects: 188 | actual objects: 195
+comparator verdict: COMPATIBLE — migration will pass

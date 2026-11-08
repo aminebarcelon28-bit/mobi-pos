@@ -289,37 +289,54 @@ CREATE TABLE IF NOT EXISTS device_identity (
     private_key_enc BLOB NOT NULL,
     enrolled_at TEXT NOT NULL,
     status TEXT NOT NULL,
-    last_outbox_seq INTEGER NOT NULL DEFAULT 0
+    last_outbox_seq INTEGER NOT NULL DEFAULT 0,
+    last_acked_seq INTEGER NOT NULL DEFAULT 0
 );";
 
 /// Ensure the native-owned identity table exists. Called before the schema
 /// migration so its golden-manifest post-condition can see every native table
 /// the manifest lists (a fresh install starts empty).
+///
+/// Convergence: pre-NOT-NULL DDL eras created this table without the NOT NULL
+/// constraints (CREATE TABLE IF NOT EXISTS never upgrades a shape), and the
+/// drain cursor column last_acked_seq used to be lazily ALTERed at runtime,
+/// so an upgraded DB reaches the manifest check with a shape the golden
+/// manifest cannot match. Both are reconciled HERE, before the migration's
+/// manifest post-condition: probe, ALTER the missing cursor column, and
+/// rebuild the table byte-exact (the sealed private key is copied verbatim)
+/// when constraints are weak.
 pub fn ensure_schema(conn: &Connection) -> Result<(), TrustError> {
     conn.execute_batch(IDENTITY_DDL)
         .map_err(|e| TrustError::op_failed(format!("device identity table: {e}")))?;
-    ensure_seq_column(conn)
+    ensure_seq_column(conn, "last_outbox_seq")?;
+    ensure_seq_column(conn, "last_acked_seq")?;
+    ensure_canonical_constraints(conn)?;
+    Ok(())
 }
 
-/// Idempotent sequence-counter column for pre-DDL rows (fresh CREATEs carry
-/// it; upgraded rows gain it here — duplicate-tolerant by probe, since bare
+/// Idempotent sequence-counter columns for pre-DDL rows (fresh CREATEs carry
+/// them; upgraded rows gain them here — duplicate-tolerant by probe, since bare
 /// ALTER fails when the column exists).
-fn ensure_seq_column(conn: &Connection) -> Result<(), TrustError> {
+fn ensure_seq_column(conn: &Connection, column: &str) -> Result<(), TrustError> {
     // Probe-then-ALTER still races concurrent first-use enrollments (both
     // probe absent, both ALTER, one loses) — so a lost race on the exact
     // "duplicate column" error converges instead of failing: re-probe, and
     // only real errors propagate.
     let missing = || -> bool {
-        conn.prepare("SELECT name FROM pragma_table_info('device_identity') WHERE name = 'last_outbox_seq'")
-            .and_then(|mut s| {
-                let mut rows = s.query([])?;
-                Ok(rows.next()?.is_none())
-            })
-            .unwrap_or(false)
+        conn.prepare(&format!(
+            "SELECT name FROM pragma_table_info('device_identity') WHERE name = '{column}'"
+        ))
+        .and_then(|mut s| {
+            let mut rows = s.query([])?;
+            Ok(rows.next()?.is_none())
+        })
+        .unwrap_or(false)
     };
     if missing() {
         match conn.execute(
-            "ALTER TABLE device_identity ADD COLUMN last_outbox_seq INTEGER NOT NULL DEFAULT 0",
+            &format!(
+                "ALTER TABLE device_identity ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0"
+            ),
             [],
         ) {
             Ok(_) => {}
@@ -331,6 +348,48 @@ fn ensure_seq_column(conn: &Connection) -> Result<(), TrustError> {
             }
         }
     }
+    Ok(())
+}
+
+/// Rebuild the table when an older DDL era left the trust columns nullable.
+/// The golden manifest records the canonical NOT NULL constraints; a weak
+/// shape can never match, and weakening constraints on the identity table is
+/// exactly what tamper detection must not forgive. The rebuild copies every
+/// row verbatim (the sealed private key BLOB is byte-preserved) inside one
+/// implicit transaction; the table holds at most a handful of rows.
+fn ensure_canonical_constraints(conn: &Connection) -> Result<(), TrustError> {
+    let weak = || -> bool {
+        conn.prepare(
+            "SELECT COUNT(*) FROM pragma_table_info('device_identity')
+              WHERE name IN ('public_key_hex','private_key_enc','enrolled_at','status')
+              AND \"notnull\" = 0",
+        )
+        .and_then(|mut s| s.query_row([], |r| r.get::<_, i64>(0)))
+        .map(|n| n > 0)
+        .unwrap_or(false)
+    };
+    if !weak() {
+        return Ok(());
+    }
+    conn.execute_batch(
+        "CREATE TABLE device_identity_canonical (
+            device_id TEXT PRIMARY KEY,
+            public_key_hex TEXT NOT NULL,
+            private_key_enc BLOB NOT NULL,
+            enrolled_at TEXT NOT NULL,
+            status TEXT NOT NULL,
+            last_outbox_seq INTEGER NOT NULL DEFAULT 0,
+            last_acked_seq INTEGER NOT NULL DEFAULT 0
+        );
+        INSERT INTO device_identity_canonical
+            (device_id, public_key_hex, private_key_enc, enrolled_at, status, last_outbox_seq, last_acked_seq)
+        SELECT device_id, public_key_hex, private_key_enc, enrolled_at, status,
+               COALESCE(last_outbox_seq, 0), COALESCE(last_acked_seq, 0)
+        FROM device_identity;
+        DROP TABLE device_identity;
+        ALTER TABLE device_identity_canonical RENAME TO device_identity;",
+    )
+    .map_err(|e| TrustError::op_failed(format!("device identity constraint convergence: {e}")))?;
     Ok(())
 }
 
@@ -397,7 +456,9 @@ pub fn ensure_enrolled(
 ) -> Result<DeviceIdentity, TrustError> {
     conn.execute_batch(IDENTITY_DDL)
         .map_err(|e| TrustError::op_failed(format!("DEVICE_NOT_INITIALIZED:ddl:{e}")))?;
-    ensure_seq_column(conn)?;
+    ensure_seq_column(conn, "last_outbox_seq")?;
+    ensure_seq_column(conn, "last_acked_seq")?;
+    ensure_canonical_constraints(conn)?;
     if let Some(identity) = load_row(conn, device_id, wrap)? {
         return Ok(identity);
     }
