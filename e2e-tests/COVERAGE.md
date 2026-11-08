@@ -1,7 +1,7 @@
 # COVERAGE — POS Edge Case Encyclopedia vs. executed MobiPOS tests
 
-Generated: 2026-11-07T12:26:34.537Z  
-Batch: `sweep-i`  
+Generated: 2026-11-08T11:50:23.378Z  
+Batch: `sweep-q`  
 Verdict source: `e2e-tests/CASE_INDEX.csv` (single source of truth)  
 Source cases: `POS_EDGE_CASE_ENCYCLOPEDIA_and_LONG_SESSION.md` (local, not in repo)
 
@@ -10,12 +10,12 @@ Source cases: `POS_EDGE_CASE_ENCYCLOPEDIA_and_LONG_SESSION.md` (local, not in re
 | Metric | Count |
 |---|---|
 | Catalog cases (table rows) | 687 |
-| Passed (full) | 284 |
+| Passed (full) | 279 |
 | Passed (partial — unasserted facets listed) | 18 |
-| Passed (full, excluding flaky rows) | 283 |
+| Passed (full, excluding flaky rows) | 278 |
 | FLAKY (pass, order-dependent - excluded from the headline) | 1 |
-| **FAILED** | 198 |
-| N/A (absent or unobservable in harness) | 70 |
+| **FAILED** | 214 |
+| N/A (absent or unobservable in harness) | 59 |
 | Remaining (doable today, not yet executed) | 0 |
 | BLOCKED (missing dependency — see Evidence) | 117 |
 | Global invariants (G-01…G-36) executed | 25/36 |
@@ -227,34 +227,34 @@ A verdict change from N/A to FAIL requires the case text to clearly assume the p
 |---|---|---|---|---|
 | DRW-01 | P0 | Cashier A logs in with PIN on desktop and opens the drawer (float 50,000.00 DA) | 65-drw-drawer-part1.e2e.ts | FAIL |
 | DRW-02 | P0 | Desktop closes the drawer (counted cash entered) | 65-drw-drawer-part1.e2e.ts | FAIL |
-| DRW-03 | P0 | Open and close initiated from mobile | 65-drw-drawer-part1.e2e.ts | PASS |
+| DRW-03 | P0 | Open and close initiated from mobile | 65-drw-drawer-part1.e2e.ts | FAIL |
 | DRW-04 | P0 | Desktop and mobile press Open on the same drawer at the same instant (and again with a 2-d | 65-drw-drawer-part1.e2e.ts | FAIL |
-| DRW-05 | P0 | Desktop and mobile press Close at the same instant with different counted amounts | 65-drw-drawer-part1.e2e.ts | PASS |
-| DRW-06 | P0 | Drawer closed on desktop while mobile is offline and still shows open; mobile sells during | 65-drw-drawer-part1.e2e.ts | N/A — No second device and no offline sale queue: the companion (?mode=mobile) is the same Tauri |
-| DRW-07 | P0 | Mobile offline/stale when desktop opens; mobile user tries to open its own | 65-drw-drawer-part1.e2e.ts | N/A — No stale second-device mobile state: the mobile shell reads the same local rows in the sam |
-| DRW-08 | P0 | Mobile app backgrounded or killed while desktop opens/closes; user returns | 65-drw-drawer-part1.e2e.ts | PASS |
-| DRW-09 | P0 | State events arrive duplicated, delayed, out of order, or dropped (open event after close  | 65-drw-drawer-part1.e2e.ts | N/A — No drawer event/command log to duplicate, delay, reorder or drop: drawer state is a row (c |
-| DRW-10 | P0 | Realtime channel down (WebSocket/SSE drop, captive portal, backend 429/500, push unavailab | 65-drw-drawer-part1.e2e.ts | N/A — No realtime drawer channel exists to take down: SyncManager only transports rows; the mobi |
+| DRW-05 | P0 | Desktop and mobile press Close at the same instant with different counted amounts | 65-drw-drawer-part1.e2e.ts | FAIL |
+| DRW-06 | P0 | Drawer closed on desktop while mobile is offline and still shows open; mobile sells during | 65-drw-drawer-part1.e2e.ts | FAIL |
+| DRW-07 | P0 | Mobile offline/stale when desktop opens; mobile user tries to open its own | 65-drw-drawer-part1.e2e.ts | FAIL |
+| DRW-08 | P0 | Mobile app backgrounded or killed while desktop opens/closes; user returns | 65-drw-drawer-part1.e2e.ts | FAIL |
+| DRW-09 | P0 | State events arrive duplicated, delayed, out of order, or dropped (open event after close  | 65-drw-drawer-part1.e2e.ts | FAIL |
+| DRW-10 | P0 | Realtime channel down (WebSocket/SSE drop, captive portal, backend 429/500, push unavailab | 65-drw-drawer-part1.e2e.ts | FAIL |
 | DRW-11 | P0 | Mobile or desktop clock skewed ±5 min / ±1 day | 65-drw-drawer-part1.e2e.ts | FAIL |
 | DRW-12 | P0 | Cashier A opened the drawer; cashier B logs in with PIN on the same desktop | 65-drw-drawer-part1.e2e.ts | FAIL |
-| DRW-13 | P0 | A on desktop and B on mobile each hold their own open drawer; also A tries to open a secon | 65-drw-drawer-part1.e2e.ts | N/A — No register/drawer entity: a "drawer" is only cash_sessions.device_id with a partial uniqu |
+| DRW-13 | P0 | A on desktop and B on mobile each hold their own open drawer; also A tries to open a secon | 65-drw-drawer-part1.e2e.ts | FAIL |
 | DRW-14 | P0 | Logout, auto-lock, PIN user-switch, app restart while drawer is open | 65-drw-drawer-part1.e2e.ts | FAIL |
-| DRW-15 | P0 | Manager force-closes a cashier's forgotten drawer from mobile or desktop | 65-drw-drawer-part1.e2e.ts | N/A — No force-close workflow or command exists: the only close is the normal reconciliation (bl |
+| DRW-15 | P0 | Manager force-closes a cashier's forgotten drawer from mobile or desktop | 65-drw-drawer-part1.e2e.ts | FAIL |
 | DRW-16 | P0 | Opening float: Arabic digits, 0, huge, negative, edit after open | 66-drw-drawer-part2.e2e.ts | FAIL |
 | DRW-17 | P0 | Physical cash-drawer kick vs session state: sale on mobile with no drawer attached; "no sa | 66-drw-drawer-part2.e2e.ts | FAIL |
 | DRW-18 | P0 | Mobile shows live drawer totals while desktop sells (cash sales, refunds, payouts, expecte | 66-drw-drawer-part2.e2e.ts | FAIL |
-| DRW-19 | P0 | Cash sale taken on mobile (no physical drawer) | 66-drw-drawer-part2.e2e.ts | PASS |
-| DRW-20 | P0 | Backend restarted, restored from an older backup, or a device restored an old DB while the | 66-drw-drawer-part2.e2e.ts | N/A — No backend restore/epoch concept in the store: cash_sessions has a version column but no e |
-| DRW-21 | P0 | Several drawers/registers (desktop 1, desktop 2, mobile till); rename; remove a device | 66-drw-drawer-part2.e2e.ts | PASS |
+| DRW-19 | P0 | Cash sale taken on mobile (no physical drawer) | 66-drw-drawer-part2.e2e.ts | FAIL |
+| DRW-20 | P0 | Backend restarted, restored from an older backup, or a device restored an old DB while the | 66-drw-drawer-part2.e2e.ts | FAIL |
+| DRW-21 | P0 | Several drawers/registers (desktop 1, desktop 2, mobile till); rename; remove a device | 66-drw-drawer-part2.e2e.ts | FAIL |
 | DRW-22 | P0 | Drawer left open for days / across business-day change / > 24 h | 66-drw-drawer-part2.e2e.ts | FAIL |
 | DRW-23 | P0 | Close barrier: another device still has unsynced/parked sales, unfinished payment or pendi | 66-drw-drawer-part2.e2e.ts | FAIL |
-| DRW-24 | P0 | Z-report after close printed on desktop, viewed on mobile, reprinted from mobile | 66-drw-drawer-part2.e2e.ts | PASS |
+| DRW-24 | P0 | Z-report after close printed on desktop, viewed on mobile, reprinted from mobile | 66-drw-drawer-part2.e2e.ts | FAIL |
 | DRW-25 | P0 | Audit of drawer events (open, close, force-close, handover, reopen, failed attempts) | 66-drw-drawer-part2.e2e.ts | FAIL |
-| DRW-26 | P0 | Phone lost or user disabled while that phone holds the open drawer | 66-drw-drawer-part2.e2e.ts | N/A — No server-issued revocation touches the drawer: device revocation is a SyncManager gate on |
-| DRW-27 | P0 | Mistaken close; reopen within N minutes | 66-drw-drawer-part2.e2e.ts | N/A — No reopen/reverse-close command or UI: a CLOSED session is terminal (no UPDATE back to OPE |
-| DRW-28 | P0 | Counting cash by denominations on mobile vs desktop, Arabic digits, small screens | 66-drw-drawer-part2.e2e.ts | PASS |
-| DRW-29 | P0 | Two devices change the same drawer's metadata (note, float correction) at once | 66-drw-drawer-part2.e2e.ts | N/A — No editable drawer-metadata lane to race: the only editable field at close is the free-tex |
-| DRW-30 | P0 | Open a drawer while a gateway approval from the previous drawer is still pending | 66-drw-drawer-part2.e2e.ts | N/A — No gateway approval in the close path: the close is a local SQLite transaction (blind coun |
+| DRW-26 | P0 | Phone lost or user disabled while that phone holds the open drawer | 66-drw-drawer-part2.e2e.ts | FAIL |
+| DRW-27 | P0 | Mistaken close; reopen within N minutes | 66-drw-drawer-part2.e2e.ts | FAIL |
+| DRW-28 | P0 | Counting cash by denominations on mobile vs desktop, Arabic digits, small screens | 66-drw-drawer-part2.e2e.ts | FAIL |
+| DRW-29 | P0 | Two devices change the same drawer's metadata (note, float correction) at once | 66-drw-drawer-part2.e2e.ts | FAIL |
+| DRW-30 | P0 | Open a drawer while a gateway approval from the previous drawer is still pending | 66-drw-drawer-part2.e2e.ts | FAIL |
 
 ## HW (8)
 
@@ -361,7 +361,7 @@ A verdict change from N/A to FAIL requires the case text to clearly assume the p
 | ID | Prio | Title | Spec | Verdict |
 |---|---|---|---|---|
 | LOY-01 | P1 | Earn points at tier boundaries (amount just below/at/above step), rounding of fractional p | 75-loy-loyalty.e2e.ts | PASS |
-| LOY-02 | P1 | Points on discounted amount vs gross; on tips/fees or not | 75-loy-loyalty.e2e.ts | FAIL |
+| LOY-02 | P1 | Points on discounted amount vs gross; on tips/fees or not | 75-loy-loyalty.e2e.ts | PASS |
 | LOY-03 | P1 (cond. P0) | Redeem points: exact balance, balance+1, more than order total, partial | 75-loy-loyalty.e2e.ts | PASS |
 | LOY-04 | P1 (cond. P0) | Redeem + refund: full, partial, multi-quantity partial | 75-loy-loyalty.e2e.ts | PASS |
 | LOY-05 | P1 (cond. P0) | Refund of a sale whose earned points were already spent | — | FAIL |
@@ -698,7 +698,7 @@ A verdict change from N/A to FAIL requires the case text to clearly assume the p
 | SCL-45 | P0 | Disk space preflight before VACUUM, backup, migration, export, import, sync bootstrap | 23-scl-rcp-tim-i18.e2e.ts | FAIL |
 | SCL-46 | P0 | Cancelling a search/report/export and the connection pool under load | 23-scl-rcp-tim-i18.e2e.ts | PASS |
 | SCL-47 | P0 | Heavy query while the UI is used (Rust async runtime blocked, huge JSON serialized to the  | 23-scl-scale-customers.e2e.ts | PASS |
-| SCL-48 | P0 | Document-number counters at scale and across devices (receipt, invoice, ticket) | 23-scl-rcp-tim-i18.e2e.ts | FAIL |
+| SCL-48 | P0 | Document-number counters at scale and across devices (receipt, invoice, ticket) | 23-scl-rcp-tim-i18.e2e.ts | PASS |
 | SCL-49 | P1 | Query-planner statistics and skew: no `sqlite_stat1`, stale stats after a 1 M import, 90 % | — | BLOCKED — needs 10M-scale fixture (scale-3y: 1M customers / 5M sale lines / 10M audit rows) |
 | SCL-50 | P1 | Very large `IN (...)` lists (40 k sale ids for a report/refund batch) | — | BLOCKED — needs 10M-scale fixture (scale-3y: 1M customers / 5M sale lines / 10M audit rows) |
 | SCL-51 | P1 | `ORDER BY` on a non-indexed column over 1 M rows (e.g. customers by total spent, products  | — | BLOCKED — needs 10M-scale fixture (scale-3y: 1M customers / 5M sale lines / 10M audit rows) |
@@ -917,7 +917,7 @@ A verdict change from N/A to FAIL requires the case text to clearly assume the p
 | G-12 | — | Sync convergence: after all devices sync and settle, every device has identical ledger totals and identical ro |
 | G-13 | pass | Referential integrity: `PRAGMA foreign_key_check` empty; `PRAGMA integrity_check` = ok. |
 | G-14 | pass | No float money: no non-integer value ever stored or computed for money/qty-in-milli. |
-| G-15 | pass | Permissions: no action succeeds for a role that must not have it (checked via attempted-forbidden actions in t |
+| G-15 | **fail** | Permissions: no action succeeds for a role that must not have it (checked via attempted-forbidden actions in t |
 | G-16 | — | Resource budget: memory/handle/DB-size growth stays within budget; p95 latency not degrading > 2× from baselin |
 | G-17 | pass | One open drawer session per drawer: at most one `open` session per drawer id across all devices; every open/cl |
 | G-18 | pass | Cross-device freshness: drawer/shift/ticket status shown on any device equals the server state within the conf |
