@@ -366,6 +366,25 @@ interface SaleInfo {
 }
 
 async function makeCashSale(title: string, qty = 1, tendered?: number): Promise<SaleInfo> {
+  // A predecessor can leave the refund modal mounted; the product never adds to
+  // the cart behind it, and the guarded tile click now refuses (REF-19). Close
+  // the refund surface first — bounded, state-checked, and loud if it stays.
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const up = await $('[data-testid="refund-dialog"]')
+      .isDisplayed()
+      .catch(() => false);
+    if (!up) break;
+    await closeRefund().catch(() => undefined);
+    await browser.keys(['Escape']).catch(() => undefined);
+    await browser.pause(350);
+  }
+  if (
+    await $('[data-testid="refund-dialog"]')
+      .isDisplayed()
+      .catch(() => false)
+  ) {
+    throw new Error('makeCashSale: refund dialog is still open; refusing to add a SKU behind it');
+  }
   await clearCart();
   for (let i = 0; i < qty; i++) await addSku(title);
   const before = txCount();
