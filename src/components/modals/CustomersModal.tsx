@@ -120,6 +120,7 @@ export const CustomersModal: React.FC = () => {
   const [adjustModalOpen, setAdjustModalOpen] = useState(false);
   const [adjustPoints, setAdjustPoints] = useState<number>(0);
   const [adjustReason, setAdjustReason] = useState<string>('');
+  const [adjustPin, setAdjustPin] = useState<string>('');
 
   // Input ref for auto-focusing search on F3
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -1444,6 +1445,7 @@ export const CustomersModal: React.FC = () => {
                             onClick={() => {
                               setAdjustPoints(0);
                               setAdjustReason('');
+                              setAdjustPin('');
                               setAdjustModalOpen(true);
                             }}
                             className="px-2.5 py-1.5 min-h-[36px] bg-pos-hover hover:bg-pos-border text-pos-text font-bold text-[11px] rounded-lg border border-pos-border transition flex items-center gap-1 cursor-pointer"
@@ -2259,6 +2261,7 @@ export const CustomersModal: React.FC = () => {
                       setProfileMenuOpen(false);
                       setAdjustPoints(0);
                       setAdjustReason('');
+                      setAdjustPin('');
                       setAdjustModalOpen(true);
                     }}
                     className="w-full min-h-[44px] px-4 py-2.5 flex items-center gap-2 text-xs font-bold text-pos-text hover:bg-pos-hover transition text-left cursor-pointer"
@@ -2559,12 +2562,25 @@ export const CustomersModal: React.FC = () => {
                     showToast('Un motif d\'ajustement est obligatoire.', 'warning');
                     return;
                   }
-                  const res = await adjustCustomerPoints(activeProfile.id, adjustPoints, adjustReason.trim());
+                  if (adjustPin.trim().length < 4) {
+                    showToast('PIN Manager d\'autorisation requis pour ajuster les points.', 'warning');
+                    return;
+                  }
+                  const res = await adjustCustomerPoints(activeProfile.id, adjustPoints, adjustReason.trim(), adjustPin);
                   if (res.success) {
                     showSuccess(`Points ajustés (${adjustPoints > 0 ? '+' : ''}${adjustPoints} pts) avec succès !`);
                     setAdjustModalOpen(false);
                     setAdjustPoints(0);
                     setAdjustReason('');
+                    setAdjustPin('');
+                  } else if (res.reason === 'MANAGER_PIN_REQUIRED') {
+                    showToast("PIN Manager d'autorisation requis pour ajuster les points.", 'warning');
+                  } else if (res.reason === 'MANAGER_LOCKED') {
+                    showToast('Vérification verrouillée après trop de tentatives — patientez avant de réessayer.', 'error');
+                  } else if (res.reason === 'MANAGER_VERIFY_UNAVAILABLE') {
+                    showToast('Vérification indisponible — réessayez.', 'error');
+                  } else if (res.reason === 'MANAGER_PIN_INCORRECT') {
+                    showToast('Code PIN Manager incorrect.', 'error');
                   } else {
                     showToast(`Échec ajustement points : ${res.reason || 'Erreur'}`, 'error');
                   }
@@ -2601,7 +2617,27 @@ export const CustomersModal: React.FC = () => {
                     placeholder="Ex: Geste commercial retard SAV, correction saisie..."
                     className="w-full bg-pos-bg border border-pos-border focus:border-amber-400 rounded-lg px-3 py-2 text-xs text-pos-text focus:outline-none"
                   />
+                
+                <div>
+                  <label className="text-[10px] uppercase font-bold text-pos-muted block mb-1">
+                    PIN Manager d'Autorisation *
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    inputMode="numeric"
+                    autoComplete="off"
+                    data-testid="adjust-pin-input"
+                    value={adjustPin}
+                    onChange={(e) => setAdjustPin(e.target.value.replace(/\D/g, ''))}
+                    placeholder="PIN Manager"
+                    className="w-full bg-pos-bg border border-pos-border focus:border-amber-400 rounded-lg px-3 py-2 text-sm font-mono text-pos-text focus:outline-none"
+                  />
+                  <p className="text-[10px] text-pos-muted mt-1">
+                    Un ajustement de points est une opération privilégiée : elle exige le PIN d'un manager.
+                  </p>
                 </div>
+</div>
 
                 <div className="flex justify-end gap-2 pt-3 border-t border-pos-border">
                   <button

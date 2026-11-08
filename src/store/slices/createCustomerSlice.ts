@@ -375,9 +375,28 @@ export const createCustomerSlice: StateCreator<PosState, [], [], CustomerSlice> 
     return { success: true, creditAdded: creditAmount };
   },
 
-  adjustCustomerPoints: async (customerId, points, description) => {
+  adjustCustomerPoints: async (customerId, points, description, managerPin) => {
+    // Privileged operation: a point adjustment mints or destroys redeemable
+    // value (points convert to store credit), so it needs a manager credential
+    // verified natively - not merely a hidden button (LOY-12: any operator
+    // could add 50 points with no PIN at all).
+    const pin = String(managerPin ?? '').trim();
+    if (pin.length < 4) {
+      return { success: false, reason: 'MANAGER_PIN_REQUIRED' };
+    }
+    const gate = await verifyManagerGate(pin);
+    if (!gate.ok) {
+      return {
+        success: false,
+        reason: gate.locked
+          ? 'MANAGER_LOCKED'
+          : gate.reason === 'unavailable'
+          ? 'MANAGER_VERIFY_UNAVAILABLE'
+          : 'MANAGER_PIN_INCORRECT',
+      };
+    }
     // NOTE: manual manager adjustments intentionally bypass the program
-    // master switch — they are operator corrections, not program earn.
+    // master switch - they are operator corrections, not program earn.
     const { customers, currentCustomer, logSecurityAction } = get();
     const customer = customers.find((c) => c.id === customerId);
     if (!customer) return { success: false, reason: 'CUSTOMER_NOT_FOUND' };

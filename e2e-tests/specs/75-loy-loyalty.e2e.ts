@@ -3954,7 +3954,7 @@ describe('LOY - loyalty earn, redeem, refund, campaign and adjustment (batch 15)
     expect(snap.pointsPayload).toBe(100);
   });
 
-  it('[LOY-12] manual point adjustment requires manager authorization (current build: any operator, no PIN)', async () => {
+  it('[LOY-12] manual point adjustment requires a manager PIN: no PIN and a wrong PIN are refused, the correct PIN applies', async () => {
     await clearCart();
     const before = loySnap('LOY-ADJ').pointsColumn;
     await loyOpenProfile('LOY-ADJ');
@@ -3967,17 +3967,40 @@ describe('LOY - loyalty earn, redeem, refund, campaign and adjustment (batch 15)
     await loySetNative(numberInput, '50');
     await loySetNative(reasonInput, 'LOY-12 no-PIN probe');
     await browser.pause(200);
+    // The credential control must exist and be a PIN field, not just a hidden
+    // convention: an adjustment mints redeemable value.
+    const pinInput = await $('[data-testid="adjust-pin-input"]');
+    expect(await pinInput.isDisplayed()).toBe(true);
+
+    // (a) No PIN: refused at the form boundary, balance untouched.
     const applied = await loySubmitInForm('Ex: Geste commercial');
     expect(applied).toBe(true);
     await browser.pause(1200);
+    const afterNoPin = loySnap('LOY-ADJ').pointsColumn;
+    console.log(`[LOY-12] before=${before} afterNoPin=${afterNoPin}`);
+    expect(afterNoPin).toBe(before);
+
+    // (b) Wrong PIN: refused by the native manager gate, balance untouched.
+    await loySetNative(pinInput, '000000');
+    await browser.pause(150);
+    await loySubmitInForm('Ex: Geste commercial');
+    await browser.pause(1500);
+    const afterWrongPin = loySnap('LOY-ADJ').pointsColumn;
+    console.log(`[LOY-12] afterWrongPin=${afterWrongPin}`);
+    expect(afterWrongPin).toBe(before);
+
+    // (c) Correct manager PIN: the adjustment lands (the gate is a gate, not a
+    // wall).
+    await loySetNative(pinInput, APP_PIN);
+    await browser.pause(150);
+    await loySubmitInForm('Ex: Geste commercial');
+    await browser.waitUntil(
+      () => loySnap('LOY-ADJ').pointsColumn === before + 50,
+      { timeout: 20000, interval: 300, timeoutMsg: 'LOY-12 correct PIN did not apply the adjustment' },
+    );
     const after = loySnap('LOY-ADJ').pointsColumn;
-    const pinVisible = await browser.execute(() => {
-      const text = (document.body.innerText || '');
-      return /PIN|code manager|autorisation manager/i.test(text);
-    });
-    console.log(`[LOY-12] before=${before} after=${after} pinTextVisible=${String(pinVisible)}`);
-    // A manager adjustment must not be possible without a manager credential.
-    expect(after).toBe(before);
+    console.log(`[LOY-12] afterAuthorized=${after}`);
+    expect(after).toBe(before + 50);
   });
 
   // -------------------------------------------------------------------------

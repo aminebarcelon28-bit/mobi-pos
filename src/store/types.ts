@@ -164,7 +164,12 @@ export interface CustomerSlice {
     managerPin?: string
   ) => Promise<{ success: boolean; reason?: string; credited?: number }>;
   redeemLoyaltyPoints: (customerId: string, points: number, saleTotal?: number) => Promise<{ success: boolean; creditAdded?: number; reason?: string }>;
-  adjustCustomerPoints: (customerId: string, points: number, description: string) => Promise<{ success: boolean; reason?: string }>;
+  adjustCustomerPoints: (
+    customerId: string,
+    points: number,
+    description: string,
+    managerPin: string,
+  ) => Promise<{ success: boolean; reason?: string }>;
   recordCustomerDebtPayment: (
     customerId: string,
     amount: number,
