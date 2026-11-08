@@ -8,6 +8,7 @@ import {
   depleteFifoPointBuckets,
   normalizeLoyaltyConfig,
   isRedeemAllowed,
+  redeemablePointBalance,
   STORE_CREDIT_PIN_THRESHOLD_DZD,
 } from '../../utils/loyaltyEngine';
 import {
@@ -306,13 +307,22 @@ export const createCustomerSlice: StateCreator<PosState, [], [], CustomerSlice> 
     }
     // Enforces minimumRedemptionPoints always, and
     // maximumRedemptionPercentPerSale when the net sale total is provided.
-    const check = canRedeemPoints(customer?.loyaltyPoints ?? 0, want, saleTotal, loyaltyCfg);
+    // Expired bucket stock is not spendable (LOY-07): bound the redemption by
+    // the LIVE bucket balance, not the cached headline. No buckets = legacy
+    // headline (nothing dated to contradict it).
+    const redeemable = redeemablePointBalance(
+      customer?.pointBuckets,
+      customer?.loyaltyPoints ?? 0,
+    );
+    const check = canRedeemPoints(redeemable, want, saleTotal, loyaltyCfg);
     if (!customer || !check.allowed) {
       return { success: false, reason: !customer ? 'CUSTOMER_NOT_FOUND' : check.reason };
     }
 
     const { creditAmount } = convertPointsToCredit(want, loyaltyCfg);
-    const newPoints = customer.loyaltyPoints - want;
+    // Converge the headline on the live stock: a successful redemption also
+    // drops points that expired, so the dead total cannot linger forever.
+    const newPoints = redeemable - want;
     const newCredit = (customer.storeCredit || 0) + creditAmount;
 
     // Keep FIFO buckets in sync with the headline balance (the checkout sale

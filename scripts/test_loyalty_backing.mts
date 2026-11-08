@@ -12,6 +12,9 @@
 import {
   healUnbackedHeadline,
   splitCreditRedemption,
+  redeemablePointBalance,
+  depleteFifoPointBuckets,
+  isPointBucketExpired,
 } from '../src/utils/loyaltyEngine.ts';
 
 let passed = 0;
@@ -123,6 +126,54 @@ check('zero/negative inputs are clamped (never negative points)', () => {
   const s = splitCreditRedemption(-50, -10, 10);
   eq(s.pointsToRedeem, 0, 'no points');
   eq(s.pointsBackedRemaining, 0, 'no negative marker');
+});
+
+// ── LOY-07: expired buckets are dead stock ──────────────────────────────────
+const NOW_MS = new Date(NOW).getTime();
+const dated = (id: string, remaining: number, expiresAt: string | null) => ({
+  ...bucket(id, remaining),
+  expiresAt,
+});
+
+check('an expired bucket is not redeemable even though the headline still shows it', () => {
+  const expired = dated('B-OLD', 100, '2025-02-05T00:00:00.000Z');
+  eq(redeemablePointBalance([expired], 100, NOW_MS), 0, 'nothing spendable');
+  eq(redeemablePointBalance([expired], 100), 0, 'same verdict on the real clock');
+});
+
+check('live stock is spendable and clamped by the headline', () => {
+  const buckets = [dated('B-LIVE', 60, '2027-01-01T00:00:00.000Z'), dated('B-OLD', 40, '2025-02-05T00:00:00.000Z')];
+  eq(redeemablePointBalance(buckets, 100, NOW_MS), 60, 'only the live bucket');
+  eq(redeemablePointBalance(buckets, 25, NOW_MS), 25, 'headline is the lower bound');
+});
+
+check('a customer with no buckets keeps the legacy headline', () => {
+  eq(redeemablePointBalance([], 120, NOW_MS), 120, 'legacy headline');
+  eq(redeemablePointBalance(undefined, 120, NOW_MS), 120, 'missing array');
+});
+
+check('a corrupt expiry fails closed (unparsable = expired)', () => {
+  const corrupt = dated('B-BAD', 90, 'not-a-date');
+  eq(isPointBucketExpired(corrupt, NOW_MS), true, 'corrupt is expired');
+  eq(redeemablePointBalance([corrupt], 90, NOW_MS), 0, 'corrupt stock is not spendable');
+});
+
+check('FIFO depletion never consumes an expired bucket', () => {
+  const buckets = [dated('B-OLD', 100, '2025-02-05T00:00:00.000Z'), dated('B-LIVE', 40, '2027-01-01T00:00:00.000Z')];
+  const r = depleteFifoPointBuckets(buckets, 50, NOW_MS);
+  eq(r.consumedPoints, 40, 'only live points consumed');
+  eq(r.remainingPointsToRedeem, 10, 'shortfall is reported, not invented');
+  const old = r.updatedBuckets.find((b) => b.id === 'B-OLD');
+  const live = r.updatedBuckets.find((b) => b.id === 'B-LIVE');
+  eq(old?.remainingPoints, 100, 'expired bucket untouched');
+  eq(live?.remainingPoints, 0, 'live bucket drained');
+});
+
+check('FIFO depletion still consumes lifetime and far-future buckets', () => {
+  const buckets = [dated('B-LIFE', 30, null), dated('B-FUTURE', 30, '2027-01-01T00:00:00.000Z')];
+  const r = depleteFifoPointBuckets(buckets, 40, NOW_MS);
+  eq(r.consumedPoints, 40, 'both are live');
+  eq(r.remainingPointsToRedeem, 0, 'fully covered');
 });
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

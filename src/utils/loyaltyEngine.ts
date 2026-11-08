@@ -646,12 +646,66 @@ export const calculateNetPaidEarnedPoints = (
 };
 
 /**
+ * Is a dated bucket past its expiry?
+ *
+ * `null`/absent = lifetime (VIP tiers), never expired. A present-but-unparsable
+ * date is treated as EXPIRED: a corrupt record must not be spendable (the repo
+ * rule is fail closed, unknown states deny). Points are not money, but silently
+ * honouring a broken expiry would let dead stock redeem.
+ */
+export const isPointBucketExpired = (
+  bucket: Pick<LoyaltyPointBucket, 'expiresAt'>,
+  now: number = Date.now()
+): boolean => {
+  const raw = bucket?.expiresAt;
+  if (raw === null || raw === undefined || raw === '') return false;
+  const at = new Date(raw).getTime();
+  if (!Number.isFinite(at)) return true;
+  return at <= now;
+};
+
+/**
+ * Points a customer can actually spend right now.
+ *
+ * A cached headline may overstate the spendable balance: when a bucket expires
+ * the headline is not rewritten (the customer keeps the historical total), so
+ * redemption must be bounded by LIVE bucket stock. Customers with no buckets
+ * (legacy rows before G-07 healing) keep their headline — there is nothing
+ * dated to contradict it. LOY-07: 100 points in a bucket expired 2025-02-05
+ * were still convertible to 500 DA of Avoir.
+ */
+export const redeemablePointBalance = (
+  buckets: LoyaltyPointBucket[] | undefined | null,
+  headlinePoints: number,
+  now: number = Date.now()
+): number => {
+  const headline = Math.max(0, Math.floor(isNaN(headlinePoints) ? 0 : Number(headlinePoints)));
+  if (!buckets || buckets.length === 0) return headline;
+  let live = 0;
+  for (const b of buckets) {
+    if (!b) continue;
+    if (b.isFullyConsumed) continue;
+    const remaining = Math.max(0, Math.floor(Number(b.remainingPoints) || 0));
+    if (remaining <= 0) continue;
+    if (isPointBucketExpired(b, now)) continue;
+    live += remaining;
+  }
+  return Math.min(headline, live);
+};
+
+/**
  * ⏳ FIFO POINT BUCKET DEPLETION ENGINE
  * Consumes the oldest expiring points first during credit redemptions.
+ *
+ * Expired buckets are DEAD STOCK: they are skipped (left untouched) and never
+ * fund a redemption. Without that, an expired bucket listed first in FIFO order
+ * absorbed the deduction and the caller's "consumed" count looked correct while
+ * the customer was spending points they no longer owned.
  */
 export const depleteFifoPointBuckets = (
   buckets: LoyaltyPointBucket[],
-  pointsToRedeem: number
+  pointsToRedeem: number,
+  now: number = Date.now()
 ): {
   updatedBuckets: LoyaltyPointBucket[];
   consumedPoints: number;
@@ -674,6 +728,9 @@ export const depleteFifoPointBuckets = (
 
   const updated = sorted.map((b) => {
     if (b.isFullyConsumed || b.remainingPoints <= 0 || needed <= 0) {
+      return b;
+    }
+    if (isPointBucketExpired(b, now)) {
       return b;
     }
     const deduct = Math.min(b.remainingPoints, needed);

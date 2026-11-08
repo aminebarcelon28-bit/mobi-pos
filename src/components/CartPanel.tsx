@@ -4,7 +4,7 @@ import { usePosStore } from '../store/usePosStore';
 import { formatDZD } from '../types/pos';
 import type { PricingTier } from '../types/pos';
 import { useToast } from './ui/Toast';
-import { canRedeemPoints, normalizeLoyaltyConfig, isEarnAllowed, isRedeemAllowed, calculateMaxAllowedCredit } from '../utils/loyaltyEngine';
+import { canRedeemPoints, normalizeLoyaltyConfig, isEarnAllowed, isRedeemAllowed, calculateMaxAllowedCredit, redeemablePointBalance } from '../utils/loyaltyEngine';
 import { soundEngine } from '../utils/audioFeedback';
 import { resolveBaseUnitPrice, getVolumeBreakNudge } from '../utils/pricingEngine';
 import { computeCartTotals, computeTradeInSettlement } from '../utils/receiptMath';
@@ -321,14 +321,19 @@ export const CartPanel: React.FC = () => {
       voucherCreditApplied,
     });
     const saleTotalForCap = Math.max(0, liveTotals.subtotalAfterDiscount - voucherCreditApplied);
-    const check = canRedeemPoints(currentCustomer.loyaltyPoints ?? 0, pointConvertPreset, saleTotalForCap, loyaltyCfg);
+    // Live balance only: an expired bucket cannot fund a conversion (LOY-07).
+    const redeemablePts = redeemablePointBalance(
+      currentCustomer.pointBuckets,
+      currentCustomer.loyaltyPoints ?? 0,
+    );
+    const check = canRedeemPoints(redeemablePts, pointConvertPreset, saleTotalForCap, loyaltyCfg);
     if (!check.allowed) {
       soundEngine.playError?.();
       const reasonMsg =
         check.reason === 'BELOW_MINIMUM'
-          ? `Conversion minimale : ${pointConvertPreset} pts requis (solde : ${currentCustomer.loyaltyPoints ?? 0} pts).`
+          ? `Conversion minimale : ${pointConvertPreset} pts requis (solde : ${redeemablePts} pts).`
           : check.reason === 'INSUFFICIENT_POINTS'
-          ? `Solde insuffisant : ${currentCustomer.loyaltyPoints ?? 0} pts disponibles.`
+          ? `Solde insuffisant : ${redeemablePts} pts disponibles.`
           : check.reason === 'EXCEEDS_SALE_PERCENT'
           ? `Plafond de conversion dépassé — maximum ${check.maxRedeemablePoints ?? 0} pts sur ce panier.`
           : `Conversion impossible (${check.reason || 'erreur'}).`;

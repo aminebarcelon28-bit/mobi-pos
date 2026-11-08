@@ -11,7 +11,7 @@ import {
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD, formatDateTime } from '../../types/pos';
 import type { Customer, PricingTier, SaleTransaction, PaymentMethodType, RepairOrder, TradeInItem, CreditVoucher, CustomerDebtEntry } from '../../types/pos';
-import { calculateNextTierProgress, calculateCustomerTier, normalizeLoyaltyConfig, STORE_CREDIT_PIN_THRESHOLD_DZD, convertPointsToCredit } from '../../utils/loyaltyEngine';
+import { calculateNextTierProgress, calculateCustomerTier, normalizeLoyaltyConfig, STORE_CREDIT_PIN_THRESHOLD_DZD, convertPointsToCredit, redeemablePointBalance } from '../../utils/loyaltyEngine';
 import { normalizeAlgerianPhone, openWhatsApp } from '../../utils/phoneUtils';
 import { toLegacyReal, dinarsToMinor } from '../../utils/money';
 import { MoneyInput } from '../ui/MoneyInput';
@@ -2410,7 +2410,12 @@ export const CustomersModal: React.FC = () => {
 
         {/* ═══ Modal: Convertir Points en Avoir ═══ */}
         {redeemModalOpen && activeProfile && (() => {
-          const maxPts = activeProfile.loyaltyPoints || 0;
+          // Expired bucket stock is not convertible (LOY-07): show and bound
+          // by the live balance, not the historical headline.
+          const maxPts = redeemablePointBalance(
+            activeProfile.pointBuckets,
+            activeProfile.loyaltyPoints || 0,
+          );
           const loyaltyCfg = normalizeLoyaltyConfig(receiptSettings?.loyaltyConfig);
           const previewCredit = convertPointsToCredit(redeemPoints || 0, loyaltyCfg).creditAmount;
           return createPortal(
