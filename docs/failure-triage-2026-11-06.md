@@ -629,3 +629,56 @@ Next stability work is interaction hardening, not product: bind
 `checkout-button`/`cart-clear` through the guarded page click, and make
 `refundSearch` wait for its input to mount before failing. Then two clean
 sweeps.
+
+## REF-17 / SEC-06 — narrowed to one native step-up defect (E-0261)
+
+Both rows surface the same two strings, and they are the same code path.
+
+**Measured.** `30-ref-refunds` REF-17 isolated (`ref17-diag-2/4/5`): eight
+consecutive wrong-PIN submits, each one refused with the "incorrect" surface
+(`refund_diag` records `gate:pin-invalid locked:false` every time), and
+`localStorage.mobipos_pin_lockout_v1` **stays null** — the TS pacing mirror is
+never written. No "Verrouillé" surface appears on the 6th/7th/8th attempt.
+`50-sec-authorization` SEC-06 sees the sibling branch: the same gate answers
+"Vérification indisponible — réessayez" (the `unavailable` arm) instead of a
+PIN verdict.
+
+**What the code says.** `RefundModal` calls `verifyManagerGate(pin)`
+(`utils/pinGate.ts:168`) → `verifyNative('manager', …)` (`:109`), which:
+
+- consults `checkPinLockout()` first (`:117`),
+- records `recordPinFailure()` only on `res.ok === false` (`:143`),
+- returns `unavailable` **without recording** when `pinVerify` rejects (`:149`).
+
+The audit export gate (`auditGate.ts:154`) has the same shape and maps
+`reason === 'unavailable'` to the "Vérification indisponible" message
+(`auditExport.ts:1141`).
+
+**Therefore** one of two things is true, and both are product defects:
+
+1. `pin_verify` is rejecting for `userId: 'manager'` in this build (a role /
+   roster lookup that the E2E admin roster does not satisfy), so the gate takes
+   the `unavailable` arm: no counter, no lockout, an "incorrect" label on a
+   call that never tested the PIN. That is unlimited manager guessing on the
+   refund gate *and* the export gate.
+2. Or the native reply is a plain denial that never reaches
+   `recordPinFailure` because the promise rejects instead of resolving
+   `{ok:false}` — same consequence.
+
+**Why the case now fails.** REF-17 was written against the TS mirror
+(`failedAttempts`), which this path no longer writes, so it counted zero
+"recorded" failures and looked like every click was dropped. The rewritten
+counter-based version was **reverted**: it asserted a lockout the product does
+not currently arm, and a spec must not invent behaviour the boundary lacks.
+
+**The fix belongs natively**: `pin_verify` must resolve a verdict (denied /
+locked / mustRotate) for `userId: 'manager'` on a roster that has no literal
+`manager` row (map it to the acting admin, as the lock screen already does), and
+a rejection must be a transport failure *after* the attempt was counted. Until
+that lands, REF-17 and SEC-06 stay red with their assertions intact — this is a
+product decision, not a fixture tweak.
+
+**Observability added** (`utils/auditGate.ts`, no behaviour change): the
+`unavailable` arm now logs `[auditGate] pin_verify transport failure (gate=…,
+user=…)` with the native error, so the next run names the rejection instead of
+only reporting "unavailable".

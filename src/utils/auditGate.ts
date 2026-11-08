@@ -184,10 +184,17 @@ export async function verifyManagerStepUp(
         return { ok: false, locked: false, lockedRemainingMs: 0, mustRotate: false, weaker: false, reason: 'denied' };
       }
       return { ok: true, locked: false, lockedRemainingMs: 0, mustRotate: res.mustRotate, weaker: false };
-    } catch {
+    } catch (err) {
       // Transport failure under Tauri: fail closed. Never fall back to
       // local verification here — that would bypass the native lockout
       // exactly when something is wrong (same rule as LockScreenOverlay).
+      // The reason is logged so a failing gate is attributable: "unavailable"
+      // alone hid a native refusal (REF-17/SEC-06 both reported it instead of
+      // a PIN verdict).
+      console.error(
+        `[auditGate] pin_verify transport failure (gate=${gateName}, user=${MANAGER_USER_ID}):`,
+        err,
+      );
       return { ok: false, locked: false, lockedRemainingMs: 0, mustRotate: false, weaker: false, reason: 'unavailable' };
     }
   }
