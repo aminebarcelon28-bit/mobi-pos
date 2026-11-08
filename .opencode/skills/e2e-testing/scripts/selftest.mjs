@@ -628,9 +628,11 @@ function harnessTests() {
       'G-01 no longer subtracts creditLegs from the tender sum',
     );
     check(
-      'harness: G-03 counts tender-leg credits (explicit stamps OR legs, never the sum)',
-      /Math\.max\(\s*explicitCovered\s*,\s*creditLegsOf\(j\)\s*\)/.test(inv),
-      'G-03 no longer reads creditLegsOf',
+      'harness: G-03 reconciles each credit source separately (voucher + per-method max)',
+      /num\(j\.voucherCreditApplied \?\? 0\) \+/.test(inv) &&
+        /Math\.max\(num\(j\.storeCreditApplied \?\? 0\),\s*legs\.avoir\)/.test(inv) &&
+        /Math\.max\(num\(j\.tradeInCreditApplied \?\? 0\),\s*legs\.reprise\)/.test(inv),
+      'G-03 no longer sums distinct credit sources (LOY-14: 100 voucher + 100 Avoir read as 100)',
     );
     const legLine = (inv.match(/const CREDIT_TENDER_METHODS = \[([^\]]*)\]/) || [])[1] || '';
     check(
