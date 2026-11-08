@@ -147,6 +147,11 @@ export const CustomerPickerSheet: React.FC<CustomerPickerSheetProps> = ({
                       <span className="text-[10px] text-pos-muted font-mono">
                         {c.phone ? <Bdi mono>{c.phone}</Bdi> : t.checkout.noPhoneNumber}
                       </span>
+                      {(c.loyaltyPoints || 0) > 0 && (
+                        <span className="text-[10px] text-amber-600 dark:text-amber-400 font-bold block">
+                          ★ {Number(c.loyaltyPoints).toLocaleString('fr-DZ')} pts fidélité
+                        </span>
+                      )}
                     </div>
                     {currentDebt > 0 ? (
                       <span
