@@ -438,7 +438,7 @@ async function makeCreditSale(title: string, qty: number, customerName: string):
     })) as string,
   );
   console.log(`[credit-sale] confirm label: "${confirmLabel}"`);
-  await clickControl('pay-confirm');
+  await (await $(tid('pay-confirm'))).click();
   await browser.waitUntil(async () => !(await payDialogVisible()), {
     timeout: 45000,
     timeoutMsg: 'pay dialog did not close after credit confirm',
@@ -2066,7 +2066,7 @@ describe('CRT - cart, scan, serial and discount edges (batch 14)', () => {
     })) as boolean;
     if (!picked) throw new Error('CIB / Carte tab not found in pay dialog');
     await browser.pause(400);
-    await clickControl('pay-confirm');
+    await (await $(tid('pay-confirm'))).click();
     await browser.waitUntil(async () => !(await $(tid('pay-dialog')).isDisplayed().catch(() => false)), {
       timeout: 45000,
       timeoutMsg: 'pay dialog did not close (CIB)',
@@ -2640,7 +2640,7 @@ describe('CRT - cart, scan, serial and discount edges (batch 14)', () => {
     })) as boolean;
     if (!picked) throw new Error('Chèque tab not found in pay dialog');
     await browser.pause(400);
-    await clickControl('pay-confirm');
+    await (await $(tid('pay-confirm'))).click();
     await browser.waitUntil(async () => !(await $(tid('pay-dialog')).isDisplayed().catch(() => false)), {
       timeout: 45000,
       timeoutMsg: 'pay dialog did not close (Chèque)',
@@ -3817,8 +3817,8 @@ describe('CRT - cart, scan, serial and discount edges (batch 14)', () => {
       el.dispatchEvent(new Event('input', { bubbles: true }));
     }, imei as unknown as HTMLInputElement);
     await browser.pause(200);
-    await clickControl('pay-exact');
-    await clickControl('pay-confirm');
+    await (await $(tid('pay-exact'))).click();
+    await (await $(tid('pay-confirm'))).click();
     await browser.pause(1500);
     const stillOpen = await payDialogVisible();
     const after = txCount();
@@ -4115,8 +4115,8 @@ describe('CRT - cart, scan, serial and discount edges (batch 14)', () => {
     const blockedBefore = txCount();
     await clickControl('checkout-button');
     await (await $(tid('pay-dialog'))).waitForDisplayed({ timeout: 20000 });
-    await clickControl('pay-exact');
-    await clickControl('pay-confirm');
+    await (await $(tid('pay-exact'))).click();
+    await (await $(tid('pay-confirm'))).click();
     await browser.pause(1800);
     const payOpen = await payDialogVisible();
     const stockBlocked = /Stock insuffisant|stock insuffisant|quantité disponible/i.test(await bodyTail());

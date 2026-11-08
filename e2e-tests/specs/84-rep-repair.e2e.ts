@@ -344,8 +344,8 @@ describe('REP - repair / SAV matrix', () => {
     const payBody = await bodyText();
     const split = /répartition|split|paiement mixte espèces.*carte|espèces.*carte.*mixte/i.test(payBody);
     console.log(`[REP-07] payment modal splitControl=${split} excerpt=${payBody.slice(0, 500).replace(/\n/g, ' | ')}`);
-    await clickControl('pay-exact');
-    await clickControl('pay-confirm');
+    await (await $(tid('pay-exact'))).click();
+    await (await $(tid('pay-confirm'))).click();
     await browser.waitUntil(
       async () => !(await $(tid('pay-dialog')).isDisplayed().catch(() => false)),
       { timeout: 45000, timeoutMsg: 'pay dialog did not close' },

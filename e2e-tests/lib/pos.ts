@@ -1031,7 +1031,7 @@ export async function payTenderedFlow(tenderedDa: number | string): Promise<void
   await (await $(tid('pay-dialog'))).waitForDisplayed({ timeout: 20000 });
   await typeReal(await $(tid('tendered-input')), String(tenderedDa), false);
   await browser.pause(300);
-  await clickControl('pay-confirm');
+  await (await $(tid('pay-confirm'))).click();
   await browser.waitUntil(
     async () => !(await $(tid('pay-dialog')).isDisplayed().catch(() => false)),
     { timeout: 45000, timeoutMsg: 'pay dialog did not close' },

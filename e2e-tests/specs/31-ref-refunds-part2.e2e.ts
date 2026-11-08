@@ -432,7 +432,7 @@ async function makeCreditSale(title: string, qty: number, customerName: string):
     })) as string,
   );
   console.log(`[credit-sale] confirm label: "${confirmLabel}"`);
-  await clickControl('pay-confirm');
+  await (await $(tid('pay-confirm'))).click();
   await browser.waitUntil(async () => !(await payDialogVisible()), {
     timeout: 45000,
     timeoutMsg: 'pay dialog did not close after credit confirm',
@@ -1586,8 +1586,8 @@ describe('REF — refunds, returns & avoirs (batch 4 / part 2)', () => {
     expect(loyaltyCap).toBe(100); // seeded scenario guard: min(400, 450, 100)
     expect(payNet).toBe(BigInt(payable - loyaltyCap) * 100n);
     const before = txCount();
-    await clickControl('pay-exact');
-    await clickControl('pay-confirm');
+    await (await $(tid('pay-exact'))).click();
+    await (await $(tid('pay-confirm'))).click();
     await browser.waitUntil(async () => !(await payDialogVisible()), {
       timeout: 45000,
       timeoutMsg: 'pay dialog did not close',

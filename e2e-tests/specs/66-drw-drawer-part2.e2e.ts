@@ -436,7 +436,7 @@ async function makeCreditSale(title: string, qty: number, customerName: string):
     })) as string,
   );
   console.log(`[credit-sale] confirm label: "${confirmLabel}"`);
-  await clickControl('pay-confirm');
+  await (await $(tid('pay-confirm'))).click();
   await browser.waitUntil(async () => !(await payDialogVisible()), {
     timeout: 45000,
     timeoutMsg: 'pay dialog did not close after credit confirm',
@@ -2056,7 +2056,7 @@ describe('DRW - cash drawer state, part 2 (batch 12 / DRW-16..30)', () => {
     })) as boolean;
     if (!picked) throw new Error('CIB / Carte tab not found in pay dialog');
     await browser.pause(400);
-    await clickControl('pay-confirm');
+    await (await $(tid('pay-confirm'))).click();
     await browser.waitUntil(async () => !(await $(tid('pay-dialog')).isDisplayed().catch(() => false)), {
       timeout: 45000,
       timeoutMsg: 'pay dialog did not close (CIB)',
@@ -2630,7 +2630,7 @@ describe('DRW - cash drawer state, part 2 (batch 12 / DRW-16..30)', () => {
     })) as boolean;
     if (!picked) throw new Error('Chèque tab not found in pay dialog');
     await browser.pause(400);
-    await clickControl('pay-confirm');
+    await (await $(tid('pay-confirm'))).click();
     await browser.waitUntil(async () => !(await $(tid('pay-dialog')).isDisplayed().catch(() => false)), {
       timeout: 45000,
       timeoutMsg: 'pay dialog did not close (Chèque)',

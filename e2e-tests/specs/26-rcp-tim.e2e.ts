@@ -1220,7 +1220,7 @@ describe('RCP/TIM — receipts, printing and clock edges (batch 26)', () => {
       const b = document.querySelector('[data-testid="pay-confirm"]') as HTMLElement | null;
       return (b?.innerText ?? '').replace(/\s+/g, ' ').trim();
     });
-    await clickControl('pay-confirm');
+    await (await $(tid('pay-confirm'))).click();
     await browser.waitUntil(
       async () => !(await $(tid('pay-dialog')).isDisplayed().catch(() => false)),
       { timeout: 45000, timeoutMsg: 'card pay dialog did not close' },

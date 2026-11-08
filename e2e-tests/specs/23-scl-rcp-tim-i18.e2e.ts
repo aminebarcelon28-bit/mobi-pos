@@ -473,7 +473,7 @@ describe('SCL/RCP/TIM/I18 — batch 23 functional', () => {
     console.log(`[I18-05] input=${JSON.stringify(raw)} parsedMinor=${parsed} change=${JSON.stringify(changeText)}`);
     expect(parsed).toBe(500000n);
     expect(displayedToMinor(changeText)).toBe(400000n);
-    await clickControl('pay-confirm');
+    await (await $(tid('pay-confirm'))).click();
     await browser.waitUntil(
       async () => !(await $(tid('pay-dialog')).isDisplayed().catch(() => false)),
       { timeout: 45000, timeoutMsg: 'pay dialog did not close' },

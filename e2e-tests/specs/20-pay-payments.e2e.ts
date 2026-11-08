@@ -630,7 +630,7 @@ describe('PAY — payment tenders, split & credit (batch 2)', () => {
     const before = txCount();
     await openPay();
     await typeTender('100');
-    await clickControl('pay-confirm');
+    await (await $(tid('pay-confirm'))).click();
     await browser.pause(500);
     const underRefused = {
       dialogOpen: await dialogVisible(),
@@ -640,10 +640,10 @@ describe('PAY — payment tenders, split & credit (batch 2)', () => {
     };
     console.log('[PAY-01] under-cash refusal evidence:', jstr(underRefused));
     // (b) EXACT — change 0.
-    await clickControl('pay-exact');
+    await (await $(tid('pay-exact'))).click();
     await browser.pause(200);
     const exactChangeMinor = await payChangeMinor();
-    await clickControl('pay-confirm');
+    await (await $(tid('pay-confirm'))).click();
     await waitPayClosed();
     await waitSaleLanded(before);
     const exactTx = newestTx() ?? {};
@@ -654,7 +654,7 @@ describe('PAY — payment tenders, split & credit (batch 2)', () => {
     await openPay();
     await typeTender('1000');
     const overChangeMinor = await payChangeMinor();
-    await clickControl('pay-confirm');
+    await (await $(tid('pay-confirm'))).click();
     await waitPayClosed();
     await waitSaleLanded(before2);
     const overTx = newestTx() ?? {};
@@ -691,7 +691,7 @@ describe('PAY — payment tenders, split & credit (batch 2)', () => {
     await setTenderRaw('٥٠٠');
     const arabicParsed = await tenderedMinor();
     const arabicChange = await payChangeMinor();
-    await clickControl('pay-confirm');
+    await (await $(tid('pay-confirm'))).click();
     await waitPayClosed();
     await waitSaleLanded(before);
     const arabicTx = newestTx() ?? {};
@@ -701,7 +701,7 @@ describe('PAY — payment tenders, split & credit (batch 2)', () => {
     await openPay();
     await typeTender('500,5');
     const decimalChange = await payChangeMinor();
-    await clickControl('pay-confirm');
+    await (await $(tid('pay-confirm'))).click();
     await waitPayClosed();
     await waitSaleLanded(before2);
     const decimalTx = newestTx() ?? {};
@@ -711,7 +711,7 @@ describe('PAY — payment tenders, split & credit (batch 2)', () => {
     await openPay();
     await typeTender('1000000000');
     const largeChange = await payChangeMinor();
-    await clickControl('pay-confirm');
+    await (await $(tid('pay-confirm'))).click();
     // The app now guards an implausible tender with the "Montant encaissé
     // inhabituel" alertdialog (`pay-fatfinger`, PaymentModal.tsx:609-666); it
     // shows the change due and requires an explicit second confirmation. A
@@ -781,7 +781,7 @@ describe('PAY — payment tenders, split & credit (batch 2)', () => {
     await openPay();
     await applyAllCredit(); // min(remaining 250, 250 cap) = 250
     await selectMethod('CIB / Carte');
-    await clickControl('pay-confirm');
+    await (await $(tid('pay-confirm'))).click();
     await waitPayClosed();
     await waitSaleLanded(before3);
     const mix3 = newestTxTenders();
@@ -829,7 +829,7 @@ describe('PAY — payment tenders, split & credit (batch 2)', () => {
         break;
       }
     }
-    await clickControl('pay-confirm');
+    await (await $(tid('pay-confirm'))).click();
     await waitPayClosed();
     await waitSaleLanded(before);
     const tx = newestTx() ?? {};
@@ -856,7 +856,7 @@ describe('PAY — payment tenders, split & credit (batch 2)', () => {
     await addP500();
     const before = txCount();
     await openPay();
-    await clickControl('pay-exact');
+    await (await $(tid('pay-exact'))).click();
     const doubleClicked = (await browser.execute(() => {
       const btn = document.querySelector('[data-testid="pay-confirm"]') as HTMLButtonElement | null;
       if (!btn) return false;
@@ -873,7 +873,7 @@ describe('PAY — payment tenders, split & credit (batch 2)', () => {
     await addP500();
     const before2 = txCount();
     await openPay();
-    await clickControl('pay-exact');
+    await (await $(tid('pay-exact'))).click();
     const tendered = await $(tid('tendered-input'));
     await tendered.click();
     await browser.keys(['Enter']);
@@ -903,7 +903,7 @@ describe('PAY — payment tenders, split & credit (batch 2)', () => {
     await selectMethod('CIB / Carte');
     const ref = await findRef('PAY-08', 'TPE-0042918');
     await typeReal(ref, 'OFF-777', false);
-    await clickControl('pay-confirm');
+    await (await $(tid('pay-confirm'))).click();
     await waitPayClosed();
     await waitSaleLanded(before);
     const legs = newestTxTenders();
@@ -935,7 +935,7 @@ describe('PAY — payment tenders, split & credit (batch 2)', () => {
     await selectCustomer('PAY Limit');
     await openPay();
     await selectMethod('Crédit');
-    await clickControl('pay-confirm');
+    await (await $(tid('pay-confirm'))).click();
     await waitPayClosed();
     await waitSaleLanded(before);
     const legsAt = newestTxTenders();
@@ -949,7 +949,7 @@ describe('PAY — payment tenders, split & credit (batch 2)', () => {
     await addP500();
     await openPay();
     await selectMethod('Crédit');
-    await clickControl('pay-confirm');
+    await (await $(tid('pay-confirm'))).click();
     await browser.pause(700);
     const overRefused = {
       dialogOpen: await dialogVisible(),
@@ -1016,8 +1016,8 @@ describe('PAY — payment tenders, split & credit (batch 2)', () => {
     const netAfterRemoval = await payNetMinor();
     // (d) re-apply capped atlas and settle: avoir 250 + cash 250.
     await applyAllCredit();
-    await clickControl('pay-exact');
-    await clickControl('pay-confirm');
+    await (await $(tid('pay-exact'))).click();
+    await (await $(tid('pay-confirm'))).click();
     await waitPayClosed();
     await waitSaleLanded(before);
     const legsAvoir = newestTxTenders();
@@ -1031,8 +1031,8 @@ describe('PAY — payment tenders, split & credit (batch 2)', () => {
     await openPay();
     const voucherErrOk = await applyVoucher('AV-PAY11OK');
     const netWithVoucher = await payNetMinor();
-    await clickControl('pay-exact');
-    await clickControl('pay-confirm');
+    await (await $(tid('pay-exact'))).click();
+    await (await $(tid('pay-confirm'))).click();
     await waitPayClosed();
     await waitSaleLanded(before2);
     const voucherOkRow = await waitFor(
@@ -1090,8 +1090,8 @@ describe('PAY — payment tenders, split & credit (batch 2)', () => {
     const beforeLeak = txCount();
     await openPay();
     const leakReopenedNet = await payNetMinor();
-    await clickControl('pay-exact');
-    await clickControl('pay-confirm');
+    await (await $(tid('pay-exact'))).click();
+    await (await $(tid('pay-confirm'))).click();
     let leakDialogClosed = false;
     try {
       await waitPayClosed(12000);
@@ -1165,7 +1165,7 @@ describe('PAY — payment tenders, split & credit (batch 2)', () => {
     await selectMethod('Chèque');
     const ref = await findRef('PAY-12', 'CHQ-984210');
     await typeReal(ref, 'CHQ-984210/BNA', false);
-    await clickControl('pay-confirm');
+    await (await $(tid('pay-confirm'))).click();
     await waitPayClosed();
     await waitSaleLanded(before);
     const tx = newestTx() ?? {};
@@ -1190,7 +1190,7 @@ describe('PAY — payment tenders, split & credit (batch 2)', () => {
     await selectMethod('CIB / Carte');
     const ref = await findRef('PAY-16', 'TPE-0042918');
     await typeReal(ref, 'TPE-0042918', false);
-    await clickControl('pay-confirm');
+    await (await $(tid('pay-confirm'))).click();
     await waitPayClosed();
     await waitSaleLanded(before);
     const legs = newestTxTenders();
@@ -1416,7 +1416,7 @@ describe('PAY — payment tenders, split & credit (batch 2)', () => {
     // landed here) — the case is about THIS attempt being side-effect-free.
     const preAttempt = await readCounters();
     await typeTender('100');
-    await clickControl('pay-confirm');
+    await (await $(tid('pay-confirm'))).click();
     await browser.pause(1200);
     const afterFail = await readCounters();
     await closePay();
@@ -1424,8 +1424,8 @@ describe('PAY — payment tenders, split & credit (batch 2)', () => {
     // (b) SUCCESSFUL payment — the receipt may print only now.
     await addP500();
     await openPay();
-    await clickControl('pay-exact');
-    await clickControl('pay-confirm');
+    await (await $(tid('pay-exact'))).click();
+    await (await $(tid('pay-confirm'))).click();
     await waitPayClosed();
     await waitSaleLanded(before);
     await browser.pause(1200);
@@ -1511,8 +1511,8 @@ describe('PAY — payment tenders, split & credit (batch 2)', () => {
     // Re-open: method resets to Espèces, no stale reference leaks.
     await openPay();
     const cashModeRestored = await $(tid('pay-exact')).isDisplayed().catch(() => false);
-    await clickControl('pay-exact');
-    await clickControl('pay-confirm');
+    await (await $(tid('pay-exact'))).click();
+    await (await $(tid('pay-confirm'))).click();
     await waitPayClosed();
     await waitSaleLanded(before);
     const legs = newestTxTenders();
@@ -1561,7 +1561,7 @@ describe('PAY — payment tenders, split & credit (batch 2)', () => {
     const before = txCount();
     await clickQuickBill('500');
     const changePreview = await payChangeMinor();
-    await clickControl('pay-confirm');
+    await (await $(tid('pay-confirm'))).click();
     await waitPayClosed();
     await waitSaleLanded(before);
     const tx = newestTx() ?? {};
@@ -1605,8 +1605,8 @@ describe('PAY — payment tenders, split & credit (batch 2)', () => {
     await addP500();
     const before = txCount();
     await openPay();
-    await clickControl('pay-exact');
-    await clickControl('pay-confirm');
+    await (await $(tid('pay-exact'))).click();
+    await (await $(tid('pay-confirm'))).click();
     await browser.pause(900);
     const refusal = {
       dialogOpen: await dialogVisible(),
@@ -1619,8 +1619,8 @@ describe('PAY — payment tenders, split & credit (batch 2)', () => {
     const before2 = txCount();
     await addP500();
     await openPay();
-    await clickControl('pay-exact');
-    await clickControl('pay-confirm');
+    await (await $(tid('pay-exact'))).click();
+    await (await $(tid('pay-confirm'))).click();
     await waitPayClosed();
     await waitSaleLanded(before2);
     const recoveredSales = txCount() - before2;

@@ -600,7 +600,7 @@ describe('MNY — money, rounding, currency (batch 1)', () => {
     // 5 000 DA`. The floor is on the TENDER, not the ticket — a floor on the
     // total would skip this very 500 DA ticket.
     await tender('50000');
-    await clickControl('pay-confirm');
+    await (await $(tid('pay-confirm'))).click();
     await browser.waitUntil(guardShown, {
       timeout: 15000,
       timeoutMsg: 'no confirmation for a 100× tender — the sale was accepted silently',
@@ -628,7 +628,7 @@ describe('MNY — money, rounding, currency (batch 1)', () => {
 
     // ── Leg 3: the explicit confirm commits the exact numbers ─────────────
     await tender('50000');
-    await clickControl('pay-confirm');
+    await (await $(tid('pay-confirm'))).click();
     await browser.waitUntil(guardShown, {
       timeout: 15000,
       timeoutMsg: 'confirmation did not re-arm on the second attempt',
@@ -652,7 +652,7 @@ describe('MNY — money, rounding, currency (batch 1)', () => {
     await clickControl('checkout-button');
     await (await $(tid('pay-dialog'))).waitForDisplayed({ timeout: 20000 });
     await tender('600');
-    await clickControl('pay-confirm');
+    await (await $(tid('pay-confirm'))).click();
     // ONE click must be enough: if the guard had fired the dialog would still
     // be open and a second confirmation would be required.
     await browser.waitUntil(async () => !(await payOpen()), {
@@ -720,9 +720,9 @@ describe('MNY — money, rounding, currency (batch 1)', () => {
         .catch(() => false);
       if (payOpened) {
         await browser.saveScreenshot('e2e-tests/results/mny-06-pay-dialog.png').catch(() => {});
-        await clickControl('pay-exact').catch(() => {});
+        await (await $(tid('pay-exact'))).click().catch(() => {});
         await browser.pause(300);
-        await clickControl('pay-confirm').catch(() => {});
+        await (await $(tid('pay-confirm'))).click().catch(() => {});
         await browser.waitUntil(
           async () => !(await $(tid('pay-dialog')).isDisplayed().catch(() => false)),
           { timeout: 15000, timeoutMsg: 'pay dialog did not close (huge total)' },
