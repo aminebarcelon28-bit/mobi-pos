@@ -479,12 +479,21 @@ export const PaymentModal: React.FC = () => {
       finalTenders.push({ method: 'Reprise', amount: liveTradeInCredit });
     }
 
-    // Non-cash tenders (Card, BaridiMob, Debt, etc.) cannot exceed the balance due
+    // Non-cash tenders (Card, BaridiMob, Debt, etc.) cannot exceed the balance
+    // due. The bound is the amount due BEFORE the wallet-credit leg: `submitNet`
+    // is already net of the staged Avoir, and that Avoir leg is itself one of
+    // these tenders. Comparing each leg against the post-credit net made a fully
+    // covered basket illegal (100 Avoir + 100 voucher on 200: leg 100 > net 0 →
+    // "monnaie impossible", sale refused, dialog stuck — LOY-14). Cumulative so
+    // a second non-cash leg cannot over-cover either.
+    const nonCashBudget = submitNet + Math.max(0, Math.round(Number(appliedCredit) || 0));
     const nonCashTenders = finalTenders.filter((t) => t.method !== 'Espèces' && t.method !== 'Reprise');
+    let nonCashCovered = 0;
     for (const nct of nonCashTenders) {
-      if (nct.amount > submitNet) {
+      nonCashCovered += nct.amount;
+      if (nonCashCovered > nonCashBudget) {
         showToast(
-          `Règlement ${nct.method} supérieur au montant dû (${formatDZD(nct.amount)} > ${formatDZD(submitNet)}) — monnaie impossible sur paiement électronique.`,
+          `Règlement ${nct.method} supérieur au montant dû (${formatDZD(nonCashCovered)} > ${formatDZD(nonCashBudget)}) — monnaie impossible sur paiement électronique.`,
           'error'
         );
         setIsProcessing(false);

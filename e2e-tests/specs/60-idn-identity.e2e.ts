@@ -715,7 +715,13 @@ async function closeShiftUi(countedDa?: number): Promise<{
   }
   const pinEl = await $(tid('shift-close-pin'));
   if (await pinEl.isDisplayed().catch(() => false)) await typeReal(pinEl, APP_PIN, false);
-  await (await $(tid('shift-close-confirm'))).click();
+  // The confirm control mounts with the reconciliation step; clicking blind
+  // raced the render (IDN-18: "shift-close-confirm not found"). Wait on state.
+  await (await $(tid('shift-close-confirm'))).waitForDisplayed({
+    timeout: 15000,
+    timeoutMsg: 'shift-close-confirm never mounted on the reconciliation step',
+  });
+  await clickControl('shift-close-confirm');
   // Desktop Z: the frozen snapshot view replaces the modal, prints, then
   // auto-dismisses (~1.6 s; ShiftCloseModal.tsx:352-366). No buttons to click.
   const zDialog = await (await $(tid('shift-z-dialog')))
@@ -2936,7 +2942,11 @@ describe('IDN - cashier identity & attribution (batch 11)', () => {
       const pinEl = await $(tid('shift-close-pin'));
       if (await pinEl.isDisplayed().catch(() => false)) await typeReal(pinEl, APP_PIN, false);
     }
-    await (await $(tid('shift-close-confirm'))).click();
+    await (await $(tid('shift-close-confirm'))).waitForDisplayed({
+      timeout: 15000,
+      timeoutMsg: 'shift-close-confirm never mounted on the reconciliation step',
+    });
+    await clickControl('shift-close-confirm');
     if (opts.expectRefusal) {
       await browser.pause(1500);
       const stillOpen = await (await $(tid('shift-close-dialog')).isDisplayed().catch(() => false));

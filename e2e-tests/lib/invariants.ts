@@ -160,17 +160,24 @@ function parseJson(s: unknown): Record<string, unknown> {
  */
 const CREDIT_TENDER_METHODS = ['Avoir Client', 'Reprise'];
 
-function creditLegsOf(j: Record<string, unknown>): number {
+function creditLegsByMethod(j: Record<string, unknown>): { avoir: number; reprise: number } {
   const tenders = Array.isArray(j.tenders) ? (j.tenders as Array<Record<string, unknown>>) : null;
-  if (!tenders) return 0;
-  let sum = 0;
+  const out = { avoir: 0, reprise: 0 };
+  if (!tenders) return out;
   for (const t of tenders) {
     const method = String(t?.method ?? '').trim();
     if (!CREDIT_TENDER_METHODS.includes(method)) continue;
     const amt = num(t?.amount ?? 0);
-    if (Number.isFinite(amt) && amt > 0) sum += amt;
+    if (!Number.isFinite(amt) || amt <= 0) continue;
+    if (method === 'Avoir Client') out.avoir += amt;
+    else out.reprise += amt;
   }
-  return sum;
+  return out;
+}
+
+function creditLegsOf(j: Record<string, unknown>): number {
+  const m = creditLegsByMethod(j);
+  return m.avoir + m.reprise;
 }
 
 function maxRowid(table: string): number {
@@ -469,14 +476,16 @@ export function runInvariantChecks(): CheckOut[] {
     const j = parseJson(t.json_payload);
     // Payment credits (voucher, Avoir Client, reprise) reduce the cash total
     // without living in discount_total; include them or every covered sale
-    // reports a false mismatch. The desktop lane writes them as tender legs
-    // only, so take the larger of the explicit stamps and the legs (never the
-    // sum — a sale that carries both would count the same value twice).
-    const explicitCovered =
+    // reports a false mismatch. A value can appear BOTH as an explicit stamp
+    // and as a tender leg, so each SOURCE is reconciled with max() — but
+    // different sources must be summed. Taking one global max() hid a sale that
+    // carried a 100 voucher AND a 100 Avoir leg on a 400/200 ticket: covered
+    // read 100 instead of 200 and G-03 fired on a correct row (LOY-14).
+    const legs = creditLegsByMethod(j);
+    const covered =
       num(j.voucherCreditApplied ?? 0) +
-      num(j.storeCreditApplied ?? 0) +
-      num(j.tradeInCreditApplied ?? 0);
-    const covered = Math.max(explicitCovered, creditLegsOf(j));
+      Math.max(num(j.storeCreditApplied ?? 0), legs.avoir) +
+      Math.max(num(j.tradeInCreditApplied ?? 0), legs.reprise);
     if (!close(sub - disc - covered, tot, 0.01)) {
       push(
         'G-03',

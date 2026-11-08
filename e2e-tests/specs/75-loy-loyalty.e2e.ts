@@ -4331,9 +4331,12 @@ describe('LOY - loyalty earn, redeem, refund, campaign and adjustment (batch 15)
     const zeroCover = /Panier 100% Couvert|Paiement Avoir \(100%\)|0 DA/i.test(await bodyTail());
     console.log(`[LOY-14] discounted=${discounted} credit=${zero.credit} zeroCover=${zeroCover}`);
     expect(zeroCover).toBe(true);
-    const confirm = await $(tid('pay-confirm'));
-    await confirm.click();
-    await browser.pause(2200);
+    await clickControl('pay-confirm');
+    await browser.waitUntil(
+      async () => !(await $(tid('pay-dialog')).isDisplayed().catch(() => false)),
+      { timeout: 20000, interval: 250, timeoutMsg: 'pay dialog stayed open on a fully covered basket' },
+    );
+    await browser.pause(600);
     const postPay = (await browser.execute(() => ({
       payOpen: Boolean(document.querySelector('[data-testid="pay-dialog"]')),
       toasts: [...document.querySelectorAll('[role="alert"],[role="status"]')]
@@ -4348,9 +4351,24 @@ describe('LOY - loyalty earn, redeem, refund, campaign and adjustment (batch 15)
     if (!sale) throw new Error('LOY-14 zero sale not committed');
     const total = Number(sale.total ?? NaN);
     const tail = await bodyTail();
-    console.log(`[LOY-14] receipt=${sale.receipt_number} total=${total} tail="${tail.slice(-360)}"`);
+    // Ledger pin: the wallet leg must be debited by exactly what the Avoir leg
+    // covered, the voucher must be consumed, and the sale row must be 0 DA.
+    const zeroAfter = loySnap('LOY-ZERO');
+    const voucherAfter = one<Row>(
+      'SELECT remaining_amount, status FROM credit_vouchers WHERE code = ? ORDER BY rowid DESC LIMIT 1',
+      'AV-LOY14',
+    );
+    console.log(
+      `[LOY-14] receipt=${sale.receipt_number} total=${total} ` +
+        `creditBefore=${zero.credit} creditAfter=${zeroAfter.credit} ` +
+        `voucher=${String(voucherAfter?.remaining_amount)}/${String(voucherAfter?.status)} ` +
+        `tail="${tail.slice(-240)}"`,
+    );
     expect(total).toBe(0);
     expect(String(sale.receipt_number || '')).not.toBe('');
+    expect(zeroAfter.credit).toBe(Math.max(0, zero.credit - 100)); // the Avoir leg actually spent
+    expect(Number(voucherAfter?.remaining_amount ?? -1)).toBe(0);
+    expect(String(voucherAfter?.status)).toBe('EXHAUSTED');
   });
 
   it('[LOY-16] a desktop earn is visible with the same balance in the mobile shell customer card', async () => {
