@@ -81,10 +81,12 @@ ndk-context = "0.1.1"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 keyring = { version = "3", features = ["windows-native"] }
-winreg = "0.55"
 
 # Phase 2 trusted time: exact sleep-inclusive OS clocks (no std::time::Instant).
 [target.'cfg(target_os = "windows")'.dependencies]
+# winreg is Windows-only (its crate hard-errors on other OSes) and is used
+# only by the cfg(windows) hardware-identity lane.
+winreg = "0.55"
 windows-sys = { version = "0.59", features = ["Win32_System_SystemInformation", "Win32_Storage_FileSystem", "Win32_System_IO"] }
 
 [target.'cfg(unix)'.dependencies]
