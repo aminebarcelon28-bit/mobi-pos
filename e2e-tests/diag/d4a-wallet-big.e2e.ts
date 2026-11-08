@@ -78,8 +78,8 @@ async function payExactSlow(priceDa: number, ms = 180000): Promise<void> {
   const before = Number(one<{ n: number }>('SELECT COUNT(*) AS n FROM transactions')?.n ?? 0);
   await clickControl('checkout-button');
   await (await $(tid('pay-dialog'))).waitForDisplayed({ timeout: 30000 });
-  await (await $(tid('pay-exact'))).click();
-  await (await $(tid('pay-confirm'))).click();
+  await clickControl('pay-exact');
+  await clickControl('pay-confirm');
   const t0 = Date.now();
   while (Date.now() - t0 < ms) {
     const hit = one<{ n: number }>('SELECT COUNT(*) AS n FROM transactions WHERE COALESCE(is_refund,0)=0 AND total = ?', priceDa);

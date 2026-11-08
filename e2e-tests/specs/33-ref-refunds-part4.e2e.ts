@@ -448,7 +448,7 @@ async function makeCreditSale(title: string, qty: number, customerName: string):
     })) as string,
   );
   console.log(`[credit-sale] confirm label: "${confirmLabel}"`);
-  await (await $(tid('pay-confirm'))).click();
+  await clickControl('pay-confirm');
   await browser.waitUntil(async () => !(await payDialogVisible()), {
     timeout: 45000,
     timeoutMsg: 'pay dialog did not close after credit confirm',
@@ -2183,7 +2183,7 @@ describe('REF — refunds, returns & avoirs (batch 7 / part 4)', () => {
     })) as boolean;
     if (!picked) throw new Error('CIB / Carte tab not found in pay dialog');
     await browser.pause(400);
-    await (await $(tid('pay-confirm'))).click();
+    await clickControl('pay-confirm');
     await browser.waitUntil(async () => !(await $(tid('pay-dialog')).isDisplayed().catch(() => false)), {
       timeout: 45000,
       timeoutMsg: 'pay dialog did not close (CIB)',
@@ -3355,8 +3355,8 @@ describe('REF — refunds, returns & avoirs (batch 7 / part 4)', () => {
     const beforeA = txCount();
     await clickControl('checkout-button');
     await (await $(tid('pay-dialog'))).waitForDisplayed({ timeout: 20000 });
-    await (await $(tid('pay-exact'))).click();
-    await (await $(tid('pay-confirm'))).click();
+    await clickControl('pay-exact');
+    await clickControl('pay-confirm');
     let landedA = false;
     const t0A = Date.now();
     while (Date.now() - t0A < 90000 && !landedA) {

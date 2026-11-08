@@ -782,8 +782,8 @@ describe('MNY — money, rounding, currency (batch 2)', () => {
     console.log(`[MNY-26] pay-net after all credits: ${payNet} (oracle 60000)`);
     expect(payNet).toBe(60000n);
     const before = txCount();
-    await (await $(tid('pay-exact'))).click();
-    await (await $(tid('pay-confirm'))).click();
+    await clickControl('pay-exact');
+    await clickControl('pay-confirm');
     await browser.waitUntil(async () => !(await payDialogVisible()), { timeout: 60000, timeoutMsg: 'pay dialog did not close' });
     await waitSaleLanded(before);
     const sale = newestTxRow();
@@ -819,8 +819,8 @@ describe('MNY — money, rounding, currency (batch 2)', () => {
       const clampNet = displayedToMinor(await (await $(tid('pay-net'))).getText());
       console.log(`[MNY-26] clamp leg pay-net=${clampNet}`);
       expect(clampNet).toBe(0n);
-      await (await $(tid('pay-exact'))).click().catch(() => undefined);
-      await (await $(tid('pay-confirm'))).click();
+      await clickControl('pay-exact').catch(() => undefined);
+      await clickControl('pay-confirm');
       await browser.waitUntil(async () => !(await payDialogVisible()), { timeout: 60000, timeoutMsg: 'clamp pay dialog did not close' });
       await waitSaleLanded(before2);
       const clampSale = newestTxRow();

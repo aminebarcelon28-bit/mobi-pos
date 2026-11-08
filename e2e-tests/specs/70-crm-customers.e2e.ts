@@ -439,7 +439,7 @@ async function makeCreditSale(title: string, qty: number, customerName: string):
     })) as string,
   );
   console.log(`[credit-sale] confirm label: "${confirmLabel}"`);
-  await (await $(tid('pay-confirm'))).click();
+  await clickControl('pay-confirm');
   await browser.waitUntil(async () => !(await payDialogVisible()), {
     timeout: 45000,
     timeoutMsg: 'pay dialog did not close after credit confirm',
@@ -2057,7 +2057,7 @@ describe('CRM - customer directory, phone identity & deletion (batch 13)', () =>
     })) as boolean;
     if (!picked) throw new Error('CIB / Carte tab not found in pay dialog');
     await browser.pause(400);
-    await (await $(tid('pay-confirm'))).click();
+    await clickControl('pay-confirm');
     await browser.waitUntil(async () => !(await $(tid('pay-dialog')).isDisplayed().catch(() => false)), {
       timeout: 45000,
       timeoutMsg: 'pay dialog did not close (CIB)',
@@ -2631,7 +2631,7 @@ describe('CRM - customer directory, phone identity & deletion (batch 13)', () =>
     })) as boolean;
     if (!picked) throw new Error('Chèque tab not found in pay dialog');
     await browser.pause(400);
-    await (await $(tid('pay-confirm'))).click();
+    await clickControl('pay-confirm');
     await browser.waitUntil(async () => !(await $(tid('pay-dialog')).isDisplayed().catch(() => false)), {
       timeout: 45000,
       timeoutMsg: 'pay dialog did not close (Chèque)',
@@ -3908,7 +3908,7 @@ async function crm04CreditCheckoutCurrent(title: string): Promise<void> {
   await (await $(tid('pay-dialog'))).waitForDisplayed({ timeout: 20000 });
   const credit = await crm04ChooseCredit();
   if (credit !== 'clicked') throw new Error('CRM-04 credit tab not usable on current-customer checkout: ' + credit);
-  await (await $(tid('pay-confirm'))).click();
+  await clickControl('pay-confirm');
   await browser.waitUntil(async () => !(await payDialogVisible()), {
     timeout: 45000,
     timeoutMsg: 'CRM-04 second credit sale did not close the pay dialog',
@@ -3991,7 +3991,7 @@ it('[CRM-04] credit limit, FIFO oldest-first repayment, overpay policy and P2-7 
   await (await $(tid('pay-dialog'))).waitForDisplayed({ timeout: 20000 });
   const creditTab = await crm04ChooseCredit();
   expect(creditTab).not.toBe('missing');
-  if (creditTab === 'clicked') await (await $(tid('pay-confirm'))).click();
+  if (creditTab === 'clicked') await clickControl('pay-confirm');
   await browser.pause(2500);
   const stillOpen = await payDialogVisible();
   const limitTxAfter = txCount();

@@ -42,7 +42,8 @@ import fs from 'node:fs';
 import { browser, expect } from '@wdio/globals';
 import { DB_PATH } from '../lib/env';
 import { all, count, one, run, scalar, waitForSchemaSettled } from '../lib/db';
-import { clickUnobstructed,
+import {
+  clickControl, clickUnobstructed,
   addSku,
   APP_PIN,
   applyCartDiscountPercent,
@@ -465,7 +466,7 @@ async function makeCreditSale(title: string, qty: number, customerName: string):
     })) as string,
   );
   console.log(`[credit-sale] confirm label: "${confirmLabel}"`);
-  await (await $(tid('pay-confirm'))).click();
+  await clickControl('pay-confirm');
   await browser.waitUntil(async () => !(await payDialogVisible()), {
     timeout: 45000,
     timeoutMsg: 'pay dialog did not close after credit confirm',

@@ -47,7 +47,8 @@ import fs from 'node:fs';
 import { browser, expect } from '@wdio/globals';
 import { DB_PATH } from '../lib/env';
 import { all, count, one, waitForSchemaSettled } from '../lib/db';
-import { clickUnobstructed,
+import {
+  clickControl, clickUnobstructed,
   addSku,
   APP_PIN,
   applyCartDiscountPercent,
@@ -456,7 +457,7 @@ async function makeCardSale(title: string, qty = 1): Promise<SaleInfo> {
       })) as boolean,
     { timeout: 8000, timeoutMsg: 'card method never activated' },
   );
-  await (await $(tid('pay-confirm'))).click();
+  await clickControl('pay-confirm');
   await browser.waitUntil(async () => !(await payDialogVisible()), {
     timeout: 45000,
     timeoutMsg: 'pay dialog did not close after card confirm',
