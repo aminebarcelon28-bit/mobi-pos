@@ -314,7 +314,15 @@ export const normalizeLoyaltyConfig = (raw: unknown): LoyaltyProgramConfig => {
     tierThresholds: (r.tierThresholds && typeof r.tierThresholds === 'object' ? r.tierThresholds : base.tierThresholds),
     tierMultipliers: (r.tierMultipliers && typeof r.tierMultipliers === 'object' ? r.tierMultipliers : base.tierMultipliers),
     categoryMultipliers: Array.isArray(r.categoryMultipliers) ? r.categoryMultipliers : base.categoryMultipliers,
-    activeCampaigns: Array.isArray(r.activeCampaigns) ? r.activeCampaigns : base.activeCampaigns,
+    // An EMPTY list means "not configured" and keeps the stock campaign (the
+    // settings UI persists [] after a merchant removes every campaign, yet the
+    // default weekend 2x still owns an unconfigured install — LOY-13's forward
+    // base-spend phase relies on that). A NON-empty list is authoritative, and
+    // its dates decide (LOY-19: an expired campaign must not multiply).
+    activeCampaigns:
+      Array.isArray(r.activeCampaigns) && r.activeCampaigns.length > 0
+        ? r.activeCampaigns
+        : base.activeCampaigns,
     enableCardBarcodeScanning: r.enableCardBarcodeScanning !== false,
     cardPrefix: typeof r.cardPrefix === 'string' && r.cardPrefix ? r.cardPrefix : base.cardPrefix,
   };

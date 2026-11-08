@@ -793,7 +793,16 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
       // ended since (post-campaign voids must not leak bonus points).
       // Hoisted (not inside the customer block): the transaction literal
       // below needs the same value, and anonymous sales earn nothing anyway.
-      const earnCampaignMult = activeCampaignMultiplier();
+      // At-sale campaign multiplier from the MERCHANT's configured campaigns.
+      // Calling activeCampaignMultiplier() with no argument reads
+      // DEFAULT_LOYALTY_CONFIG, whose activeCampaigns getter is the built-in
+      // weekend 2x campaign — so a merchant whose only campaign had expired
+      // still earned 2x (LOY-19: 1 000 DA earned 20 instead of 10). The
+      // fallback inside normalizeLoyaltyConfig keeps the stock campaign for a
+      // merchant who never configured any.
+      const earnCampaignMult = activeCampaignMultiplier(
+        normalizeLoyaltyConfig(get().receiptSettings?.loyaltyConfig),
+      );
 
       // Case 44: loyalty must be computed from the DURABLE customer row, not the
       // in-memory snapshot. A native-only write (a forged/other-window refund, a

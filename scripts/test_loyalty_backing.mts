@@ -15,6 +15,8 @@ import {
   redeemablePointBalance,
   depleteFifoPointBuckets,
   isPointBucketExpired,
+  activeCampaignMultiplier,
+  normalizeLoyaltyConfig,
 } from '../src/utils/loyaltyEngine.ts';
 
 let passed = 0;
@@ -174,6 +176,58 @@ check('FIFO depletion still consumes lifetime and far-future buckets', () => {
   const r = depleteFifoPointBuckets(buckets, 40, NOW_MS);
   eq(r.consumedPoints, 40, 'both are live');
   eq(r.remainingPointsToRedeem, 0, 'fully covered');
+});
+
+// ── LOY-19: the merchant's campaign list is authoritative ────────────────────
+const campaignCfg = (campaigns: unknown[]) =>
+  ({ activeCampaigns: campaigns }) as unknown as Parameters<typeof activeCampaignMultiplier>[0];
+
+check('an expired campaign does not multiply points', () => {
+  const cfg = campaignCfg([
+    {
+      id: 'EXP',
+      name: 'Expired 5x',
+      startDate: '2025-01-01T00:00:00.000Z',
+      endDate: '2025-02-01T00:00:00.000Z',
+      multiplier: 5,
+      active: true,
+    },
+  ]);
+  eq(activeCampaignMultiplier(cfg, NOW_MS), 1, 'expired window is inert');
+});
+
+check('an in-window campaign still applies its multiplier', () => {
+  const cfg = campaignCfg([
+    {
+      id: 'LIVE',
+      name: 'Live 2x',
+      startDate: '2026-10-01T00:00:00.000Z',
+      endDate: '2026-12-01T00:00:00.000Z',
+      multiplier: 2,
+      active: true,
+    },
+  ]);
+  eq(activeCampaignMultiplier(cfg, NOW_MS), 2, 'active window applies');
+});
+
+check('an EMPTY configured list means unconfigured (stock campaign stays)', () => {
+  const normalized = normalizeLoyaltyConfig({ activeCampaigns: [] } as never);
+  ok(Array.isArray(normalized.activeCampaigns) && normalized.activeCampaigns.length > 0,
+    'empty list falls back to the stock campaigns');
+  const kept = normalizeLoyaltyConfig({
+    activeCampaigns: [
+      {
+        id: 'ONLY',
+        name: 'Only',
+        startDate: '2025-01-01T00:00:00.000Z',
+        endDate: '2025-02-01T00:00:00.000Z',
+        multiplier: 5,
+        active: true,
+      },
+    ],
+  } as never);
+  eq(kept.activeCampaigns.length, 1, 'a non-empty list is authoritative');
+  eq(kept.activeCampaigns[0].id, 'ONLY', 'the merchant campaign is kept, not merged');
 });
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
