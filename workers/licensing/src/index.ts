@@ -9,12 +9,27 @@ import {
 } from './crypto';
 import { notifyOwner } from './notify';
 import { pickSigningKey, verifyLicenseJwt } from './crypto';
+import { enforceRateLimit, type RateLimitDb } from './rateLimit';
+import { findLicenseByNormalizedKey } from './licenseLookup';
+import {
+  validateTrialRegistration,
+  registerTrialLead,
+  updateLeadStatus,
+  isValidLeadStatus,
+  type TrialRegistrationRequest,
+} from './trialRegister.ts';
 
 export interface Env {
   MASTER_TURSO_URL: string;
   MASTER_TURSO_TOKEN: string;
   MASTER_ENCRYPTION_KEY: string;
+  /** S-tier: dedicated admin bearer. When set, MASTER_ENCRYPTION_KEY is no
+   *  longer accepted for admin routes (no dual-purpose secret). */
+  ADMIN_TOKEN?: string;
   LICENSE_PEPPER: string;
+  /** M2/F3 pepper rotation: the previous pepper during a rotation window.
+   *  Lookups fall back to it and lazily re-hash rows to the current pepper. */
+  LICENSE_PEPPER_PREVIOUS?: string;
   IP_PEPPER: string;
   LICENSE_ED25519_PRIVATE_JWK: string;
   /** Current signing root (k2, SEC-ROT-02). New activations only. */
@@ -63,7 +78,7 @@ interface DeactivateRequestBody {
   token?: string;
 }
 
-function jsonResponse(data: unknown, status = 200): Response {
+function jsonResponse(data: unknown, status = 200, extraHeaders?: Record<string, string>): Response {
   return new Response(JSON.stringify(data), {
     status,
     headers: {
@@ -71,9 +86,43 @@ function jsonResponse(data: unknown, status = 200): Response {
       'X-Content-Type-Options': 'nosniff',
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization, Idempotency-Key',
+      ...(extraHeaders ?? {}),
     },
   });
+}
+
+/**
+ * M2 (EDGE-1/EDGE-2): count one hit against `bucket` for the peppered
+ * `identity` and answer 429 when the fixed window is exhausted. Returns null
+ * when allowed. `identity` MUST already be a peppered hash — never a raw IP
+ * or license key.
+ */
+async function rateGate(
+  db: RateLimitDb,
+  bucket: Parameters<typeof enforceRateLimit>[1],
+  identity: string,
+  clientIp: string
+): Promise<Response | null> {
+  const verdict = await enforceRateLimit(db, bucket, identity, Math.floor(Date.now() / 1000));
+  if (verdict.degraded) {
+    console.error(
+      JSON.stringify({ event: 'rate_limit_degraded', bucket, identity_prefix: identity.slice(0, 12), detail: verdict.degraded })
+    );
+  }
+  if (verdict.ok) return null;
+  console.warn(
+    JSON.stringify({ event: 'rate_limited', bucket, identity_prefix: identity.slice(0, 12), count: verdict.count, limit: verdict.limit })
+  );
+  void clientIp;
+  return jsonResponse(
+    {
+      error: 'RATE_LIMITED',
+      message: `Trop de requêtes. Réessayez dans ${Math.max(1, Math.ceil(verdict.retryAfter / 60))} minute(s).`,
+    },
+    429,
+    { 'Retry-After': String(Math.max(1, verdict.retryAfter)) }
+  );
 }
 
 function normalizeLicenseKey(rawKey: string): string {
@@ -107,7 +156,7 @@ export default {
         headers: {
           'Access-Control-Allow-Origin': '*',
           'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-          'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+          'Access-Control-Allow-Headers': 'Content-Type, Authorization, Idempotency-Key',
           'Access-Control-Max-Age': '86400',
         },
       });
@@ -158,15 +207,20 @@ export default {
         authToken: env.MASTER_TURSO_TOKEN,
       });
 
-      // Lookup License
-      const licRes = await db.execute({
-        sql: `SELECT id, customer_name, license_type, status, max_desktops, max_mobiles,
-                     encrypted_turso_token, turso_url, expires_at
-              FROM licenses WHERE key_hash = :key_hash LIMIT 1`,
-        args: { key_hash: keyHash },
-      });
+      // M2 (EDGE-1): bound activation attempts per IP and per key before any
+      // seat lookup. A squatter hammering activate to hold the last seat (or
+      // an attacker brute-forcing keys) hits the wall here.
+      const limited =
+        (await rateGate(db, 'activate_ip', ipHash, clientIp)) ??
+        (await rateGate(db, 'activate_key', keyHash, clientIp));
+      if (limited) return limited;
 
-      if (licRes.rows.length === 0) {
+      // Lookup License — pepper-rotation aware (M2/F3): tries the current
+      // pepper, falls back to LICENSE_PEPPER_PREVIOUS and lazily re-hashes
+      // the row so a pepper rotation converges without downtime.
+      const found = await findLicenseByNormalizedKey(db, env, normalizedKey);
+
+      if (!found) {
         // Dummy decryption to neutralize timing attacks
         if (env.MASTER_ENCRYPTION_KEY) {
           try {
@@ -181,7 +235,7 @@ export default {
         );
       }
 
-      const lic = licRes.rows[0];
+      const lic = found.row;
 
       if (lic.status !== 'active') {
         return jsonResponse(
@@ -312,10 +366,9 @@ export default {
 
       let token: string;
       try {
-        // SEC-ROT-02: version-gated signing key. Clients at/after FIRST_K2_VERSION
-        // receive k2-signed tokens (their verifier enforces k2 at activation);
-        // older clients keep receiving k1 (they cannot understand k2).
-        const signing = pickSigningKey(env, typeof app_version === 'string' ? app_version : undefined);
+        // SEC-ROT-02 + M2 sunset: k2 is unconditional when configured (see
+        // crypto.ts). app_version is accepted in the body for telemetry only.
+        const signing = pickSigningKey(env);
         token = await signLicenseJwt(claims, signing.jwk, signing.kid);
       } catch (signErr: any) {
         return jsonResponse(
@@ -340,13 +393,93 @@ export default {
       });
     }
 
-    // Helper for Admin Authentication (declared before all routes that use it)
-    const isAuthorizedAdmin = (req: Request): boolean => {
+    // Helper for Admin Authentication (declared before all routes that use it).
+    // S-tier hardening: (1) constant-time comparison — a plain `===` leaks
+    // match length through timing; (2) a DEDICATED ADMIN_TOKEN secret when
+    // configured, so compromising the admin path never yields the AES master
+    // key (and vice versa). MASTER_ENCRYPTION_KEY remains the fallback only
+    // while ADMIN_TOKEN is unset — the deploy runbook sets ADMIN_TOKEN and
+    // the fallback is then dead code.
+    const isAuthorizedAdmin = async (req: Request): Promise<boolean> => {
       const auth = req.headers.get('Authorization');
       if (!auth || !auth.startsWith('Bearer ')) return false;
       const token = auth.slice(7).trim();
-      return Boolean(env.MASTER_ENCRYPTION_KEY && token === env.MASTER_ENCRYPTION_KEY);
+      if (!token) return false;
+      const { constantTimeEqual } = await import('./crypto.ts');
+      if (env.ADMIN_TOKEN) {
+        return constantTimeEqual(token, env.ADMIN_TOKEN);
+      }
+      return Boolean(env.MASTER_ENCRYPTION_KEY) && (await constantTimeEqual(token, env.MASTER_ENCRYPTION_KEY));
     };
+
+    // Admin gate: per-IP ATTEMPT limit before the bearer check, then auth.
+    // Stops brute-force probing of the admin secret at network speed while
+    // keeping the rate-limit fail-open contract (a Turso outage must not
+    // lock the owner out of their own console). 30/h is generous for a human
+    // working the console and nothing for a script.
+    const adminDeny = async (): Promise<Response | null> => {
+      const db = createClient({
+        url: env.MASTER_TURSO_URL,
+        authToken: env.MASTER_TURSO_TOKEN,
+      });
+      const adminIpHash = await hashHmac(clientIp, env.IP_PEPPER);
+      const limited = await rateGate(db, 'admin_ip', adminIpHash, clientIp);
+      if (limited) return limited;
+      if (!(await isAuthorizedAdmin(request))) {
+        return jsonResponse({ error: 'UNAUTHORIZED', message: 'Accès administrateur non autorisé.' }, 401);
+      }
+      return null;
+    };
+
+    // 2b. Trial Registration (M2 trial funnel — D1/D3/D4). No licence is
+    // minted here: the lead is stored, the owner is pinged on Telegram, and
+    // contact + payment happen on the manual WhatsApp rail. Rate-limited
+    // (trial_ip) BEFORE any insert so lead flooding dies at the wall.
+    if (request.method === 'POST' && (path === '/api/v1/trial/register' || path === '/api/trial/register')) {
+      let body: TrialRegistrationRequest & { _idem_header?: string };
+      const idemHeader = request.headers.get('Idempotency-Key');
+      try {
+        body = await request.json();
+      } catch {
+        return jsonResponse({ error: 'INVALID_JSON', message: 'Payload JSON invalide.' }, 400);
+      }
+      // Standard idempotency semantics: the header wins, the body field is the
+      // compatibility path. Both must satisfy the same strict pattern.
+      if (!body.idempotency_key && idemHeader) {
+        body.idempotency_key = idemHeader;
+      }
+
+      const ipHashTrial = await hashHmac(clientIp, env.IP_PEPPER);
+      const db = createClient({
+        url: env.MASTER_TURSO_URL,
+        authToken: env.MASTER_TURSO_TOKEN,
+      });
+      const limitedTrial = await rateGate(db, 'trial_ip', ipHashTrial, clientIp);
+      if (limitedTrial) return limitedTrial;
+
+      const verdict = validateTrialRegistration(body);
+      if (!verdict.ok) {
+        return jsonResponse({ error: verdict.error, message: verdict.message }, 400);
+      }
+
+      const outcome = await registerTrialLead(db, verdict.value, new Date().toISOString());
+      if (outcome.status === 'rejected') {
+        console.error(JSON.stringify({ event: 'trial_register_failed', reason: outcome.reason }));
+        return jsonResponse({ error: 'DATABASE_ERROR', message: 'Enregistrement temporairement indisponible.' }, 500);
+      }
+
+      // Owner doorbell — fail-open by design (notify.ts): a Telegram hiccup
+      // must never lose the lead or fail the signup.
+      void notifyOwner(env, {
+        headline: `🆕 Essai MobiPOS — ${verdict.value.full_name}`,
+        lines: [`WhatsApp : ${verdict.value.whatsapp}`],
+      });
+
+      return jsonResponse(
+        { status: outcome.status },
+        outcome.status === 'registered' ? 201 : 200
+      );
+    }
 
     // 3. Heartbeat & Verification Route
     if (request.method === 'POST' && (path === '/api/v1/license/verify' || path === '/api/license/verify')) {
@@ -370,17 +503,34 @@ export default {
         authToken: env.MASTER_TURSO_TOKEN,
       });
 
-      const licRes = await db.execute({
-        sql: `SELECT id, customer_name, license_type, status, max_desktops, max_mobiles, expires_at
-              FROM licenses WHERE key_hash = :key_hash LIMIT 1`,
-        args: { key_hash: keyHash },
-      });
+      // M2 (EDGE-2): /verify distinguishes key-exists from key-absent by
+      // design (the client needs the verdict), which makes it an enumeration
+      // oracle. The per-IP/per-key windows make enumeration at 32^8 key
+      // space geological while legitimate boot pings (~30/hour/device) pass
+      // untouched.
+      const ipHashVerify = await hashHmac(clientIp, env.IP_PEPPER);
+      const limitedVerify =
+        (await rateGate(db, 'verify_ip', ipHashVerify, clientIp)) ??
+        (await rateGate(db, 'verify_key', keyHash, clientIp));
+      if (limitedVerify) return limitedVerify;
 
-      if (licRes.rows.length === 0) {
+      // Pepper-rotation aware lookup (M2/F3) — see activate.
+      const foundVerify = await findLicenseByNormalizedKey(db, env, normalizedKey);
+      if (!foundVerify) {
+        // Timing uniformity with /activate: burn the same dummy-decrypt work
+        // on the not-found path so response time cannot leak key existence
+        // ahead of the rate-limit wall.
+        if (env.MASTER_ENCRYPTION_KEY) {
+          try {
+            await decryptTursoToken(DUMMY_CIPHERTEXT, env.MASTER_ENCRYPTION_KEY);
+          } catch {
+            // Expected dummy catch
+          }
+        }
         return jsonResponse({ active: false, error: 'NOT_FOUND', message: 'Licence introuvable.' }, 404);
       }
 
-      const lic = licRes.rows[0];
+      const lic = foundVerify.row;
       if (lic.status !== 'active') {
         return jsonResponse(
           { active: false, error: 'LICENSE_SUSPENDED', message: `Licence ${lic.status}.` },
@@ -465,7 +615,7 @@ export default {
       const { license_key, device_id, token } = body;
       const normalizedKey = normalizeLicenseKey(license_key);
 
-      if (!isAuthorizedAdmin(request)) {
+      if (!(await isAuthorizedAdmin(request))) {
         if (!token) {
           return jsonResponse(
             { error: 'TOKEN_REQUIRED', message: 'Jeton d’activation requis pour désactiver un appareil.' },
@@ -498,16 +648,22 @@ export default {
         authToken: env.MASTER_TURSO_TOKEN,
       });
 
-      const licRes = await db.execute({
-        sql: `SELECT id FROM licenses WHERE key_hash = :key_hash LIMIT 1`,
-        args: { key_hash: keyHash },
-      });
+      // M2 (EDGE-1): bound unbind attempts per IP and per key. The route is
+      // authenticated (RT-3), but the token proof is offline-verifiable — the
+      // wall bounds token-replay hammering and admin-path abuse alike.
+      const ipHashDeactivate = await hashHmac(clientIp, env.IP_PEPPER);
+      const limitedDeactivate =
+        (await rateGate(db, 'deactivate_ip', ipHashDeactivate, clientIp)) ??
+        (await rateGate(db, 'deactivate_key', keyHash, clientIp));
+      if (limitedDeactivate) return limitedDeactivate;
 
-      if (licRes.rows.length === 0) {
+      // Pepper-rotation aware lookup (M2/F3) — see activate.
+      const foundDeactivate = await findLicenseByNormalizedKey(db, env, normalizedKey);
+      if (!foundDeactivate) {
         return jsonResponse({ error: 'NOT_FOUND', message: 'Licence introuvable.' }, 404);
       }
 
-      const licId = licRes.rows[0].id;
+      const licId = foundDeactivate.row.id as string;
       const unbindRes = await db.execute({
         sql: `UPDATE license_activations SET is_active = 0
               WHERE license_id = :lic_id AND device_id = :dev_id`,
@@ -524,9 +680,8 @@ export default {
 
     // 5. Admin: Sync License(s) to Cloud Master DB
     if (request.method === 'POST' && path === '/api/v1/admin/sync') {
-      if (!isAuthorizedAdmin(request)) {
-        return jsonResponse({ error: 'UNAUTHORIZED', message: 'Accès administrateur non autorisé.' }, 401);
-      }
+      const denied = await adminDeny();
+      if (denied) return denied;
 
       let body: any;
       try {
@@ -594,11 +749,58 @@ export default {
       return jsonResponse({ status: 'success', synced: syncedCount });
     }
 
-    // 6. Admin: Reset Seats
-    if (request.method === 'POST' && path === '/api/v1/admin/reset-seats') {
-      if (!isAuthorizedAdmin(request)) {
-        return jsonResponse({ error: 'UNAUTHORIZED', message: 'Accès administrateur non autorisé.' }, 401);
+    // 6b. Admin: Trial Leads (M2 funnel — console « Clients » feed)
+    if (request.method === 'GET' && path === '/api/v1/admin/leads') {
+      const denied = await adminDeny();
+      if (denied) return denied;
+      const db = createClient({
+        url: env.MASTER_TURSO_URL,
+        authToken: env.MASTER_TURSO_TOKEN,
+      });
+      const leads = await db.execute({
+        sql: `SELECT id, full_name, whatsapp, created_at, source, status
+              FROM customers ORDER BY created_at DESC LIMIT 100`,
+        args: {},
+      });
+      return jsonResponse({ status: 'success', leads: leads.rows });
+    }
+
+    // 6c. Admin: Lead Status Transition (console « Clients »). Strict enum,
+    // strict id shape, admin bearer required — fail closed on anything else.
+    if (request.method === 'PATCH' && path === '/api/v1/admin/leads/status') {
+      const denied = await adminDeny();
+      if (denied) return denied;
+      let body: { id?: unknown; status?: unknown };
+      try {
+        body = await request.json();
+      } catch {
+        return jsonResponse({ error: 'INVALID_JSON', message: 'Payload JSON invalide.' }, 400);
       }
+      if (typeof body.id !== 'string' || !/^[A-Za-z0-9_-]{8,64}$/.test(body.id)) {
+        return jsonResponse({ error: 'INVALID_ID', message: 'Identifiant de lead invalide.' }, 400);
+      }
+      if (!isValidLeadStatus(body.status)) {
+        return jsonResponse({ error: 'INVALID_STATUS', message: 'Statut invalide.' }, 400);
+      }
+      const db = createClient({
+        url: env.MASTER_TURSO_URL,
+        authToken: env.MASTER_TURSO_TOKEN,
+      });
+      const outcome = await updateLeadStatus(db, body.id, body.status);
+      if (outcome.status === 'not_found') {
+        return jsonResponse({ error: 'LEAD_NOT_FOUND', message: 'Lead introuvable.' }, 404);
+      }
+      if (outcome.status === 'rejected') {
+        console.error(JSON.stringify({ event: 'lead_status_failed', reason: outcome.reason }));
+        return jsonResponse({ error: 'DATABASE_ERROR', message: 'Mise à jour temporairement indisponible.' }, 500);
+      }
+      return jsonResponse({ status: 'success', id: body.id, lead_status: body.status });
+    }
+
+    // 7. Admin: Reset Seats
+    if (request.method === 'POST' && path === '/api/v1/admin/reset-seats') {
+      const denied = await adminDeny();
+      if (denied) return denied;
 
       let body: any;
       try {
@@ -644,9 +846,8 @@ export default {
 
     // 7. Admin: Update Seats Quota
     if (request.method === 'POST' && path === '/api/v1/admin/update-seats') {
-      if (!isAuthorizedAdmin(request)) {
-        return jsonResponse({ error: 'UNAUTHORIZED', message: 'Accès administrateur non autorisé.' }, 401);
-      }
+      const denied = await adminDeny();
+      if (denied) return denied;
 
       let body: any;
       try {
@@ -700,9 +901,8 @@ export default {
 
     // 8. Admin: List Cloud Licenses & Active Devices
     if ((request.method === 'GET' || request.method === 'POST') && path === '/api/v1/admin/list') {
-      if (!isAuthorizedAdmin(request)) {
-        return jsonResponse({ error: 'UNAUTHORIZED', message: 'Accès administrateur non autorisé.' }, 401);
-      }
+      const denied = await adminDeny();
+      if (denied) return denied;
 
       const db = createClient({
         url: env.MASTER_TURSO_URL,
@@ -739,9 +939,8 @@ export default {
 
     // 9. Admin: Get Active Devices for a License
     if (request.method === 'POST' && path === '/api/v1/admin/devices') {
-      if (!isAuthorizedAdmin(request)) {
-        return jsonResponse({ error: 'UNAUTHORIZED', message: 'Accès administrateur non autorisé.' }, 401);
-      }
+      const denied = await adminDeny();
+      if (denied) return denied;
 
       let body: any;
       try {
@@ -789,9 +988,8 @@ export default {
 
     // 10. Admin: Update License Status (active / suspended / revoked)
     if (request.method === 'POST' && path === '/api/v1/admin/set-status') {
-      if (!isAuthorizedAdmin(request)) {
-        return jsonResponse({ error: 'UNAUTHORIZED', message: 'Accès administrateur non autorisé.' }, 401);
-      }
+      const denied = await adminDeny();
+      if (denied) return denied;
 
       let body: any;
       try {
@@ -826,9 +1024,8 @@ export default {
 
     // 11. Admin: Remote License Signing (vendor Ed25519)
     if (request.method === 'POST' && path === '/api/v1/admin/licenses/sign') {
-      if (!isAuthorizedAdmin(request)) {
-        return jsonResponse({ error: 'UNAUTHORIZED', message: 'Accès administrateur non autorisé.' }, 401);
-      }
+      const denied = await adminDeny();
+      if (denied) return denied;
       if (!env.LICENSE_ED25519_PRIVATE_JWK) {
         return jsonResponse(
           { error: 'SIGNING_UNAVAILABLE', message: 'Aucune clé de signature configurée sur le worker.' },
@@ -932,9 +1129,8 @@ export default {
     // The payload is an opaque AES-256-GCM envelope produced with the vendor
     // master key. The worker can neither read nor validate it; it is storage.
     if (request.method === 'POST' && path === '/api/v1/admin/key-escrow') {
-      if (!isAuthorizedAdmin(request)) {
-        return jsonResponse({ error: 'UNAUTHORIZED', message: 'Accès administrateur non autorisé.' }, 401);
-      }
+      const denied = await adminDeny();
+      if (denied) return denied;
       let body: any;
       try {
         body = await request.json();
@@ -963,9 +1159,8 @@ export default {
 
     // 13. Admin: Audit Checkpoint (detects ledger head truncation)
     if (request.method === 'POST' && path === '/api/v1/admin/audit/checkpoint') {
-      if (!isAuthorizedAdmin(request)) {
-        return jsonResponse({ error: 'UNAUTHORIZED', message: 'Accès administrateur non autorisé.' }, 401);
-      }
+      const denied = await adminDeny();
+      if (denied) return denied;
       if (!env.AUDIT_KV) {
         return jsonResponse(
           { error: 'KV_UNBOUND', message: 'Namespace KV AUDIT_KV non lié sur ce worker.' },
@@ -1061,9 +1256,8 @@ export default {
     // and records the previous checkpoint in the response so an operator has
     // the discarded evidence in hand.
     if (request.method === 'POST' && path === '/api/v1/admin/audit/reset') {
-      if (!isAuthorizedAdmin(request)) {
-        return jsonResponse({ error: 'UNAUTHORIZED', message: 'Accès administrateur non autorisé.' }, 401);
-      }
+      const denied = await adminDeny();
+      if (denied) return denied;
       if (!env.AUDIT_KV) {
         return jsonResponse(
           { error: 'KV_UNBOUND', message: 'Namespace KV AUDIT_KV non lié sur ce worker.' },

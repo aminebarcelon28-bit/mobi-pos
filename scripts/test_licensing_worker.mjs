@@ -404,35 +404,23 @@ check('semverGte orders versions correctly', () => {
   assert.equal(semverGte('0.9.4', '1.8.0'), false);
 });
 
-check('pickSigningKey: old clients keep k1', () => {
+check('pickSigningKey: K1 SUNSET — k2 unconditional when configured (old version too)', () => {
   const env = { LICENSE_ED25519_PRIVATE_JWK: 'JWK1', LICENSE_ED25519_PRIVATE_JWK_K2: 'JWK2' };
-  const pick = pickSigningKey(env, '1.7.0');
-  assert.equal(pick.kid, 'k1');
-  assert.equal(pick.jwk, 'JWK1');
-});
-
-check('pickSigningKey: clients at FIRST_K2_VERSION get k2', () => {
-  const env = { LICENSE_ED25519_PRIVATE_JWK: 'JWK1', LICENSE_ED25519_PRIVATE_JWK_K2: 'JWK2' };
-  const pick = pickSigningKey(env, FIRST_K2_VERSION);
+  const pick = pickSigningKey(env);
   assert.equal(pick.kid, 'k2');
   assert.equal(pick.jwk, 'JWK2');
 });
 
-check('pickSigningKey: newer clients get k2', () => {
+check('pickSigningKey: version-less client gets k2 (K-6 closed — no compat bridge)', () => {
   const env = { LICENSE_ED25519_PRIVATE_JWK: 'JWK1', LICENSE_ED25519_PRIVATE_JWK_K2: 'JWK2' };
-  assert.equal(pickSigningKey(env, '2.3.4').kid, 'k2');
+  assert.equal(pickSigningKey(env).kid, 'k2');
 });
 
-check('pickSigningKey: missing k2 secret falls back to k1 (fail soft for old clients)', () => {
+check('pickSigningKey: missing k2 secret falls back to k1 (misconfiguration, not a mode)', () => {
   const env = { LICENSE_ED25519_PRIVATE_JWK: 'JWK1' };
-  const pick = pickSigningKey(env, '9.9.9');
+  const pick = pickSigningKey(env);
   assert.equal(pick.kid, 'k1');
   assert.equal(pick.jwk, 'JWK1');
-});
-
-check('pickSigningKey: missing app_version treated as legacy (k1)', () => {
-  const env = { LICENSE_ED25519_PRIVATE_JWK: 'JWK1', LICENSE_ED25519_PRIVATE_JWK_K2: 'JWK2' };
-  assert.equal(pickSigningKey(env, undefined).kid, 'k1');
 });
 
 // --- RT-3: deactivate-route token proof (verifyLicenseJwt) -----------------
@@ -525,8 +513,355 @@ await (async () => {
   }
 })();
 
-console.log(`\n${passed} passed, ${failures.length} failed`);
-if (failures.length) {
+// --- M2: rate limiting (EDGE-1 squatting DoS / EDGE-2 verify oracle) -------
+
+const { enforceRateLimit, rateLimitConfig, RATE_LIMITS } = await import(
+  '../workers/licensing/src/rateLimit.ts'
+);
+
+/** Fake libsql execute that simulates the rate_limits table semantics. */
+function fakeRateDb() {
+  const table = new Map(); // key -> count
+  const calls = [];
+  return {
+    calls,
+    async execute(stmt) {
+      calls.push(stmt.sql.trim());
+      if (stmt.sql.includes('INSERT INTO rate_limits')) {
+        const { bucket, identity, window_start } = stmt.args;
+        const key = `${bucket}|${identity}|${window_start}`;
+        const next = (table.get(key) ?? 0) + 1;
+        table.set(key, next);
+        return { rows: [{ count: next }], rowsAffected: 1 };
+      }
+      if (stmt.sql.includes('DELETE FROM rate_limits')) {
+        const { bucket, cutoff } = stmt.args;
+        let removed = 0;
+        for (const key of [...table.keys()]) {
+          const [b, , ws] = key.split('|');
+          if (b === bucket && Number(ws) < Number(cutoff)) {
+            table.delete(key);
+            removed++;
+          }
+        }
+        return { rows: [], rowsAffected: removed };
+      }
+      throw new Error('fake db: unexpected SQL: ' + stmt.sql.slice(0, 60));
+    },
+  };
+}
+
+await (async () => {
+  try {
+    const db = fakeRateDb();
+    const T0 = 1_700_000_000;
+    // Exhaust the activate_ip window (limit 20).
+    let last;
+    for (let i = 0; i < 20; i++) last = await enforceRateLimit(db, 'activate_ip', 'ip-A', T0);
+    assert.equal(last.ok, true, 'limit-th hit must pass');
+    assert.equal(last.count, 20);
+    const over = await enforceRateLimit(db, 'activate_ip', 'ip-A', T0 + 10);
+    assert.equal(over.ok, false, 'limit+1 hit must be refused');
+    assert.equal(over.count, 21);
+    assert.ok(over.retryAfter > 0 && over.retryAfter <= 3600, 'retryAfter within the window');
+    // A different identity is untouched (no collateral lockout).
+    const other = await enforceRateLimit(db, 'activate_ip', 'ip-B', T0 + 10);
+    assert.equal(other.ok, true, 'different IP must not inherit the block');
+    // Window rollover resets the count.
+    const nextWindow = await enforceRateLimit(db, 'activate_ip', 'ip-A', T0 + 3601);
+    assert.equal(nextWindow.ok, true, 'new window must reset the counter');
+    assert.equal(nextWindow.count, 1);
+    // Sweep ran when the new window opened.
+    assert.ok(db.calls.some((s) => s.includes('DELETE FROM rate_limits')), 'stale windows swept on rollover');
+    console.log('  ok   rateLimit: window exhausts, refuses limit+1, isolates identities, rolls over');
+    passed += 1;
+  } catch (err) {
+    failures.push('rateLimit window semantics');
+    console.log(`  FAIL rateLimit window semantics: ${err.message}`);
+  }
+})();
+
+await (async () => {
+  try {
+    // Store unavailable -> fail-open but flagged (merchant must not be locked
+    // out by a Turso hiccup; sustained outage is already gated by the DB).
+    const broken = { async execute() { throw new Error('turso down'); } };
+    const v = await enforceRateLimit(broken, 'verify_ip', 'ip-C', 1_700_000_000);
+    assert.equal(v.ok, true, 'infra failure must fail open');
+    assert.ok(v.degraded && v.degraded.startsWith('rate_limit_store_unavailable'), 'degradation surfaced');
+    console.log('  ok   rateLimit: store outage fails open with a degradation marker');
+    passed += 1;
+  } catch (err) {
+    failures.push('rateLimit fail-open');
+    console.log(`  FAIL rateLimit fail-open: ${err.message}`);
+  }
+})();
+
+await (async () => {
+  try {
+    // Registry shape: every bucket has sane bounds; verify is the most
+    // generous (legit boot pings), activate/deactivate the tightest.
+    for (const [bucket, cfg] of Object.entries(RATE_LIMITS)) {
+      assert.ok(cfg.limit >= 5 && cfg.limit <= 600, `${bucket} limit sane`);
+      assert.ok(cfg.windowSecs === 3600, `${bucket} window is 1h`);
+    }
+    assert.ok(rateLimitConfig('verify_ip').limit > rateLimitConfig('activate_ip').limit, 'verify looser than activate');
+    assert.equal(RATE_LIMITS.trial_ip.limit, 5, 'trial funnel flood wall');
+    assert.equal(RATE_LIMITS.admin_ip.limit, 30, 'admin brute-force wall');
+    console.log('  ok   rateLimit: bucket registry bounds hold');
+    passed += 1;
+  } catch (err) {
+    failures.push('rateLimit registry');
+    console.log(`  FAIL rateLimit registry: ${err.message}`);
+  }
+})();
+
+// --- M2/F3: pepper rotation (lazy dual-pepper lookup) ----------------------
+
+const { findLicenseByNormalizedKey } = await import('../workers/licensing/src/licenseLookup.ts');
+const { hashHmac } = await import('../workers/licensing/src/crypto.ts');
+
+/** Fake licenses table keyed by key_hash, with UPDATE support. */
+function fakeLicenseDb() {
+  const rowsByKeyHash = new Map();
+  const updates = [];
+  return {
+    rowsByKeyHash,
+    updates,
+    async seed(pepper, normalizedKey, id) {
+      const h = await hashHmac(normalizedKey, pepper);
+      rowsByKeyHash.set(h, { id, customer_name: 'C', license_type: 'LIFETIME', status: 'active',
+        max_desktops: 1, max_mobiles: 1, encrypted_turso_token: 'NONE', turso_url: '', expires_at: null });
+    },
+    async execute(stmt) {
+      if (stmt.sql.includes('SELECT') && stmt.sql.includes('FROM licenses')) {
+        const row = this.rowsByKeyHash.get(stmt.args.key_hash);
+        return { rows: row ? [row] : [], rowsAffected: 0 };
+      }
+      if (stmt.sql.includes('UPDATE licenses SET key_hash')) {
+        updates.push(stmt.args);
+        const row = this.rowsByKeyHash.get(stmt.args.old_hash);
+        if (!row) return { rows: [], rowsAffected: 0 };
+        this.rowsByKeyHash.delete(stmt.args.old_hash);
+        this.rowsByKeyHash.set(stmt.args.new_hash, row);
+        return { rows: [], rowsAffected: 1 };
+      }
+      throw new Error('fake db: unexpected SQL: ' + stmt.sql.slice(0, 60));
+    },
+  };
+}
+
+await (async () => {
+  try {
+    const OLD = 'pepper-old-2026-11';
+    const NEW = 'pepper-new-2026-11';
+    const KEY = 'MOBI-AAAA-BBBB-CCCC';
+    const db = fakeLicenseDb();
+    await db.seed(OLD, KEY, 'lic_1');
+
+    // Before rotation: current pepper finds nothing, previous finds and re-hashes.
+    const envRotate = { LICENSE_PEPPER: NEW, LICENSE_PEPPER_PREVIOUS: OLD };
+    const first = await findLicenseByNormalizedKey(db, envRotate, KEY);
+    assert.ok(first, 'previous-pepper row must be found during rotation');
+    assert.equal(first.row.id, 'lic_1');
+    assert.equal(first.rePeppered, true, 'row must be lazily re-hashed');
+    assert.equal(db.updates.length, 1, 'exactly one re-hash UPDATE');
+
+    // After convergence: the current pepper finds it directly, no re-hash.
+    const second = await findLicenseByNormalizedKey(db, envRotate, KEY);
+    assert.ok(second);
+    assert.equal(second.rePeppered, false, 'converged row needs no re-hash');
+    assert.equal(db.updates.length, 1, 'no extra UPDATE after convergence');
+
+    // Without the previous pepper configured, the same row is unfindable
+    // (fail-closed end state after the rotation window closes).
+    const db2 = fakeLicenseDb();
+    await db2.seed(OLD, KEY, 'lic_2');
+    const miss = await findLicenseByNormalizedKey(db2, { LICENSE_PEPPER: NEW }, KEY);
+    assert.equal(miss, null, 'no previous pepper -> old rows are unfindable');
+
+    console.log('  ok   pepperRotation: lazy re-hash converges, then previous pepper retires clean');
+    passed += 1;
+  } catch (err) {
+    failures.push('pepperRotation lazy re-hash');
+    console.log(`  FAIL pepperRotation lazy re-hash: ${err.message}`);
+  }
+})();
+
+// --- M2: trial funnel (validation + exactly-once lead insert) --------------
+
+const {
+  validateTrialRegistration,
+  registerTrialLead,
+  normalizeWhatsApp,
+  normalizeFullName,
+  updateLeadStatus,
+  isValidLeadStatus,
+} = await import('../workers/licensing/src/trialRegister.ts');
+const { constantTimeEqual } = await import('../workers/licensing/src/crypto.ts');
+
+check('constantTimeEqual: equal and unequal secrets, both constant-shape', () => {
+  // sync bridge: the async fn is awaited via the microtask queue
+});
+
+await (async () => {
+  try {
+    assert.equal(await constantTimeEqual('secret-a', 'secret-a'), true);
+    assert.equal(await constantTimeEqual('secret-a', 'secret-b'), false);
+    assert.equal(await constantTimeEqual('secret-a', 'secret-a-longer-suffix'), false);
+    assert.equal(await constantTimeEqual('', ''), true);
+    console.log('  ok   constantTimeEqual: digest-based, length-leak free');
+    passed += 1;
+  } catch (err) {
+    failures.push('constantTimeEqual');
+    console.log(`  FAIL constantTimeEqual: ${err.message}`);
+  }
+})();
+
+check('trial validation: WhatsApp formats humans actually type', () => {
+  assert.equal(normalizeWhatsApp('+213 555 12 34 56'), '+213555123456');
+  assert.equal(normalizeWhatsApp('0550 00 33 33'), '0550003333');
+  assert.equal(normalizeWhatsApp('0550003333'), '0550003333');
+  assert.equal(normalizeWhatsApp('+213555123456'), '+213555123456');
+  // rejects
+  assert.equal(normalizeWhatsApp('1234567'), null, 'too short');
+  assert.equal(normalizeWhatsApp('1234567890123456'), null, 'too long');
+  assert.equal(normalizeWhatsApp('0550abc333'), null, 'letters');
+  assert.equal(normalizeWhatsApp('0550+123'), null, 'glued plus');
+  assert.equal(normalizeWhatsApp(''), null, 'empty');
+  assert.equal(normalizeWhatsApp(12345678), null, 'not a string');
+});
+
+check('trial validation: name rules', () => {
+  assert.equal(normalizeFullName('  Ahmed   Benali '), 'Ahmed Benali');
+  assert.equal(normalizeFullName('A'), null, 'too short');
+  assert.equal(normalizeFullName('x'.repeat(81)), null, 'too long');
+  assert.equal(normalizeFullName('12345'), null, 'no letter');
+  assert.equal(normalizeFullName('bad\u0000name'), null, 'control char');
+  assert.equal(normalizeFullName(null), null, 'not a string');
+});
+
+check('trial validation: idempotency key + device id', () => {
+  const good = validateTrialRegistration({
+    full_name: 'Ahmed Benali',
+    whatsapp: '0550 00 33 33',
+    idempotency_key: '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d',
+  });
+  assert.ok(good.ok);
+  if (good.ok) {
+    assert.equal(good.value.whatsapp, '0550003333');
+    assert.equal(good.value.device_id, null);
+  }
+  const badIdem = validateTrialRegistration({
+    full_name: 'Ahmed Benali',
+    whatsapp: '0550003333',
+    idempotency_key: 'short',
+  });
+  assert.ok(!badIdem.ok && badIdem.error === 'INVALID_IDEMPOTENCY_KEY');
+  const badDevice = validateTrialRegistration({
+    full_name: 'Ahmed Benali',
+    whatsapp: '0550003333',
+    idempotency_key: '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d',
+    device_id: 'bad device id with spaces and <script>',
+  });
+  assert.ok(!badDevice.ok && badDevice.error === 'INVALID_DEVICE_ID');
+});
+
+await (async () => {
+  try {
+    /** Fake customers table with PK semantics. */
+    function fakeLeadsDb() {
+      const rows = new Map();
+      const inserts = [];
+      return {
+        rows,
+        inserts,
+        async execute(stmt) {
+          if (stmt.sql.includes('INSERT INTO customers')) {
+            inserts.push(stmt.args);
+            if (rows.has(stmt.args.id)) {
+              throw new Error('UNIQUE constraint failed: customers.id');
+            }
+            rows.set(stmt.args.id, { ...stmt.args });
+            return { rows: [], rowsAffected: 1 };
+          }
+          throw new Error('fake db: unexpected SQL: ' + stmt.sql.slice(0, 50));
+        },
+      };
+    }
+    const db = fakeLeadsDb();
+    const value = validateTrialRegistration({
+      full_name: 'Ahmed Benali',
+      whatsapp: '0550 00 33 33',
+      idempotency_key: '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d',
+    });
+    assert.ok(value.ok);
+    if (!value.ok) return;
+    const first = await registerTrialLead(db, value.value, '2026-11-08T22:00:00Z');
+    assert.equal(first.status, 'registered');
+    const replay = await registerTrialLead(db, value.value, '2026-11-08T22:01:00Z');
+    assert.equal(replay.status, 'already_registered', 'replay must be idempotent, not an error');
+    assert.equal(db.rows.size, 1, 'exactly one row despite the replay');
+    const boom = { async execute() { throw new Error('connection reset'); } };
+    const rejected = await registerTrialLead(boom, value.value, '2026-11-08T22:02:00Z');
+    assert.equal(rejected.status, 'rejected', 'real infra failures fail closed');
+    console.log('  ok   trialRegister: exactly-once insert, idempotent replay, fail-closed infra');
+    passed += 1;
+  } catch (err) {
+    failures.push('trialRegister exactly-once');
+    console.log(`  FAIL trialRegister exactly-once: ${err.message}`);
+  }
+})();
+
+// --- M2: lead status transitions -------------------------------------------
+check('lead status: enum validation is strict', () => {
+  assert.ok(isValidLeadStatus('lead'));
+  assert.ok(isValidLeadStatus('contacted'));
+  assert.ok(isValidLeadStatus('converted'));
+  assert.ok(isValidLeadStatus('lost'));
+  assert.ok(!isValidLeadStatus('LEAD'), 'case-sensitive');
+  assert.ok(!isValidLeadStatus('admin'), 'no arbitrary values');
+  assert.ok(!isValidLeadStatus(''), 'no empty');
+  assert.ok(!isValidLeadStatus(null), 'no null');
+  assert.ok(!isValidLeadStatus(42), 'no numbers');
+});
+
+await (async () => {
+  try {
+    function fakeUpdateDb(rows, fail) {
+      return {
+        async execute(stmt) {
+          if (fail) throw new Error('connection reset');
+          if (stmt.sql.includes('UPDATE customers')) {
+            const row = rows.get(stmt.args.id);
+            if (!row) return { rows: [], rowsAffected: 0 };
+            row.status = stmt.args.status;
+            return { rows: [], rowsAffected: 1 };
+          }
+          throw new Error('unexpected SQL');
+        },
+      };
+    }
+    const rows = new Map([['9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d', { status: 'lead' }]]);
+    const db = fakeUpdateDb(rows);
+    const ok = await updateLeadStatus(db, '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d', 'contacted');
+    assert.equal(ok.status, 'updated');
+    assert.equal(rows.get('9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d').status, 'contacted');
+    const missing = await updateLeadStatus(db, 'aaaaaaaa-bbbb-cccc-dddd-eeeeffff0000', 'lost');
+    assert.equal(missing.status, 'not_found', 'unknown id must 404, not fail');
+    const badId = await updateLeadStatus(db, 'bad id; DROP TABLE customers', 'lost');
+    assert.equal(badId.status, 'rejected', 'malformed id never reaches the DB');
+    const infra = await updateLeadStatus(fakeUpdateDb(rows, true), '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d', 'converted');
+    assert.equal(infra.status, 'rejected', 'infra failures fail closed');
+    console.log('  ok   updateLeadStatus: strict id+enum, not_found, fail-closed infra');
+    passed += 1;
+  } catch (err) {
+    failures.push('updateLeadStatus');
+    console.log(`  FAIL updateLeadStatus: ${err.message}`);
+  }
+})();
+
+console.log(`\n${passed} passed, ${failures.length} failed`);if (failures.length) {
   console.log('Failed: ' + failures.join(', '));
   process.exit(1);
 }

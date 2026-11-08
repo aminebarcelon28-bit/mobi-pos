@@ -56,7 +56,8 @@ loadEnv();
 const PORT = process.env.LICENSE_PORTAL_PORT || 4200;
 const CLOUD_ENDPOINT = process.env.LICENSING_ENDPOINT || 'https://mobi-licensing.aminebarcelon28.workers.dev';
 // SEC-ROT-02: no fallback secrets. Missing env = fail closed at use time.
-const MASTER_KEY = process.env.MASTER_ENCRYPTION_KEY || '';
+// Admin bearer: dedicated ADMIN_TOKEN when configured, legacy fallback otherwise.
+const MASTER_KEY = process.env.ADMIN_TOKEN || process.env.MASTER_ENCRYPTION_KEY || '';
 const PEPPER = process.env.LICENSE_PEPPER || '';
 
 // Crockford Base32
@@ -413,6 +414,43 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
         </table>
       </div>
     </div>
+
+    <!-- Trial Leads (« Clients » — M2 funnel) -->
+    <div class="rounded-2xl glass-card overflow-hidden mt-6">
+      <div class="p-5 border-b border-gray-800 flex items-center justify-between gap-4">
+        <div class="flex items-center gap-3">
+          <div class="w-9 h-9 rounded-xl bg-sky-500/10 border border-sky-500/20 flex items-center justify-center">
+            <i data-lucide="user-plus" class="w-4.5 h-4.5 text-sky-400"></i>
+          </div>
+          <div>
+            <h2 class="text-base font-bold text-white">Clients — Demandes d'essai</h2>
+            <p class="text-[11px] text-gray-400">Leads de l'écran d'essai (2 champs). Contact + paiement sur WhatsApp, émission manuelle.</p>
+          </div>
+        </div>
+        <button onclick="refreshLeads()" class="px-4 py-2 rounded-xl text-xs font-semibold text-gray-300 hover:text-white glass-card hover:bg-gray-800/50 transition flex items-center gap-2">
+          <i data-lucide="refresh-cw" class="w-3.5 h-3.5 text-gray-400"></i>
+          <span>Actualiser</span>
+        </button>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full text-left text-sm text-gray-300">
+          <thead class="text-xs uppercase font-bold tracking-wider text-gray-400 bg-gray-900/60 border-b border-gray-800">
+            <tr>
+              <th class="px-6 py-4">Client</th>
+              <th class="px-6 py-4">WhatsApp</th>
+              <th class="px-6 py-4">Reçu le</th>
+              <th class="px-6 py-4">Statut</th>
+              <th class="px-6 py-4 text-right">Action</th>
+            </tr>
+          </thead>
+          <tbody id="leads-tbody" class="divide-y divide-gray-800/60">
+            <tr>
+              <td colspan="5" class="px-6 py-8 text-center text-gray-500">Chargement des demandes d'essai…</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
   </main>
 
   <!-- Modal: Mint New License -->
@@ -661,6 +699,78 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       lucide.createIcons();
     }
 
+    // M2 funnel: trial leads (console « Clients »)
+    async function refreshLeads() {
+      const tbody = document.getElementById('leads-tbody');
+      try {
+        const res = await fetch('/api/leads');
+        if (!res.ok) throw new Error('Cloud ' + res.status);
+        const data = await res.json();
+        const leads = data.leads || [];
+        if (leads.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="5" class="px-6 py-8 text-center text-gray-500">Aucune demande d\'essai pour le moment.</td></tr>';
+          return;
+        }
+        tbody.innerHTML = leads.map(l => {
+          const statusLabels = { lead: 'Nouveau', contacted: 'Contacté', converted: 'Converti', lost: 'Perdu' };
+          const current = statusLabels[l.status] || 'Nouveau';
+          const wa = String(l.whatsapp || '');
+          const waLink = 'https://wa.me/' + wa.replace(/[^0-9]/g, '');
+          return \`<tr class="hover:bg-gray-800/30 transition">
+            <td class="px-6 py-4 font-semibold text-white">\${escapeHtml(l.full_name || '')}</td>
+            <td class="px-6 py-4 font-mono text-xs">\${escapeHtml(wa)}</td>
+            <td class="px-6 py-4 text-xs text-gray-400">\${escapeHtml(String(l.created_at || '').replace('T', ' ').slice(0, 16))}</td>
+            <td class="px-6 py-4">
+              <select
+                data-lead-id="\${escapeHtml(l.id || '')}"
+                data-testid="lead-status-select"
+                onchange="changeLeadStatus(this)"
+                aria-label="\${current} — statut de \${escapeHtml(l.full_name || '')}"
+                class="bg-gray-900 border border-gray-800 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-gray-300 focus:outline-none focus:border-emerald-500/50"
+              >
+                <option value="lead" \${l.status === 'lead' ? 'selected' : ''}>Nouveau</option>
+                <option value="contacted" \${l.status === 'contacted' ? 'selected' : ''}>Contacté</option>
+                <option value="converted" \${l.status === 'converted' ? 'selected' : ''}>Converti</option>
+                <option value="lost" \${l.status === 'lost' ? 'selected' : ''}>Perdu</option>
+              </select>
+            </td>
+            <td class="px-6 py-4 text-right">
+              <a href="\${waLink}" target="_blank" rel="noopener noreferrer" class="px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 hover:bg-emerald-500/20 transition inline-flex items-center gap-1.5">
+                <i data-lucide="message-circle" class="w-3.5 h-3.5"></i> WhatsApp
+              </a>
+            </td>
+          </tr>\`;
+        }).join('');
+        lucide.createIcons();
+      } catch (err) {
+        tbody.innerHTML = '<tr><td colspan="5" class="px-6 py-8 text-center text-red-400">Erreur: ' + escapeHtml(err.message) + '</td></tr>';
+      }
+    }
+
+    // M2 funnel: push a status change to the cloud, then refresh the table.
+    async function changeLeadStatus(selectEl) {
+      const leadId = selectEl.getAttribute('data-lead-id');
+      const newStatus = selectEl.value;
+      try {
+        const res = await fetch('/api/leads/status', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: leadId, status: newStatus }),
+        });
+        if (!res.ok) throw new Error('Cloud ' + res.status);
+        showToast('Statut mis à jour');
+      } catch (err) {
+        showToast('Échec de la mise à jour du statut');
+      }
+      refreshLeads();
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, (c) => (
+        { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+      ));
+    }
+
     function filterLicenses() {
       const query = document.getElementById('search-input').value.toLowerCase();
       const type = document.getElementById('filter-type').value;
@@ -821,6 +931,7 @@ L'équipe MobiPOS\`;
 
     // Init on boot
     refreshData();
+    refreshLeads();
   </script>
 </body>
 </html>`;
@@ -842,6 +953,67 @@ const server = http.createServer(async (req, res) => {
     try {
       const licenses = await fetchMergedLicenses();
       sendJson(res, { licenses });
+    } catch (e) {
+      sendJson(res, { error: e.message }, 500);
+    }
+    return;
+  }
+
+  // 2b. GET /api/leads — M2 trial funnel (console « Clients »). Proxied
+  // server-side so the browser page never holds the admin bearer.
+  if (req.method === 'GET' && pathname === '/api/leads') {
+    try {
+      const cloudRes = await fetch(`${CLOUD_ENDPOINT}/api/v1/admin/leads`, {
+        headers: { Authorization: `Bearer ${MASTER_KEY}` },
+      });
+      if (!cloudRes.ok) {
+        sendJson(res, { error: `Cloud ${cloudRes.status}` }, cloudRes.status);
+        return;
+      }
+      const data = await cloudRes.json();
+      sendJson(res, { leads: data.leads || [] });
+    } catch (e) {
+      sendJson(res, { error: e.message }, 500);
+    }
+    return;
+  }
+
+  // 2c. POST /api/leads/status — owner transition (contacted/converted/lost).
+  // Same proxy discipline: the admin bearer never reaches the browser.
+  if (req.method === 'POST' && pathname === '/api/leads/status') {
+    try {
+      const body = await parseJsonBody(req);
+      const cloudRes = await fetch(`${CLOUD_ENDPOINT}/api/v1/admin/leads/status`, {
+        method: 'PATCH',
+        headers: {
+          Authorization: `Bearer ${MASTER_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ id: body.id, status: body.status }),
+      });
+      const data = await cloudRes.json().catch(() => ({}));
+      sendJson(res, data, cloudRes.status);
+    } catch (e) {
+      sendJson(res, { error: e.message }, 500);
+    }
+    return;
+  }
+
+  // 2c. POST /api/leads/status — owner transition (contacted/converted/lost).
+  // Same proxy discipline: the admin bearer never reaches the browser.
+  if (req.method === 'POST' && pathname === '/api/leads/status') {
+    try {
+      const body = await parseJsonBody(req);
+      const cloudRes = await fetch(`${CLOUD_ENDPOINT}/api/v1/admin/leads/status`, {
+        method: 'PATCH',
+        headers: {
+          Authorization: `Bearer ${MASTER_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ id: body.id, status: body.status }),
+      });
+      const data = await cloudRes.json().catch(() => ({}));
+      sendJson(res, data, cloudRes.status);
     } catch (e) {
       sendJson(res, { error: e.message }, 500);
     }

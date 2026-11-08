@@ -30,7 +30,9 @@ import { sanitizeLicenseKey, formatLicenseKeyForDisplay } from '../../licensing/
 import {
   activateLicense,
   recheckLicenseStatus,
-  DEFAULT_LICENSING_ENDPOINT
+  DEFAULT_LICENSING_ENDPOINT,
+  registerTrialLeadClient,
+  TRIAL_WHATSAPP_OWNER,
 } from '../../licensing/client';
 import { resolveDeviceFingerprint } from '../../licensing/hwid';
 import {
@@ -91,6 +93,14 @@ export const ActivationGateScreen: React.FC<ActivationGateScreenProps> = ({
   const [mode, setMode] = useState<'key' | 'token'>('key');
   const [offlineToken, setOfflineToken] = useState('');
   const [showScanner, setShowScanner] = useState(false);
+
+  // M2 trial funnel: 2-field signup, no licence involved
+  const [trialOpen, setTrialOpen] = useState(false);
+  const [trialName, setTrialName] = useState('');
+  const [trialWhatsapp, setTrialWhatsapp] = useState('');
+  const [trialBusy, setTrialBusy] = useState(false);
+  const [trialError, setTrialError] = useState<string | null>(null);
+  const [trialDone, setTrialDone] = useState<null | 'registered' | 'already_registered'>(null);
 
   // Suspension detection
   const [suspension, setSuspension] = useState<LicenseSuspensionState | null>(() => {
@@ -380,6 +390,31 @@ export const ActivationGateScreen: React.FC<ActivationGateScreenProps> = ({
   const isSuspendedView = Boolean(suspension?.suspended && !forcedNewKey);
   const isMobileLayout = platformInfo.category === 'mobile' || platformInfo.category === 'tablet';
   const isExportExpanded = showExportPanel || exportResult !== null || exportError !== null;
+
+  const handleTrialSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (trialBusy) return;
+    const name = trialName.trim().replace(/\s+/g, ' ');
+    const wa = trialWhatsapp.trim();
+    const waDigits = wa.replace(/[^0-9]/g, '');
+    if (name.length < 2 || name.length > 80 || !/\p{L}/u.test(name)) {
+      setTrialError('Nom invalide (2 à 80 caractères, au moins une lettre).');
+      return;
+    }
+    if (waDigits.length < 8 || waDigits.length > 15) {
+      setTrialError('Numéro WhatsApp invalide (8 à 15 chiffres).');
+      return;
+    }
+    setTrialError(null);
+    setTrialBusy(true);
+    const result = await registerTrialLeadClient(name, wa);
+    setTrialBusy(false);
+    if (result.status === 'error') {
+      setTrialError(result.message || 'Une erreur est survenue.');
+      return;
+    }
+    setTrialDone(result.status === 'already_registered' ? 'already_registered' : 'registered');
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-pos-bg text-pos-text p-3 sm:p-6 select-none overflow-y-auto pt-[max(0.75rem,var(--safe-top))] pb-[max(0.75rem,var(--safe-bottom))]">
@@ -896,6 +931,139 @@ export const ActivationGateScreen: React.FC<ActivationGateScreenProps> = ({
                 <HelpCircle className="w-3.5 h-3.5" aria-hidden="true" />
                 <span>Assistance</span>
               </button>
+            </div>
+
+            {/* ═════════════════════════════════════════════════════════
+                M2 TRIAL FUNNEL — 1-day trial, 1 PC + 1 phone (D1/D3/D4).
+                Two fields, no licence minted here: the lead goes to the
+                owner, contact and payment happen on WhatsApp. Rate-limited
+                server-side; retries share one idempotency key per install.
+                ═════════════════════════════════════════════════════════ */}
+            <div className="pt-3 mt-1 border-t border-pos-border/60">
+              {!trialDone ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setTrialOpen((v) => !v)}
+                    aria-expanded={trialOpen}
+                    data-testid="trial-toggle"
+                    className="w-full min-h-[48px] px-2 rounded-xl flex items-center justify-between gap-2 text-[11px] font-semibold text-pos-muted hover:text-pos-text transition"
+                  >
+                    <span className="flex items-center gap-1.5">
+                      <Sparkles className="w-3.5 h-3.5 text-sky-600 dark:text-sky-400" aria-hidden="true" />
+                      <span>Pas encore de clé ? Essai gratuit — 1 jour</span>
+                    </span>
+                    {!trialOpen ? (
+                      <ChevronDown className="w-3.5 h-3.5" aria-hidden="true" />
+                    ) : (
+                      <ChevronUp className="w-3.5 h-3.5" aria-hidden="true" />
+                    )}
+                  </button>
+
+                  {trialOpen && (
+                    <form onSubmit={handleTrialSubmit} className="mt-2.5 space-y-2.5" data-testid="trial-form">
+                      <p className="text-[10px] text-pos-muted leading-relaxed">
+                        Laissez vos coordonnées : nous vous contactons sur WhatsApp et
+                        vous recevez un essai d'un jour (1 PC + 1 mobile). Aucun paiement,
+                        aucune carte.
+                      </p>
+                      <div>
+                        <label htmlFor="trial-name" className="block text-[10px] font-medium text-pos-muted mb-1">
+                          Votre nom :
+                        </label>
+                        <input
+                          id="trial-name"
+                          type="text"
+                          value={trialName}
+                          onChange={(e) => {
+                            setTrialName(e.target.value);
+                            if (trialError) setTrialError(null);
+                          }}
+                          placeholder="Prénom et nom"
+                          maxLength={80}
+                          autoComplete="name"
+                          disabled={trialBusy}
+                          data-testid="trial-name"
+                          className="w-full min-h-[48px] px-3 py-2 bg-pos-card border border-pos-border focus:border-sky-500 focus:ring-1 focus:ring-sky-500 rounded-xl text-sm text-pos-text placeholder:text-pos-muted/50 outline-none disabled:opacity-50"
+                        />
+                      </div>
+                      <div>
+                        <label htmlFor="trial-whatsapp" className="block text-[10px] font-medium text-pos-muted mb-1">
+                          Votre numéro WhatsApp :
+                        </label>
+                        <input
+                          id="trial-whatsapp"
+                          type="tel"
+                          dir="ltr"
+                          inputMode="tel"
+                          value={trialWhatsapp}
+                          onChange={(e) => {
+                            setTrialWhatsapp(e.target.value);
+                            if (trialError) setTrialError(null);
+                          }}
+                          placeholder="Ex : +213 555 12 34 56"
+                          maxLength={20}
+                          autoComplete="tel"
+                          disabled={trialBusy}
+                          data-testid="trial-whatsapp"
+                          className="w-full min-h-[48px] px-3 py-2 bg-pos-card border border-pos-border focus:border-sky-500 focus:ring-1 focus:ring-sky-500 rounded-xl text-sm text-pos-text placeholder:text-pos-muted/50 outline-none disabled:opacity-50"
+                        />
+                      </div>
+
+                      {trialError && (
+                        <div role="alert" className="p-2.5 bg-rose-500/15 border border-rose-500/50 rounded-xl text-rose-800 dark:text-rose-200 text-[11px] flex items-start gap-2">
+                          <AlertTriangle className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" aria-hidden="true" />
+                          <span className="font-medium leading-relaxed">{trialError}</span>
+                        </div>
+                      )}
+
+                      <button
+                        type="submit"
+                        disabled={trialBusy}
+                        data-testid="trial-submit"
+                        className="w-full py-2.5 px-4 bg-sky-500 hover:bg-sky-400 disabled:opacity-50 text-slate-950 font-bold text-xs rounded-xl transition flex items-center justify-center gap-2 active:scale-[0.98] min-h-[48px]"
+                      >
+                        {trialBusy ? (
+                          <>
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+                            <span>Envoi en cours…</span>
+                          </>
+                        ) : (
+                          <>
+                            <Sparkles className="w-3.5 h-3.5" aria-hidden="true" />
+                            <span>Demander mon essai gratuit</span>
+                          </>
+                        )}
+                      </button>
+                    </form>
+                  )}
+                </>
+              ) : (
+                <div className="mt-2.5 p-3.5 bg-emerald-500/10 border border-emerald-500/40 rounded-2xl space-y-2.5" data-testid="trial-success">
+                  <div className="flex items-center gap-1.5 text-emerald-800 dark:text-emerald-300 text-xs font-bold">
+                    <CheckCircle2 className="w-4 h-4 shrink-0" aria-hidden="true" />
+                    <span>{trialDone === 'registered' ? 'Demande envoyée !' : 'Vous êtes déjà inscrit !'}</span>
+                  </div>
+                  <p className="text-[11px] text-pos-muted leading-relaxed">
+                    Pour aller plus vite, copiez ce message et envoyez-le nous sur WhatsApp.
+                    On vous répond et on active votre essai d'un jour.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const msg = encodeURIComponent(
+                        `Bonjour MobiPOS ! Je m'appelle ${trialName.trim().replace(/\s+/g, ' ')} et je souhaite tester l'application gratuitement pendant 1 jour.`
+                      );
+                      window.open(`https://wa.me/${TRIAL_WHATSAPP_OWNER}?text=${msg}`, '_blank');
+                    }}
+                    data-testid="trial-whatsapp-open"
+                    className="w-full min-h-[48px] px-4 rounded-xl bg-emerald-500/15 border border-emerald-500/40 text-emerald-800 dark:text-emerald-300 hover:bg-emerald-500/25 text-xs font-bold flex items-center justify-center gap-2 transition active:scale-[0.98]"
+                  >
+                    <MessageCircle className="w-4 h-4" aria-hidden="true" />
+                    <span>Ouvrir WhatsApp</span>
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* ═══════════════════════════════════════════════════════════════

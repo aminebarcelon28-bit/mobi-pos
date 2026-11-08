@@ -734,3 +734,96 @@ export async function unlinkLicense(serverUrl?: string): Promise<void> {
   await clearStoredLicenseToken();
   await deleteCloudCredentials();
 }
+
+// --- M2 trial funnel (client side) -----------------------------------------
+
+/**
+ * Trial registration — mirrors the server contract in
+ * workers/licensing/src/trialRegister.ts. Validation is duplicated client-side
+ * so the user gets instant feedback, but the SERVER rules are authoritative:
+ * a client-side pass never bypasses a server-side reject.
+ */
+export const TRIAL_WHATSAPP_OWNER = '213550033333'; // placeholder — set to the business number at launch
+
+const TRIAL_IDEM_STORAGE_KEY = 'mobi.trial.idempotency_key';
+
+/** One stable idempotency key per install: retries of the same signup share it. */
+function getTrialIdempotencyKey(): string {
+  let key: string | null = null;
+  try {
+    key = localStorage.getItem(TRIAL_IDEM_STORAGE_KEY);
+  } catch {
+    // Storage unavailable — fall through to a per-attempt key (still safe:
+    // the server treats it as a new lead rather than failing the signup).
+  }
+  if (key && /^[A-Za-z0-9_-]{8,64}$/.test(key)) return key;
+  const fresh =
+    typeof crypto !== 'undefined' && crypto.randomUUID
+      ? crypto.randomUUID()
+      : `trial-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  try {
+    localStorage.setItem(TRIAL_IDEM_STORAGE_KEY, fresh);
+  } catch {
+    // Non-fatal.
+  }
+  return fresh;
+}
+
+export interface TrialRegistrationResult {
+  status: 'registered' | 'already_registered' | 'error';
+  message?: string;
+}
+
+/**
+ * Registers a trial lead with the licensing worker. No licence is returned —
+ * the owner contacts the merchant on WhatsApp and issues the trial licence
+ * manually (D-rail). Failures surface as 'error' with a French message.
+ */
+export async function registerTrialLeadClient(
+  fullName: string,
+  whatsapp: string,
+  serverUrl?: string
+): Promise<TrialRegistrationResult> {
+  const endpoint = serverUrl || DEFAULT_LICENSING_ENDPOINT;
+  try {
+    const res = await fetchWithTimeout(
+      `${endpoint}/api/v1/trial/register`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Idempotency-Key': getTrialIdempotencyKey(),
+        },
+        body: JSON.stringify({
+          full_name: fullName,
+          whatsapp,
+          idempotency_key: getTrialIdempotencyKey(),
+        }),
+      },
+      8000
+    );
+    if (res.status === 201 || res.status === 200) {
+      const data = await res.json().catch(() => ({}));
+      return { status: data.status === 'already_registered' ? 'already_registered' : 'registered' };
+    }
+    if (res.status === 429) {
+      return {
+        status: 'error',
+        message: 'Trop de demandes. Réessayez dans une heure ou contactez-nous directement sur WhatsApp.',
+      };
+    }
+    if (res.status === 400) {
+      const data = await res.json().catch(() => ({}));
+      return { status: 'error', message: data.message || 'Informations invalides. Vérifiez votre nom et numéro.' };
+    }
+    return {
+      status: 'error',
+      message: 'Service momentanément indisponible. Contactez-nous directement sur WhatsApp.',
+    };
+  } catch (err: any) {
+    return {
+      status: 'error',
+      message: `Connexion impossible : ${err?.message || 'réseau indisponible'}. Contactez-nous sur WhatsApp.`,
+    };
+  }
+}

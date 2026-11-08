@@ -57,10 +57,11 @@ export function uint8ArrayToBase64(bytes: Uint8Array): string {
 // Signing-key rotation (SEC-ROT-02, trial plan §5.6)
 // ---------------------------------------------------------------------------
 // k1's private half is publicly burned in git history; k2 is the only key that
-// may create a licence. Version gate: clients older than FIRST_K2_VERSION can
-// only understand k1 (their verifier pins it), so they keep receiving k1-signed
-// tokens. Clients at/after FIRST_K2_VERSION ship the k2-aware verifier and the
-// activation-path k2-only rule, so they receive k2-signed tokens.
+// may create a licence. K1 SUNSET (M2, K-6/RT-1b): k2 is now UNCONDITIONAL
+// whenever the k2 secret is configured — 1.8.0 is the first licensed release,
+// so no deployed client needs k1, and every k1 token in the wild came from
+// the leaked-key era. The version gate is retired; FIRST_K2_VERSION is kept
+// only as a historical marker for the migration tooling.
 export const FIRST_K2_VERSION = '1.8.0';
 
 export function semverGte(version: string, target: string): boolean {
@@ -82,14 +83,32 @@ export interface SigningKeyEnv {
   LICENSE_ED25519_PRIVATE_JWK_K2?: string;
 }
 
-export function pickSigningKey(
-  env: SigningKeyEnv,
-  appVersion: string | undefined
-): { jwk: string; kid: 'k1' | 'k2' } {
-  if (env.LICENSE_ED25519_PRIVATE_JWK_K2 && semverGte(appVersion ?? '0.0.0', FIRST_K2_VERSION)) {
+export function pickSigningKey(env: SigningKeyEnv): { jwk: string; kid: 'k1' | 'k2' } {
+  // k2 whenever it is configured — no client-compat fallback. k1 only when
+  // k2 is MISSING, which is a deployment misconfiguration, not a mode.
+  if (env.LICENSE_ED25519_PRIVATE_JWK_K2) {
     return { jwk: env.LICENSE_ED25519_PRIVATE_JWK_K2, kid: 'k2' };
   }
   return { jwk: env.LICENSE_ED25519_PRIVATE_JWK, kid: 'k1' };
+}
+
+/**
+ * Constant-time string equality for secret comparison (admin bearer, etc.).
+ * A plain `===` leaks prefix-match length through timing; hashing both sides
+ * to fixed-length digests and XOR-accumulating over the FULL digest removes
+ * both the length leak and the early-exit leak. Still async because
+ * crypto.subtle is — call sites already are.
+ */
+export async function constantTimeEqual(a: string, b: string): Promise<boolean> {
+  const da = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(a));
+  const dbb = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(b));
+  const va = new Uint8Array(da);
+  const vb = new Uint8Array(dbb);
+  let diff = 0;
+  for (let i = 0; i < va.length; i++) {
+    diff |= va[i] ^ vb[i];
+  }
+  return diff === 0;
 }
 
 // HMAC-SHA256 blind indexing and IP pseudonymization
